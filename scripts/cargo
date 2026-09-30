@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ -x "$root/.tooling/cargo/bin/cargo" ]; then
+  export RUSTUP_HOME="$root/.tooling/rustup" CARGO_HOME="$root/.tooling/cargo"
+  export PATH="$CARGO_HOME/bin:$PATH"
+fi
+exec cargo "$@"

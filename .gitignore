@@ -1,0 +1,8 @@
+/target/
+/.tooling/
+/.superpowers/
+.DS_Store
+.env
+*.db
+*.db-wal
+*.db-shm

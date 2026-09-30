@@ -1,0 +1,43 @@
+name: Foundation checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build --workspace --locked
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: wk_test
+          POSTGRES_PASSWORD: wk-test-only
+          POSTGRES_DB: wk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wk_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      WK_TEST_DATABASE_URL: postgres://wk_test:wk-test-only@127.0.0.1:5432/wk_test
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.98.1 --profile minimal
+      - run: cargo test -p wk-knowledge --test access --locked -- --ignored
+      - run: cargo build --workspace --locked
+      - run: python3 scripts/integration.py
+      - run: python3 scripts/demo.py

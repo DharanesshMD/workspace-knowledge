@@ -1,0 +1,18 @@
+[package]
+name = "wk-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+wk-scope = { path = "../scope" }
+wk-contracts = { path = "../contracts" }
+clap = { version = "4", features = ["derive"] }
+wk-capture = { path = "../capture" }
+tempfile.workspace = true
+
+[[bin]]
+name = "wk"
+path = "src/main.rs"
