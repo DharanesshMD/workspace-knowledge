@@ -9,5 +9,6 @@ serde_json.workspace = true
 sha2.workspace = true
 wk-scope = { path = "../scope" }
 wk-contracts = { path = "../contracts" }
+wk-local = { path = "../local" }
 [dev-dependencies]
 tempfile.workspace = true

@@ -9,6 +9,7 @@ An open-source, on-premises knowledge system for AI-assisted development in expl
 - `wk` CLI: local workspace approval, scope checks, pause/revoke, sanitized card validation, offline synthetic JSONL replay.
 - Service-folder boundaries: reject personal/sibling paths, sensitive filenames, symlink aliases, unapproved nested repositories, changed scope, and replaced roots.
 - Private outbox library: SQLite with XChaCha20-Poly1305 authenticated payload encryption, duplicate protection, bounded payload quota, expiry and acknowledgment.
+- Private capture journal: atomic encrypted session updates, restart-safe deduplication, persistent mixed-session holds, and closed-session guards after payload expiry. See [capture journal](docs/architecture/private-capture-journal.md).
 - Replay correlation: separate parallel agents/turns, flag mixed-session context, reject conflicting duplicates, and report completion without printing conversation text.
 - Strict shared-card contracts that reject raw-payload fields and untrusted implementation-status promotions.
 

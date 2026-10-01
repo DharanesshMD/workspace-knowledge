@@ -2856,6 +2856,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "wk-contracts",
+ "wk-local",
  "wk-scope",
 ]
 

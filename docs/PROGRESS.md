@@ -32,3 +32,13 @@ A partial independent review found a service-symlink retargeting bypass. Service
 - Enterprise Desktop capture broker / instrumented chat, client registration certification, console and signed distribution.
 
 Current binaries do not install hooks, observe network traffic, capture desktop chats, or read personal folders. The outbox is not connected to the CLI until production key management exists. No remote repository or package has been published.
+
+## 2026-10-01 — private capture journal
+
+Ruling: continue in the existing dedicated `feat/foundation` checkout, with a clean baseline at `663237a`. Implement the bounded storage/correlation integration before exposing live capture; native key storage and authenticated IPC remain hard prerequisites for real data. This advances Tasks 3–4 without marking either full milestone complete.
+
+Added transactional encrypted updates and a normalized-event session journal. Tests were first run with missing APIs (red), then passed after implementation. A fresh review found that payload expiry reopened held sessions; a regression reproduced the failure. Separate bounded content-free guards now close expired/acknowledged IDs permanently, including through the older enqueue API. The guard-reset/forget workflow remains pending.
+
+Ruling: fail closed after a session's first 24-hour capture window, rather than automatically treating a reconnect as a new session. Adapters must preserve source IDs across reconnects and create a new ID only at a genuine session boundary. No claim of automatic live capture, full transcript coverage, or publication follows from journal receipts.
+
+Verification: `cargo test --workspace --locked` passed 49 tests; the 3 PostgreSQL tests were skipped and not rerun because this increment does not change shared storage/API behavior. `cargo clippy --workspace --all-targets --locked -- -D warnings`, formatting, workspace build, synthetic CLI demo, and diff checks passed locally on macOS arm64. Cross-platform CI remains unrun.

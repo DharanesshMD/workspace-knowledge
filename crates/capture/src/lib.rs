@@ -1,12 +1,12 @@
 //! Offline synthetic event inspection. Never outputs conversation text.
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
 };
 use wk_scope::enrollment::Binding;
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum Kind {
     UserPrompt,
@@ -15,7 +15,7 @@ enum Kind {
     TurnEnd,
     CaptureGap,
 }
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct Event {
     schema_version: u32,
@@ -81,3 +81,5 @@ pub fn inspect(binding: &Binding, input: &str) -> Result<Value, String> {
     }
     Ok(json!({"turns":results,"mode":"offline_inspection","published":false}))
 }
+
+pub mod journal;
