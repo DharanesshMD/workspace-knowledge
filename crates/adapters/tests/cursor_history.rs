@@ -128,7 +128,7 @@ fn agent_transcripts_are_attributed_by_resolved_project_path() {
     let mine = within(&history, &product);
     let t = mine
         .iter()
-        .find(|c| c.source == "cursor-agent-transcript")
+        .find(|c| c.id.contains("11111111"))
         .expect("transcript in workspace");
     assert_eq!(t.title, "Reuse the limiter for billing");
     assert_eq!(
@@ -160,4 +160,49 @@ fn agent_transcripts_are_attributed_by_resolved_project_path() {
         gone.workspace.is_none(),
         "unresolvable project must stay unattributed"
     );
+}
+
+#[test]
+fn transcripts_capture_changed_files_outcome_and_drop_injected_context() {
+    let d = tempfile::tempdir().unwrap();
+    let (user, product) = fixture(d.path());
+    let dot = support::transcripts(d.path(), &product);
+    let history = read_with(&user, Some(&dot)).unwrap();
+    let c = history
+        .conversations
+        .iter()
+        .find(|c| c.id.contains("44444444"))
+        .unwrap();
+    assert_eq!(c.messages[0].role, "user");
+    assert_eq!(
+        c.messages[0].text, "Wrap the badge in <div class=\"x\">hi</div> please",
+        "HTML kept, injected block dropped"
+    );
+    assert_eq!(c.files_changed, ["backend/limits.rs", "web/app.tsx"]);
+    assert_eq!(
+        c.files_read,
+        ["backend"],
+        "files that were changed are not also listed as read"
+    );
+    assert_eq!(c.outcome.as_deref(), Some("## Done\nWrapped the badge."));
+    assert!(
+        c.complete,
+        "fully read session ending with the agent's reply"
+    );
+    let gappy = history
+        .conversations
+        .iter()
+        .find(|c| c.title == "Reuse the limiter for billing")
+        .unwrap();
+    assert!(!gappy.complete, "a malformed line keeps coverage partial");
+    let all = serde_json::to_string(&history).unwrap();
+    for absent in [
+        "SYSTEM_CONTEXT_CANARY",
+        "OLD_CANARY",
+        "NEW_CANARY",
+        "outside-workspace",
+        "escape.txt",
+    ] {
+        assert!(!all.contains(absent), "{absent} leaked");
+    }
 }

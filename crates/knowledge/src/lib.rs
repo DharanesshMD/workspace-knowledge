@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use wk_contracts::CardSubmission;
+pub mod activity;
 pub mod evidence;
 pub mod graph;
 pub mod lifecycle;
@@ -104,6 +105,7 @@ impl Knowledge {
             (1, include_str!("../../../migrations/server/0001.sql")),
             (2, include_str!("../../../migrations/server/0002.sql")),
             (3, include_str!("../../../migrations/server/0003.sql")),
+            (4, include_str!("../../../migrations/server/0004.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
@@ -177,7 +179,7 @@ impl Knowledge {
         if allowed.is_none() {
             return Err(Error::Denied);
         }
-        let row=sqlx::query("INSERT INTO cards(id,org,product,author,idempotency_key,services,body) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(org,product,author,idempotency_key) DO NOTHING RETURNING id,body,revision,published").bind(uuid::Uuid::new_v4()).bind(&actor.org).bind(product).bind(&actor.user).bind(&body.idempotency_key).bind(&body.service_ids).bind(&value).fetch_optional(&mut *tx).await.map_err(db)?;
+        let row=sqlx::query("INSERT INTO cards(id,org,product,author,idempotency_key,services,body,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE(to_timestamp($8::bigint/1000.0),now())) ON CONFLICT(org,product,author,idempotency_key) DO NOTHING RETURNING id,body,revision,published").bind(uuid::Uuid::new_v4()).bind(&actor.org).bind(product).bind(&actor.user).bind(&body.idempotency_key).bind(&body.service_ids).bind(&value).bind(body.observed_at_ms).fetch_optional(&mut *tx).await.map_err(db)?;
         let result = match row {
             Some(row) => decode(row)?,
             None => {

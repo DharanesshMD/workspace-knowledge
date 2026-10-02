@@ -95,6 +95,14 @@
       ],
       "type": "string"
     },
+    "observed_at_ms": {
+      "description": "When the source work happened (Unix ms), if known. Defaults to submission time.",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "open_questions": {
       "items": {
         "type": "string"

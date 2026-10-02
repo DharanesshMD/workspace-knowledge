@@ -4,6 +4,7 @@ mod daemon;
 mod network;
 mod process;
 mod state;
+mod team;
 use clap::{Parser, Subcommand};
 use rand::RngCore;
 use serde_json::{json, Value};
@@ -58,6 +59,11 @@ enum Command {
     },
     Doctor,
     Auth,
+    /// Pause, resume or show sharing of your live activity ("who is working on what").
+    Activity {
+        /// pause | resume | status
+        action: String,
+    },
     ResetCapture {
         #[arg(long)]
         yes: bool,
@@ -219,7 +225,20 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 state::save(&state.join("capture-gap.json"), &json!({"gap":true}))?;
                 return Err("capture delivery failed".into());
             }
-            Ok(wk_adapters::success(&client, &event))
+            // Team notices are best effort and bounded so the agent is never held up.
+            let context = tokio::time::timeout(
+                std::time::Duration::from_millis(1500),
+                team::on_hook(&state, &client, &event, &input),
+            )
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
+            Ok(wk_adapters::team_context::output(
+                &client,
+                &event,
+                context.as_deref(),
+            ))
         }
         Command::Process => process::run(&state).await,
         Command::Drafts { after } => process::list(&state, &after),
@@ -241,6 +260,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 .map_err(|_| "credential update failed")?;
             Ok(json!({"credential_updated":true}))
         }
+        Command::Activity { action } => team::activity(&state, &action).await,
         Command::ResetCapture { yes } => {
             if !yes {
                 return Err("--yes closes all pending capture sessions and discards their private drafts; start a genuinely new client session afterward".into());

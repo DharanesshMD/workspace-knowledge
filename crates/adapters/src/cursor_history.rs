@@ -30,6 +30,15 @@ pub struct Conversation {
     pub created_at_ms: Option<i64>,
     pub source: &'static str,
     pub messages: Vec<Message>,
+    /// Workspace-relative files the agent changed (edit/write/delete tool calls).
+    pub files_changed: Vec<String>,
+    /// Workspace-relative files or folders the agent read or searched.
+    pub files_read: Vec<String>,
+    /// The agent's final reply in the session: usually its closing report.
+    pub outcome: Option<String>,
+    /// Coverage is complete within the source boundary: every record of Cursor's session file
+    /// was read and the session ends with the agent's reply. Not a claim about model context.
+    pub complete: bool,
 }
 
 #[derive(Serialize, Debug, Default)]
@@ -193,6 +202,10 @@ pub fn read_with(user_dir: &Path, dot_cursor: Option<&Path>) -> Result<History, 
                             created_at_ms: tab["lastSendTime"].as_i64(),
                             source: "cursor-legacy-chat",
                             messages,
+                            files_changed: vec![],
+                            files_read: vec![],
+                            outcome: None,
+                            complete: false,
                         });
                     }
                 }
@@ -275,6 +288,10 @@ pub fn read_with(user_dir: &Path, dot_cursor: Option<&Path>) -> Result<History, 
                         workspace: owner.get(&id).cloned(),
                         created_at_ms: c["createdAt"].as_i64(),
                         source: "cursor-composer",
+                        files_changed: vec![],
+                        files_read: vec![],
+                        outcome: None,
+                        complete: false,
                         id: format!("cursor-composer:{id}"),
                         messages,
                     });
@@ -328,9 +345,14 @@ fn read_transcripts(projects: &Path, history: &mut History) {
             let rel = file.strip_prefix(&root).unwrap_or(&file).with_extension("");
             let id = rel.to_string_lossy().replace(['/', '\\'], "_");
             let mut messages: Vec<Message> = Vec::new();
+            let mut changed = std::collections::BTreeSet::new();
+            let mut read = std::collections::BTreeSet::new();
+            let mut outcome = None;
+            let mut gaps = 0;
             for line in text.lines().filter(|l| !l.trim().is_empty()) {
                 let Ok(v) = serde_json::from_str::<Value>(line) else {
                     history.unreadable_records += 1;
+                    gaps += 1;
                     continue;
                 };
                 let role = match v["role"].as_str() {
@@ -338,6 +360,9 @@ fn read_transcripts(projects: &Path, history: &mut History) {
                     Some("assistant") => "assistant",
                     _ => continue,
                 };
+                if role == "assistant" {
+                    collect_tool_paths(&v, workspace.as_deref(), &mut changed, &mut read);
+                }
                 let body: Vec<&str> = v["message"]["content"]
                     .as_array()
                     .into_iter()
@@ -351,6 +376,9 @@ fn read_transcripts(projects: &Path, history: &mut History) {
                 }
                 if body.is_empty() {
                     continue;
+                }
+                if role == "assistant" {
+                    outcome = Some(body.clone());
                 }
                 match messages.last_mut() {
                     Some(last) if last.role == role => {
@@ -383,6 +411,9 @@ fn read_transcripts(projects: &Path, history: &mut History) {
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as i64);
+            let complete = gaps == 0
+                && messages.last().is_some_and(|m| m.role == "assistant")
+                && outcome.is_some();
             history.conversations.push(Conversation {
                 id: format!("cursor-transcript:{id}"),
                 title,
@@ -390,16 +421,127 @@ fn read_transcripts(projects: &Path, history: &mut History) {
                 created_at_ms: modified,
                 source: "cursor-agent-transcript",
                 messages,
+                files_read: read.difference(&changed).cloned().collect(),
+                files_changed: changed.into_iter().collect(),
+                complete,
+                outcome,
             });
         }
     }
 }
 
 /// Prefer the explicit `<user_query>` section Cursor wraps around the typed request.
+/// Without that section, remove Cursor-injected `<tag>…</tag>` context blocks; if nothing the
+/// developer wrote remains, the record is not a user message.
 fn user_query(text: &str) -> String {
     match (text.find("<user_query>"), text.find("</user_query>")) {
         (Some(a), Some(b)) if b > a => text[a + "<user_query>".len()..b].trim().to_string(),
-        _ => text.trim().to_string(),
+        _ => strip_context_blocks(text).trim().to_string(),
+    }
+}
+
+fn strip_context_blocks(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('<') {
+        let tail = &rest[start + 1..];
+        let name: String = tail
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        // Cursor context tags use snake_case names; ordinary HTML such as <div> is kept.
+        let closes = name.contains('_') && tail[name.len()..].starts_with('>');
+        let end = format!("</{name}>");
+        match (closes, tail.find(&end)) {
+            (true, Some(e)) => {
+                out.push_str(&rest[..start]);
+                rest = &tail[e + end.len()..];
+            }
+            _ => {
+                out.push_str(&rest[..=start]);
+                rest = tail;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// File paths from tool calls, kept only when inside the workspace, as relative paths.
+fn collect_tool_paths(
+    record: &Value,
+    workspace: Option<&Path>,
+    changed: &mut std::collections::BTreeSet<String>,
+    read: &mut std::collections::BTreeSet<String>,
+) {
+    let Some(root) = workspace else { return };
+    let relative = |raw: &str| -> Option<String> {
+        let path = Path::new(raw.trim());
+        let rel = if path.is_absolute() {
+            path.strip_prefix(root).ok()?
+        } else {
+            path
+        };
+        let safe = rel
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)));
+        (safe && !rel.as_os_str().is_empty()).then(|| rel.to_string_lossy().replace('\\', "/"))
+    };
+    for item in record["message"]["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if item["type"] != "tool_use" {
+            continue;
+        }
+        let input = &item["input"];
+        match item["name"].as_str().unwrap_or_default() {
+            "StrReplace" | "Write" | "Delete" | "Edit" | "MultiEdit" | "EditNotebook" => {
+                if let Some(p) = input["path"]
+                    .as_str()
+                    .or_else(|| input["file_path"].as_str())
+                    .and_then(relative)
+                {
+                    changed.insert(p);
+                }
+            }
+            "ApplyPatch" => {
+                let patch = input
+                    .as_str()
+                    .or_else(|| input["patch"].as_str())
+                    .unwrap_or_default();
+                for line in patch.lines() {
+                    for marker in ["*** Update File: ", "*** Add File: ", "*** Delete File: "] {
+                        if let Some(p) = line.strip_prefix(marker).and_then(relative) {
+                            changed.insert(p);
+                        }
+                    }
+                }
+            }
+            "Read" | "ReadFile" | "Grep" => {
+                if let Some(p) = input["path"].as_str().and_then(relative) {
+                    read.insert(p);
+                }
+            }
+            "ReadLints" => {
+                for p in input["paths"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p.as_str())
+                    .filter_map(relative)
+                {
+                    read.insert(p);
+                }
+            }
+            "Glob" => {
+                if let Some(p) = input["target_directory"].as_str().and_then(relative) {
+                    read.insert(p);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -909,7 +1051,30 @@ fn projects_shape(dir: &Path) -> Value {
                             *m.entry(r).or_default() += 1;
                             m
                         });
-                    bucket.push(json!({"ext": ext, "records": lines, "first_record_fields": shape, "role_or_type_counts": roles}));
+                    // Content item types and the field names of non-text items (e.g. tool calls).
+                    let mut item_types: BTreeMap<String, usize> = BTreeMap::new();
+                    let mut item_fields = serde_json::Map::new();
+                    for v in text
+                        .lines()
+                        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                    {
+                        for item in v["message"]["content"].as_array().into_iter().flatten() {
+                            let kind = item["type"]
+                                .as_str()
+                                .filter(|k| {
+                                    k.len() <= 32
+                                        && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                                })
+                                .unwrap_or("<other>");
+                            *item_types.entry(kind.to_string()).or_default() += 1;
+                            if kind != "text" {
+                                item_fields
+                                    .entry(kind.to_string())
+                                    .or_insert_with(|| field_types(item, 3));
+                            }
+                        }
+                    }
+                    bucket.push(json!({"ext": ext, "records": lines, "first_record_fields": shape, "role_or_type_counts": roles, "content_item_types": item_types, "non_text_item_fields": item_fields}));
                 } else if matches!(ext.as_str(), "txt" | "md" | "log") {
                     let mut counts = BTreeMap::new();
                     for line in text.lines() {

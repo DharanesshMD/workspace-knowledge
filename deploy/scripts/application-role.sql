@@ -10,3 +10,4 @@ GRANT SELECT,INSERT,UPDATE,DELETE ON graph_nodes,graph_edges TO wk_app;
 GRANT SELECT,UPDATE(stale) ON trusted_evidence TO wk_app;
 GRANT INSERT ON audit_events TO wk_app;
 GRANT USAGE ON SEQUENCE audit_events_id_seq TO wk_app;
+GRANT SELECT,INSERT,UPDATE,DELETE ON activity TO wk_app;

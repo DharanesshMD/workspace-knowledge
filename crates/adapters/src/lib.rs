@@ -159,6 +159,7 @@ pub fn config(client: &str, executable: &Path, state: &Path) -> Result<Value, St
             "stop",
             "beforeReadFile",
             "afterFileEdit",
+            "postToolUse",
             "preCompact",
         ],
         "claude-code" => &[
@@ -199,6 +200,7 @@ pub fn config(client: &str, executable: &Path, state: &Path) -> Result<Value, St
 
 pub mod cursor_history;
 pub mod install;
+pub mod team_context;
 
 /// Observational hooks never veto development or request another model turn.
 pub fn success(client: &str, event: &str) -> Value {

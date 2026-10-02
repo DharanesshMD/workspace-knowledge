@@ -280,6 +280,62 @@ async fn evidence(
         json!({"evidence":api.knowledge.evidence(&a,&product,uuid(&id)?).await?}),
     ))
 }
+async fn activity(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(product): Path<String>,
+    body: Result<Json<wk_knowledge::activity::ActivityUpdate>, JsonRejection>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    let update = parse(body)?;
+    if wk_summarize::sensitive(&update.intent) {
+        return Err(Failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "sensitive_intent",
+        ));
+    }
+    api.knowledge.record_activity(&a, &product, update).await?;
+    Ok(Json(json!({"recorded":true})))
+}
+async fn clear_activity(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(product): Path<String>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    api.knowledge.clear_activity(&a, &product).await?;
+    Ok(Json(json!({"cleared":true})))
+}
+pub(crate) async fn overlaps_for(
+    api: &Api,
+    a: &Actor,
+    product: &str,
+    mut q: wk_knowledge::activity::OverlapQuery,
+) -> Result<Value, Failure> {
+    // Possibly sensitive request text is dropped, not sent to search; file matching still runs.
+    let query_ignored = q.query.as_deref().is_some_and(wk_summarize::sensitive);
+    if query_ignored {
+        q.query = None;
+        if q.files.is_empty() {
+            return Ok(json!({"notices":[],"text":"","query_ignored":true}));
+        }
+    }
+    let notices = api.knowledge.overlaps(a, product, q).await?;
+    Ok(
+        json!({"text":wk_knowledge::activity::render(&notices),"notices":notices,"query_ignored":query_ignored}),
+    )
+}
+async fn overlaps(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(product): Path<String>,
+    body: Result<Json<wk_knowledge::activity::OverlapQuery>, JsonRejection>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    overlaps_for(&api, &a, &product, parse(body)?)
+        .await
+        .map(Json)
+}
 async fn relate(
     State(api): State<Api>,
     headers: HeaderMap,
@@ -395,6 +451,11 @@ pub fn configured_router(
         .route("/v1/products/{product}/review", get(review))
         .route("/v1/products/{product}/graph", get(graph))
         .route("/v1/products/{product}/relationships", post(relate))
+        .route(
+            "/v1/products/{product}/activity",
+            post(activity).delete(clear_activity),
+        )
+        .route("/v1/products/{product}/overlaps", post(overlaps))
         .layer(DefaultBodyLimit::max(65536))
         .with_state(Api {
             decisions: Arc::new(std::sync::OnceLock::new()),

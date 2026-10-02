@@ -37,3 +37,9 @@ Official protocol references checked during implementation: [Claude Code hooks](
 3. `wk cursor-history export --workspace /work/product --product PRODUCT --out /private/exports --session cursor-composer:ID --yes` writes only the sessions you confirmed, as owner-only files outside the workspace, in the format accepted by `wk-agent import --approve-transcript`.
 
 Use `--cursor-dir` for a non-standard install. Masking is pattern-based and not exhaustive; inspect exports before using them. Cursor can change its storage format in any release; this reader is tested against a synthetic fixture modelled on current layouts, not certified against every Cursor version.
+
+## Team overlap notices and activity
+
+Installed hooks also deliver "who else is working on this" notices (see [overlap notices](../architecture/overlap-notices.md)): Claude Code at prompt submit (locally extracted keywords only) and before file edits; Cursor after edit tools (`postToolUse`; Cursor cannot inject before a prompt or edit). Edits send activity heartbeats with workspace-relative paths only. Use `wk-agent --state-dir DIR activity pause` to stop sharing your activity (and clear it on the server), `activity resume` to restart, and `activity status` to check. MCP clients can call `knowledge.overlaps` directly; add a project rule asking the agent to call it before editing shared code.
+
+To build cards from your own Cursor history for evaluation: `wk cursor-history cards --workspace /work/product --latest 10 --service SERVICE --out /private/dir/cards.jsonl` (local Ollama `gemma4:e2b-mlx` by default; `--endpoint`/`--model` to change). Then `python3 scripts/history-eval.py cards.jsonl --repo /work/product --report /private/dir/report.json` with `WK_TEST_DATABASE_URL` pointing at a disposable `wk_test` database.

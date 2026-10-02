@@ -86,6 +86,22 @@ enum CursorHistory {
         #[arg(long, default_value_t = 1500)]
         max_chars: usize,
     },
+    /// Summarize the latest chats in a workspace into knowledge cards with the local model.
+    /// Writes one JSON line per chat (card or failure reason) to a new owner-only file.
+    Cards {
+        #[arg(long)]
+        workspace: PathBuf,
+        #[arg(long, default_value_t = 10)]
+        latest: usize,
+        #[arg(long, default_value = "frontend")]
+        service: String,
+        #[arg(long, default_value = "http://127.0.0.1:11434/api/chat")]
+        endpoint: String,
+        #[arg(long, default_value = "gemma4:e2b-mlx")]
+        model: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Write confirmed conversations as `wk-agent import` files (secrets masked).
     Export {
         #[arg(long)]
@@ -446,6 +462,103 @@ fn cursor_history(
             }
             Ok(Value::Null)
         }
+        CursorHistory::Cards {
+            workspace,
+            latest,
+            service,
+            endpoint,
+            model,
+            out,
+        } => {
+            if !wk_contracts::valid_id(&service) {
+                return Err("invalid service ID".into());
+            }
+            let root = workspace
+                .canonicalize()
+                .map_err(|_| "workspace unavailable")?;
+            let mut chats = ch::within(&history, &root);
+            chats.truncate(latest);
+            chats.reverse(); // chronological
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options
+                .open(&out)
+                .map_err(|_| "cannot create output file (already exists?)")?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "runtime unavailable")?;
+            let home = std::env::var("HOME").unwrap_or_default();
+            let mut summary = json!({"chats":0,"cards":0,"failed":0});
+            for c in &chats {
+                let source = card_source(c, &root, &home);
+                // Nothing changed and almost nothing said (e.g. a greeting): no card.
+                let said: usize = c
+                    .messages
+                    .iter()
+                    .filter(|m| m.role == "user")
+                    .map(|m| m.text.chars().count())
+                    .sum();
+                if c.files_changed.is_empty() && said < 40 {
+                    writeln!(file, "{}", json!({"id":c.id,"observed_at_ms":c.created_at_ms,"files_changed":[],"files_read":[],"skipped":"nothing to record"})).map_err(|_| "cannot write output")?;
+                    continue;
+                }
+                let started = std::time::Instant::now();
+                let result = runtime.block_on(wk_summarize::extract(&endpoint, &model, &source));
+                let seconds = started.elapsed().as_secs_f64();
+                let first_request = c.messages.iter().find(|m| m.role == "user").map(|m| {
+                    relativize(&m.text, &root, &home)
+                        .chars()
+                        .take(400)
+                        .collect::<String>()
+                });
+                let mut line = json!({"id":c.id,"observed_at_ms":c.created_at_ms,"files_changed":c.files_changed,"files_read":c.files_read.iter().take(100).collect::<Vec<_>>(),"first_request":first_request,"source_chars":source.len(),"seconds":seconds});
+                summary["chats"] = json!(summary["chats"].as_u64().unwrap_or(0) + 1);
+                match result.and_then(|e| {
+                    let key = format!("{:x}", Sha256::digest(c.id.as_bytes()));
+                    let mut card =
+                        wk_summarize::card(e, key, 1, vec![service.clone()], c.complete)?;
+                    card.evidence = c
+                        .files_changed
+                        .iter()
+                        .take(50)
+                        .map(|f| {
+                            serde_json::from_value(json!({"kind":"file_observation","reference":f}))
+                                .map_err(|_| "invalid evidence".to_string())
+                        })
+                        .collect::<Result<_, _>>()?;
+                    card.observed_at_ms = c.created_at_ms;
+                    card.validate()?;
+                    Ok(card)
+                }) {
+                    Ok(card) => {
+                        line["card"] = json!(card);
+                        summary["cards"] = json!(summary["cards"].as_u64().unwrap_or(0) + 1);
+                    }
+                    Err(reason) => {
+                        line["error"] = json!(reason);
+                        summary["failed"] = json!(summary["failed"].as_u64().unwrap_or(0) + 1);
+                    }
+                }
+                writeln!(file, "{line}").map_err(|_| "cannot write output")?;
+                eprintln!(
+                    "{} {:.0}s {}",
+                    c.id,
+                    seconds,
+                    if line.get("card").is_some() {
+                        "card"
+                    } else {
+                        "failed"
+                    }
+                );
+            }
+            Ok(summary)
+        }
         CursorHistory::Export {
             workspace,
             product,
@@ -516,6 +629,50 @@ fn cursor_history(
         }
     }
 }
+/// Replace absolute workspace/home prefixes so summaries carry relative paths only.
+fn relativize(text: &str, root: &Path, home: &str) -> String {
+    let root = format!("{}/", root.display());
+    let mut out = text.replace(&root, "");
+    if home.len() > 1 {
+        out = out.replace(home, "~");
+    }
+    out
+}
+
+/// Summarizer input: the developer's requests, files changed and the agent's closing report.
+fn card_source(c: &wk_adapters::cursor_history::Conversation, root: &Path, home: &str) -> String {
+    let clip = |s: &str, n: usize| s.chars().take(n).collect::<String>();
+    let mut out = String::from("Developer requests:\n");
+    // One-word confirmations ("yes", "1") only answer the agent; they add no knowledge.
+    for m in c
+        .messages
+        .iter()
+        .filter(|m| m.role == "user" && m.text.split_whitespace().count() > 2)
+        .take(8)
+    {
+        out.push_str(&format!(
+            "- {}\n",
+            clip(&relativize(&m.text, root, home), 1200)
+        ));
+    }
+    if !c.files_changed.is_empty() {
+        let files: Vec<&str> = c
+            .files_changed
+            .iter()
+            .take(30)
+            .map(String::as_str)
+            .collect();
+        out.push_str(&format!("\nFiles changed: {}\n", files.join(", ")));
+    }
+    if let Some(outcome) = &c.outcome {
+        out.push_str(&format!(
+            "\nAgent's final report:\n{}\n",
+            clip(&relativize(outcome, root, home), 4000)
+        ));
+    }
+    clip(&out, 9000)
+}
+
 fn main() {
     match run(Cli::parse()) {
         Ok(Value::Null) => {}

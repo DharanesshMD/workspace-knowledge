@@ -56,11 +56,24 @@ pub struct CardSubmission {
     pub lifecycle: Lifecycle,
     pub capture_completeness: Completeness,
     pub base_revision: Option<u64>,
+    /// When the source work happened (Unix ms), if known. Defaults to submission time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at_ms: Option<i64>,
 }
 impl CardSubmission {
     pub fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1 {
             return Err("unsupported schema version".into());
+        }
+        if let Some(at) = self.observed_at_ms {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| "clock unavailable")?
+                .as_millis() as i64;
+            const YEAR_MS: i64 = 366 * 24 * 3600 * 1000;
+            if at > now + 300_000 || at < now - YEAR_MS {
+                return Err("observation time out of range".into());
+            }
         }
         if self.policy_revision == 0
             || self.idempotency_key.trim().is_empty()

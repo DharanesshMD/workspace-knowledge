@@ -117,7 +117,28 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|_| "0".into())
                 .parse::<u16>()
                 .map_err(|_| "invalid WK_PORT")?;
-            (k, vec![(token, who)], None, format!("127.0.0.1:{port}"))
+            let mut tokens = vec![(token, who)];
+            // Optional second development identity for multi-developer testing.
+            if let Ok(second) = std::env::var("WK_DEV_TOKEN_B") {
+                if second.len() < 32 {
+                    return Err("WK_DEV_TOKEN_B must contain at least 32 characters".into());
+                }
+                let b = Actor {
+                    org: "development".into(),
+                    user: "developer-b".into(),
+                };
+                if k.policy(&b, "demo").await.is_err() {
+                    k.grant(
+                        &b,
+                        "demo",
+                        &["backend".into(), "frontend".into(), "ai-engine".into()],
+                        false,
+                    )
+                    .await?
+                }
+                tokens.push((second, b));
+            }
+            (k, tokens, None, format!("127.0.0.1:{port}"))
         }
         _ => return Err("unknown mode".into()),
     };

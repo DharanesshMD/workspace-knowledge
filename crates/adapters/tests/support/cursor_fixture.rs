@@ -144,6 +144,39 @@ pub fn transcripts(base: &Path, product: &Path) -> std::path::PathBuf {
         ],
         "not json\n",
     );
+    let root = product.canonicalize().unwrap();
+    let abs = |rel: &str| root.join(rel).to_string_lossy().to_string();
+    let patch = "*** Begin Patch\n*** Update File: web/app.tsx\n@@\n-a\n+b\n*** End Patch";
+    write(
+        &slug(product),
+        "44444444-dddd.jsonl",
+        &[
+            msg(
+                "user",
+                json!([{"type":"text","text":"<hooks_context>\nSYSTEM_CONTEXT_CANARY\n</hooks_context>"}]),
+            ),
+            msg(
+                "user",
+                json!([{"type":"text","text":"Wrap the badge in <div class=\"x\">hi</div> please"}]),
+            ),
+            msg(
+                "assistant",
+                json!([
+            {"type":"tool_use","name":"Read","input":{"path": abs("backend/limits.rs")}},
+            {"type":"tool_use","name":"StrReplace","input":{"path": abs("backend/limits.rs"),"old_string":"OLD_CANARY","new_string":"NEW_CANARY"}},
+            {"type":"tool_use","name":"Write","input":{"path":"/etc/outside-workspace.conf","contents":"x"}},
+            {"type":"tool_use","name":"Write","input":{"path": abs("../escape.txt"),"contents":"x"}},
+            {"type":"tool_use","name":"Grep","input":{"path":"backend","pattern":"limit"}},
+            {"type":"tool_use","name":"ApplyPatch","input": patch},
+            {"type":"text","text":"Working on it."}]),
+            ),
+            msg(
+                "assistant",
+                json!([{"type":"text","text":"## Done\nWrapped the badge."}]),
+            ),
+        ],
+        "",
+    );
     let personal = base.join("personal");
     write(
         &slug(&personal),

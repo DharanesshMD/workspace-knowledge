@@ -256,3 +256,111 @@ fn cursor_history_show_and_export_are_scoped_masked_and_confirmed() {
     }
     assert!(!run(&ok).status.success(), "existing export overwritten");
 }
+
+/// Fake Ollama `/api/chat` answering every request with one fixed summary; returns its URL.
+fn fake_model() -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/api/chat", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut raw = Vec::new();
+            let mut buf = [0u8; 16384];
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                raw.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&raw).to_string();
+                if let Some(split) = text.find("\r\n\r\n") {
+                    let length = text[..split]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if raw.len() >= split + 4 + length || n == 0 {
+                        break;
+                    }
+                }
+            }
+            let summary = serde_json::json!({"title":"Billing limiter reuse","intent":"Reuse the limiter for billing","rationale":"","decisions":[],"constraints":[],"open_questions":[],"sensitive":false});
+            let body =
+                serde_json::json!({"message":{"role":"assistant","content":summary.to_string()}})
+                    .to_string();
+            let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+        }
+    });
+    url
+}
+
+#[test]
+fn cursor_history_cards_carry_changed_files_and_session_time() {
+    let d = tempfile::tempdir().unwrap();
+    let (user, product) = cursor_fixture::fixture(d.path());
+    let dot = cursor_fixture::transcripts(d.path(), &product);
+    let out = d.path().join("cards.jsonl");
+    let o = run(&[
+        "cursor-history",
+        "--cursor-dir",
+        user.to_str().unwrap(),
+        "--dot-cursor-dir",
+        dot.to_str().unwrap(),
+        "cards",
+        "--workspace",
+        product.to_str().unwrap(),
+        "--latest",
+        "10",
+        "--service",
+        "backend",
+        "--endpoint",
+        &fake_model(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let lines: Vec<serde_json::Value> = std::fs::read_to_string(&out)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let edited = lines
+        .iter()
+        .find(|l| l["id"].as_str().unwrap().contains("44444444"))
+        .unwrap();
+    assert_eq!(
+        edited["card"]["evidence"],
+        serde_json::json!([{"kind":"file_observation","reference":"backend/limits.rs"},{"kind":"file_observation","reference":"web/app.tsx"}])
+    );
+    assert!(edited["card"]["observed_at_ms"].as_i64().unwrap() > 0);
+    assert_eq!(
+        edited["card"]["service_ids"],
+        serde_json::json!(["backend"])
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&out).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    assert!(
+        !run(&[
+            "cursor-history",
+            "--cursor-dir",
+            user.to_str().unwrap(),
+            "--dot-cursor-dir",
+            dot.to_str().unwrap(),
+            "cards",
+            "--workspace",
+            product.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap()
+        ])
+        .status
+        .success(),
+        "existing output overwritten"
+    );
+}

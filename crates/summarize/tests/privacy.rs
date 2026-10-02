@@ -38,3 +38,21 @@ fn summaries_cannot_promote_implementation() {
     assert_eq!(c.lifecycle, wk_contracts::Lifecycle::Proposed);
     assert_eq!(c.capture_completeness, wk_contracts::Completeness::Partial);
 }
+
+#[test]
+fn tidy_drops_confirmations_identifiers_and_duplicates() {
+    let items = [
+        "yes",
+        "Yes",
+        "1",
+        "proceed",
+        "intent_to_recreate_motion",
+        "Proceed with Approach 1",
+        "proceed with approach 1",
+        "Keep the hero unchanged",
+    ];
+    assert_eq!(
+        wk_summarize::tidy(items.iter().map(|s| s.to_string()).collect()),
+        ["Proceed with Approach 1", "Keep the hero unchanged"]
+    );
+}
