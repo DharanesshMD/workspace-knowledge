@@ -56,6 +56,40 @@ enum Command {
     ValidateCard { file: PathBuf },
     /// Inspect synthetic JSONL events; never prints raw prompts or responses.
     Replay { root: PathBuf, file: PathBuf },
+    /// Read your local Cursor chat history (read-only snapshot) for review and export.
+    CursorHistory {
+        /// Cursor user-data directory; defaults to the standard location for this OS.
+        #[arg(long, global = true)]
+        cursor_dir: Option<PathBuf>,
+        #[command(subcommand)]
+        action: CursorHistory,
+    },
+}
+#[derive(Subcommand)]
+enum CursorHistory {
+    /// Summarise conversations per workspace folder (titles and counts only).
+    List,
+    /// Print conversations for one workspace as Markdown, with likely secrets masked.
+    Show {
+        #[arg(long)]
+        workspace: PathBuf,
+        /// Truncate each message to this many characters (0 = no limit).
+        #[arg(long, default_value_t = 1500)]
+        max_chars: usize,
+    },
+    /// Write confirmed conversations as `wk-agent import` files (secrets masked).
+    Export {
+        #[arg(long)]
+        workspace: PathBuf,
+        #[arg(long)]
+        product: String,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long = "session", required = true)]
+        sessions: Vec<String>,
+        #[arg(long)]
+        yes: bool,
+    },
 }
 #[derive(Subcommand)]
 enum Workspace {
@@ -176,6 +210,7 @@ fn save_binding(state: &Path, binding: &Binding) -> Result<(), String> {
 }
 fn run(cli: Cli) -> Result<Value, String> {
     match cli.command {
+        Command::CursorHistory { cursor_dir, action } => cursor_history(cursor_dir, action),
         Command::Agent { args } => forward("wk-agent", cli.state_dir.as_deref(), args),
         Command::Env { args } => forward("wk-env", None, args),
         Command::Search {
@@ -324,8 +359,133 @@ fn search(product: &str, query: &str, limit: u32) -> Result<Value, String> {
     }
     serde_json::from_slice(&bytes).map_err(|_| "invalid response".into())
 }
+fn cursor_history(dir: Option<PathBuf>, action: CursorHistory) -> Result<Value, String> {
+    use wk_adapters::cursor_history as ch;
+    let dir = dir
+        .or_else(ch::default_dir)
+        .ok_or("Cursor directory not found; pass --cursor-dir")?;
+    if !dir.is_dir() {
+        return Err("Cursor directory not found; pass --cursor-dir".into());
+    }
+    let history = ch::read(&dir)?;
+    match action {
+        CursorHistory::List => {
+            let mut groups: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
+            let mut unattributed = 0;
+            for c in &history.conversations {
+                match &c.workspace {
+                    Some(w) => groups
+                        .entry(w.display().to_string())
+                        .or_default()
+                        .push(json!({"id":c.id,"title":c.title,"messages":c.messages.len()})),
+                    None => unattributed += 1,
+                }
+            }
+            let workspaces: Vec<Value> = groups
+                .into_iter()
+                .map(|(w, cs)| json!({"workspace":w,"conversations":cs.len(),"items":cs}))
+                .collect();
+            Ok(
+                json!({"workspaces":workspaces,"unattributed_conversations":unattributed,"unreadable_records":history.unreadable_records}),
+            )
+        }
+        CursorHistory::Show {
+            workspace,
+            max_chars,
+        } => {
+            let selected = ch::within(&history, &workspace);
+            println!("# Cursor conversations in {}\n\n{} conversation(s). Likely secrets are masked; review before exporting.\n", workspace.display(), selected.len());
+            for c in selected {
+                println!(
+                    "## {}\n\n`{}` · {} message(s) · {}\n",
+                    c.title,
+                    c.id,
+                    c.messages.len(),
+                    c.source
+                );
+                for m in &c.messages {
+                    let mut text = ch::redact(&m.text);
+                    if max_chars > 0 && text.chars().count() > max_chars {
+                        text = text.chars().take(max_chars).collect::<String>() + " …[truncated]";
+                    }
+                    println!("**{}:** {}\n", m.role, text);
+                }
+            }
+            Ok(Value::Null)
+        }
+        CursorHistory::Export {
+            workspace,
+            product,
+            out,
+            sessions,
+            yes,
+        } => {
+            if !yes {
+                return Err("review `cursor-history show` first, then pass --yes to export the listed sessions".into());
+            }
+            if !wk_contracts::valid_id(&product) {
+                return Err("invalid product ID".into());
+            }
+            let root = workspace
+                .canonicalize()
+                .map_err(|_| "workspace unavailable")?;
+            let selected = ch::within(&history, &root);
+            let mut chosen = Vec::new();
+            for id in &sessions {
+                chosen.push(
+                    selected
+                        .iter()
+                        .find(|c| &c.id == id)
+                        .ok_or("a requested session is not in this workspace")?,
+                );
+            }
+            if !out.is_absolute() {
+                return Err("--out must be an absolute path".into());
+            }
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            builder
+                .create(&out)
+                .map_err(|_| "cannot create output directory")?;
+            let out = out
+                .canonicalize()
+                .map_err(|_| "output directory unavailable")?;
+            if out.starts_with(&root) {
+                return Err("output directory must be outside the workspace".into());
+            }
+            let mut written = Vec::new();
+            for c in chosen {
+                let body = json!({"schema_version":1,"workspace":root,"product":product,"session_id":c.id,
+                    "messages":c.messages.iter().map(|m| json!({"id":m.id,"role":m.role,"text":ch::redact(&m.text)})).collect::<Vec<_>>()});
+                let path = out.join(format!("{}.json", c.id.replace(':', "_")));
+                let mut options = fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut file = options
+                    .open(&path)
+                    .map_err(|_| "cannot create export file (already exists?)")?;
+                file.write_all(&serde_json::to_vec_pretty(&body).map_err(|_| "invalid export")?)
+                    .map_err(|_| "cannot write export")?;
+                written.push(path);
+            }
+            Ok(
+                json!({"exported":written,"published":false,"next":"wk-agent import --file FILE --session SESSION_ID --approve-transcript"}),
+            )
+        }
+    }
+}
 fn main() {
     match run(Cli::parse()) {
+        Ok(Value::Null) => {}
         Ok(v) => println!("{v}"),
         Err(message) => {
             eprintln!(

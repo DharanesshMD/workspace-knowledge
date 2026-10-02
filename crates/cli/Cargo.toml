@@ -11,10 +11,14 @@ wk-scope = { path = "../scope" }
 wk-contracts = { path = "../contracts" }
 clap = { version = "4", features = ["derive"] }
 wk-capture = { path = "../capture" }
+wk-adapters = { path = "../adapters" }
 tempfile.workspace = true
 
 reqwest={version="0.12",default-features=false,features=["blocking","json","rustls-tls"]}
 wk-summarize={path="../summarize"}
+
+[dev-dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [[bin]]
 name = "wk"

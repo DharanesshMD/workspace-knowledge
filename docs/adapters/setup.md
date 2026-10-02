@@ -27,3 +27,13 @@ An explicit export is `{ "schema_version":1, "workspace":"/work/product", "produ
 On an isolated broker user account only, set `WK_COMPLIANCE_BROKER=1` and a read-only `WK_COMPLIANCE_READ_KEY`. Run `compliance --binding EXACT_GRANT_FILE`. The grant contains `chat_id`, `provider_org`, `provider_user`, `root`, `service`, `approval_hash`, and Unix `expires_at`. It must be issued for an explicitly approved chat by the operator. The client retrieves only that chat, validates returned ownership, follows bounded message pagination, skips reasoning and attachment downloads, and never lists organization-wide chats. Text-only coverage remains partial. Source edits conflict with old event IDs and hold the session. Broad API entitlement is never treated as workspace consent. This pull command has no remotely exposed broker API; broker deployment/entitlement remains a certification prerequisite.
 
 Official protocol references checked during implementation: [Claude Code hooks](https://code.claude.com/docs/en/hooks), [Cursor hooks](https://prod.cursor.com/docs/hooks), [Gemini hooks](https://geminicli.com/docs/hooks/reference/), [Claude Compliance content](https://platform.claude.com/docs/en/manage-claude/compliance-content-data). These document interfaces; they do not certify our adapters.
+
+## Cursor history import (for evaluation sets)
+
+`wk cursor-history` reads your own local Cursor chats from a read-only snapshot of Cursor's undocumented SQLite storage (global `cursorDiskKV` composer/bubble records and per-workspace `ItemTable` entries, including legacy chat tabs). It never modifies Cursor's files and works while Cursor is running. Only visible message text is read; thinking and tool payloads are ignored, and missing records are counted rather than guessed.
+
+1. `wk cursor-history list` shows titles and counts per workspace folder, plus unattributed chats (which are never assigned to a workspace).
+2. `wk cursor-history show --workspace /work/product` prints that workspace's chats as Markdown with likely credentials masked. Review them.
+3. `wk cursor-history export --workspace /work/product --product PRODUCT --out /private/exports --session cursor-composer:ID --yes` writes only the sessions you confirmed, as owner-only files outside the workspace, in the format accepted by `wk-agent import --approve-transcript`.
+
+Use `--cursor-dir` for a non-standard install. Masking is pattern-based and not exhaustive; inspect exports before using them. Cursor can change its storage format in any release; this reader is tested against a synthetic fixture modelled on current layouts, not certified against every Cursor version.

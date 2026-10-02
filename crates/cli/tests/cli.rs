@@ -122,3 +122,113 @@ fn existing_directory_permissions_are_not_changed() {
         0o755
     );
 }
+
+#[path = "../../adapters/tests/support/cursor_fixture.rs"]
+mod cursor_fixture;
+
+#[test]
+fn cursor_history_show_and_export_are_scoped_masked_and_confirmed() {
+    let d = tempfile::tempdir().unwrap();
+    let (user, product) = cursor_fixture::fixture(d.path());
+    let (u, p) = (user.to_str().unwrap(), product.to_str().unwrap());
+    let shown = run(&[
+        "cursor-history",
+        "--cursor-dir",
+        u,
+        "show",
+        "--workspace",
+        p,
+    ]);
+    assert!(shown.status.success());
+    let text = String::from_utf8(shown.stdout).unwrap();
+    assert!(text.contains("## Tenant rate limiter") && text.contains("Use the shared middleware."));
+    for absent in [
+        "sk-SYNTHETIC",
+        "PERSONAL_CANARY",
+        "ORPHAN_CANARY",
+        "HIDDEN_REASONING",
+    ] {
+        assert!(!text.contains(absent), "{absent} shown");
+    }
+    let listed: serde_json::Value =
+        serde_json::from_slice(&run(&["cursor-history", "--cursor-dir", u, "list"]).stdout)
+            .unwrap();
+    assert_eq!(listed["unattributed_conversations"], 1);
+
+    let out = d.path().join("exports");
+    let o = out.to_str().unwrap();
+    let base = [
+        "cursor-history",
+        "--cursor-dir",
+        u,
+        "export",
+        "--workspace",
+        p,
+        "--product",
+        "demo",
+        "--out",
+        o,
+        "--session",
+        "cursor-composer:c-new",
+    ];
+    assert!(!run(&base).status.success(), "export requires --yes");
+    assert!(!out.exists());
+    let personal = [
+        "cursor-history",
+        "--cursor-dir",
+        u,
+        "export",
+        "--workspace",
+        p,
+        "--product",
+        "demo",
+        "--out",
+        o,
+        "--session",
+        "cursor-composer:c-personal",
+        "--yes",
+    ];
+    assert!(
+        !run(&personal).status.success(),
+        "out-of-workspace session exported"
+    );
+    let inside = product.join("exports");
+    let inside_args = [
+        "cursor-history",
+        "--cursor-dir",
+        u,
+        "export",
+        "--workspace",
+        p,
+        "--product",
+        "demo",
+        "--out",
+        inside.to_str().unwrap(),
+        "--session",
+        "cursor-composer:c-new",
+        "--yes",
+    ];
+    assert!(
+        !run(&inside_args).status.success(),
+        "export inside workspace allowed"
+    );
+    let mut ok = base.to_vec();
+    ok.push("--yes");
+    assert!(run(&ok).status.success());
+    let file = out.join("cursor-composer_c-new.json");
+    let body: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(body["schema_version"], 1);
+    assert_eq!(body["session_id"], "cursor-composer:c-new");
+    assert_eq!(body["messages"].as_array().unwrap().len(), 2);
+    assert!(!body.to_string().contains("sk-SYNTHETIC"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    assert!(!run(&ok).status.success(), "existing export overwritten");
+}

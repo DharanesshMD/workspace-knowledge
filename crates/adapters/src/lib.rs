@@ -197,6 +197,7 @@ pub fn config(client: &str, executable: &Path, state: &Path) -> Result<Value, St
     })
 }
 
+pub mod cursor_history;
 pub mod install;
 
 /// Observational hooks never veto development or request another model turn.
