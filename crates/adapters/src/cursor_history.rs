@@ -358,6 +358,12 @@ fn secret_like(word: &str) -> bool {
 /// Structure-only report for adapting to new Cursor versions: file/table names, key-name
 /// prefixes with counts, and JSON field names with types. Never includes values or text.
 pub fn diagnose(user_dir: &Path) -> Result<Value, String> {
+    let dot = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cursor"));
+    diagnose_with(user_dir, dot.as_deref())
+}
+
+/// `diagnose` with an explicit `~/.cursor` location (used by tests).
+pub fn diagnose_with(user_dir: &Path, dot_cursor: Option<&Path>) -> Result<Value, String> {
     use serde_json::json;
     let scratch = tempfile::tempdir().map_err(|_| "cannot create private scratch directory")?;
     let names = |dir: &Path| -> Vec<Value> {
@@ -390,9 +396,8 @@ pub fn diagnose(user_dir: &Path) -> Result<Value, String> {
         "workspace_dirs_with_folder": ws_dirs.iter().filter(|d| std::fs::read_to_string(d.join("workspace.json")).ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok()).is_some_and(|v| v["folder"].is_string())).count(),
     });
-    if let Some(home) = std::env::var_os("HOME") {
-        let dot = PathBuf::from(home).join(".cursor");
-        report["dot_cursor_entries"] = json!(names(&dot));
+    if let Some(dot) = dot_cursor {
+        report["dot_cursor_entries"] = json!(names(dot));
     }
     if let Some(conn) = snapshot(
         &user_dir.join("globalStorage/state.vscdb"),
@@ -428,6 +433,26 @@ pub fn diagnose(user_dir: &Path) -> Result<Value, String> {
         .collect::<BTreeMap<_, _>>());
     report["workspace_chat_like_value_fields"] = Value::Object(ws_shapes);
     let h = read(user_dir)?;
+    let mut dbs = Vec::new();
+    let mut n = 0;
+    let mut roots = vec![user_dir.join("globalStorage")];
+    if let Some(dot) = dot_cursor {
+        roots.push(dot.to_path_buf());
+    }
+    for root in &roots {
+        find_databases(root, root, 0, &mut |path, shown| {
+            n += 1;
+            if let Ok(Some(conn)) = snapshot(path, scratch.path(), &format!("probe{n}.db")) {
+                let mut shape = db_shape(&conn);
+                shape["path"] = json!(shown);
+                dbs.push(shape);
+            }
+        });
+    }
+    report["sqlite_databases"] = json!(dbs);
+    if let Some(dot) = dot_cursor {
+        report["projects"] = projects_shape(&dot.join("projects"));
+    }
     report["reader_result"] = json!({"conversations": h.conversations.len(), "attributed": h.conversations.iter().filter(|c| c.workspace.is_some()).count(), "empty_conversations": h.empty_conversations, "unreadable_records": h.unreadable_records});
     Ok(report)
 }
@@ -501,7 +526,12 @@ fn db_shape(conn: &Connection) -> Value {
         let rows: i64 = conn
             .query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0))
             .unwrap_or(-1);
-        let mut entry = json!({"table": t, "rows": rows});
+        let columns: Vec<Value> = conn.prepare(&format!("PRAGMA table_info({t})"))
+            .and_then(|mut st| st.query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?.collect::<Result<Vec<_>, _>>())
+            .unwrap_or_default().into_iter()
+            .map(|(name, ty)| json!({"name": if name.len() <= 40 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') { name } else { "<masked>".into() }, "type": ty}))
+            .collect();
+        let mut entry = json!({"table": t, "rows": rows, "columns": columns});
         let keyed = conn
             .prepare(&format!("SELECT key FROM {t} LIMIT 0"))
             .is_ok();
@@ -513,15 +543,20 @@ fn db_shape(conn: &Connection) -> Value {
             let mut prefixes: BTreeMap<String, usize> = BTreeMap::new();
             for k in &keys {
                 // Prefix up to the first ':' only; IDs after it are not reported.
+                // Non-schema-like prefixes (IDs, paths, text) are grouped as <other>.
+                let prefix = k.split(':').next().unwrap_or_default();
+                let schema = prefix.len() <= 80
+                    && prefix
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "._/-".contains(c))
+                    && !(prefix.len() >= 16
+                        && prefix.chars().filter(|c| c.is_ascii_digit()).count() >= 4);
                 *prefixes
-                    .entry(
-                        k.split(':')
-                            .next()
-                            .unwrap_or_default()
-                            .chars()
-                            .take(80)
-                            .collect(),
-                    )
+                    .entry(if schema {
+                        prefix.to_string()
+                    } else {
+                        "<other>".into()
+                    })
                     .or_default() += 1;
             }
             let mut samples = serde_json::Map::new();
@@ -551,4 +586,201 @@ fn db_shape(conn: &Connection) -> Value {
         out.push(entry);
     }
     json!({"tables": out})
+}
+
+/// A path segment safe to display: project folders and ID-like names are masked.
+fn display_segment(segment: &str, parent: Option<&str>) -> String {
+    let id_like = segment.len() >= 16 && segment.chars().any(|c| c.is_ascii_digit());
+    let plain = segment.len() <= 40
+        && segment
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+    if parent == Some("projects") {
+        "<project>".into()
+    } else if id_like || !plain {
+        "<id>".into()
+    } else {
+        segment.into()
+    }
+}
+
+fn find_databases(root: &Path, dir: &Path, depth: usize, found: &mut dyn FnMut(&Path, String)) {
+    if depth > 4 {
+        return;
+    }
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if [
+            "extensions",
+            "node_modules",
+            "browser-logs",
+            "workspaceStorage",
+            "History",
+        ]
+        .contains(&name.as_str())
+        {
+            continue;
+        }
+        if path.is_dir() && !entry.file_type().is_ok_and(|t| t.is_symlink()) {
+            find_databases(root, &path, depth + 1, found);
+        } else if [".db", ".vscdb", ".sqlite", ".sqlite3"]
+            .iter()
+            .any(|e| name.ends_with(e))
+        {
+            let rel = path.strip_prefix(root).unwrap_or(&path);
+            let parts: Vec<String> = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                .collect();
+            let shown = parts
+                .iter()
+                .enumerate()
+                .map(|(i, seg)| display_segment(seg, i.checked_sub(1).map(|j| parts[j].as_str())))
+                .collect::<Vec<_>>()
+                .join("/");
+            found(
+                &path,
+                format!(
+                    "{}/{shown}",
+                    root.file_name().unwrap_or_default().to_string_lossy()
+                ),
+            );
+        }
+    }
+}
+
+/// Aggregate layout of ~/.cursor/projects without project names or file contents.
+fn projects_shape(dir: &Path) -> Value {
+    use serde_json::json;
+    let projects: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    let mut children: BTreeMap<String, BTreeMap<String, (usize, u64)>> = BTreeMap::new();
+    let mut samples: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    let markers = [
+        "user:",
+        "assistant:",
+        "human:",
+        "ai:",
+        "a:",
+        "u:",
+        "<user>",
+        "<assistant>",
+        "<user_query>",
+        "## user",
+        "## assistant",
+        "**user**",
+        "**assistant**",
+    ];
+    for project in &projects {
+        for child in std::fs::read_dir(project).into_iter().flatten().flatten() {
+            let cname = display_segment(&child.file_name().to_string_lossy(), None);
+            let mut files: Vec<PathBuf> = if child.path().is_dir() {
+                walk_files(&child.path(), 0)
+            } else {
+                vec![child.path()]
+            };
+            files.sort();
+            let entry = children.entry(cname.clone()).or_default();
+            for f in &files {
+                let ext = f
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "<none>".into());
+                let e = entry.entry(ext).or_default();
+                e.0 += 1;
+                e.1 += f.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+            let bucket = samples.entry(cname).or_default();
+            for f in files.iter().rev().take(3) {
+                if bucket.len() >= 6 {
+                    break;
+                }
+                let Ok(text) = std::fs::read_to_string(f) else {
+                    continue;
+                };
+                let ext = f
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if ext == "jsonl" || ext == "json" {
+                    let first = if ext == "jsonl" {
+                        text.lines()
+                            .find(|l| !l.trim().is_empty())
+                            .unwrap_or_default()
+                    } else {
+                        text.as_str()
+                    };
+                    let lines = text.lines().filter(|l| !l.trim().is_empty()).count();
+                    let shape = serde_json::from_str::<Value>(first)
+                        .map(|v| field_types(&v, 5))
+                        .unwrap_or_else(|_| json!("unparseable"));
+                    let roles: BTreeMap<String, usize> = text
+                        .lines()
+                        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                        .filter_map(|v| {
+                            v["role"]
+                                .as_str()
+                                .or_else(|| v["type"].as_str())
+                                .map(str::to_owned)
+                        })
+                        .filter(|r| {
+                            r.len() <= 24
+                                && r.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        })
+                        .fold(BTreeMap::new(), |mut m, r| {
+                            *m.entry(r).or_default() += 1;
+                            m
+                        });
+                    bucket.push(json!({"ext": ext, "records": lines, "first_record_fields": shape, "role_or_type_counts": roles}));
+                } else if matches!(ext.as_str(), "txt" | "md" | "log") {
+                    let mut counts = BTreeMap::new();
+                    for line in text.lines() {
+                        let l = line.trim_start().to_ascii_lowercase();
+                        if let Some(m) = markers.iter().find(|m| l.starts_with(**m)) {
+                            *counts.entry(m.to_string()).or_insert(0usize) += 1;
+                        }
+                    }
+                    bucket.push(json!({"ext": ext, "lines": text.lines().count(), "role_marker_line_counts": counts}));
+                }
+            }
+        }
+    }
+    let children: BTreeMap<String, Value> = children
+        .into_iter()
+        .map(|(k, exts)| {
+            (
+                k,
+                json!(exts
+                    .into_iter()
+                    .map(|(e, (n, b))| (e, json!({"files": n, "bytes": b})))
+                    .collect::<BTreeMap<_, _>>()),
+            )
+        })
+        .collect();
+    json!({"project_count": projects.len(), "children": children, "samples": samples})
+}
+
+fn walk_files(dir: &Path, depth: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if depth > 3 {
+        return out;
+    }
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if e.file_type().is_ok_and(|t| t.is_symlink()) {
+            continue;
+        }
+        if p.is_dir() {
+            out.extend(walk_files(&p, depth + 1));
+        } else {
+            out.push(p);
+        }
+    }
+    out
 }
