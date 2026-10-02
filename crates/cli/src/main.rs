@@ -76,8 +76,12 @@ enum CursorHistory {
     Diagnose,
     /// Print conversations for one workspace as Markdown, with likely secrets masked.
     Show {
+        /// Only chats attributed to this folder (or inside it). Omit to search all chats.
+        #[arg(long, required_unless_present = "latest")]
+        workspace: Option<PathBuf>,
+        /// Only the N most recently updated chats.
         #[arg(long)]
-        workspace: PathBuf,
+        latest: Option<usize>,
         /// Truncate each message to this many characters (0 = no limit).
         #[arg(long, default_value_t = 1500)]
         max_chars: usize,
@@ -406,13 +410,27 @@ fn cursor_history(
         }
         CursorHistory::Show {
             workspace,
+            latest,
             max_chars,
         } => {
-            let selected = ch::within(&history, &workspace);
-            println!("# Cursor conversations in {}\n\n{} conversation(s). Likely secrets are masked; review before exporting.\n", workspace.display(), selected.len());
+            let mut selected = match &workspace {
+                Some(w) => ch::within(&history, w),
+                None => history.conversations.clone(),
+            };
+            if let Some(n) = latest {
+                selected.truncate(n);
+            }
+            let scope = workspace
+                .as_ref()
+                .map_or("all projects".to_string(), |w| w.display().to_string());
+            println!("# Cursor conversations in {scope}\n\n{} conversation(s). Likely secrets are masked; review before exporting.\n", selected.len());
             for c in selected {
+                let place = c
+                    .workspace
+                    .as_ref()
+                    .map_or("unattributed".to_string(), |w| w.display().to_string());
                 println!(
-                    "## {}\n\n`{}` · {} message(s) · {}\n",
+                    "## {}\n\nProject: {place}\n\n`{}` · {} message(s) · {}\n",
                     c.title,
                     c.id,
                     c.messages.len(),
