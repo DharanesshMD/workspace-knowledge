@@ -77,3 +77,40 @@ fn missing_directory_yields_empty_history() {
     let d = tempfile::tempdir().unwrap();
     assert!(read(d.path()).unwrap().conversations.is_empty());
 }
+
+#[test]
+fn diagnose_reports_structure_without_values_paths_or_ids() {
+    let d = tempfile::tempdir().unwrap();
+    let (user, _) = fixture(d.path());
+    let c = Connection::open(user.join("globalStorage/state.vscdb")).unwrap();
+    c.execute("INSERT INTO cursorDiskKV VALUES('composerData:c-map',?)", [serde_json::json!({"conversationMap":{"/Users/someone/secret-project/file.rs":{"text":"MAP_CANARY"}},"text":"VALUE_CANARY"}).to_string().into_bytes()]).unwrap();
+    drop(c);
+    let report = wk_adapters::cursor_history::diagnose(&user)
+        .unwrap()
+        .to_string();
+    for absent in [
+        "sk-SYNTHETIC",
+        "PERSONAL_CANARY",
+        "HIDDEN_REASONING",
+        "MAP_CANARY",
+        "VALUE_CANARY",
+        "secret-project",
+        "c-new",
+        "Tenant rate limiter",
+        "my product",
+    ] {
+        assert!(
+            !report.contains(absent),
+            "{absent} leaked in diagnose output"
+        );
+    }
+    for present in [
+        "cursorDiskKV",
+        "composerData",
+        "fullConversationHeadersOnly",
+        "<dynamic-key>",
+        "empty_conversations",
+    ] {
+        assert!(report.contains(present), "{present} missing");
+    }
+}

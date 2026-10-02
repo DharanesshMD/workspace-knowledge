@@ -69,6 +69,8 @@ enum Command {
 enum CursorHistory {
     /// Summarise conversations per workspace folder (titles and counts only).
     List,
+    /// Report storage structure only (names, counts, field types; no values or text).
+    Diagnose,
     /// Print conversations for one workspace as Markdown, with likely secrets masked.
     Show {
         #[arg(long)]
@@ -369,6 +371,7 @@ fn cursor_history(dir: Option<PathBuf>, action: CursorHistory) -> Result<Value, 
     }
     let history = ch::read(&dir)?;
     match action {
+        CursorHistory::Diagnose => ch::diagnose(&dir),
         CursorHistory::List => {
             let mut groups: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
             let mut unattributed = 0;
@@ -386,7 +389,7 @@ fn cursor_history(dir: Option<PathBuf>, action: CursorHistory) -> Result<Value, 
                 .map(|(w, cs)| json!({"workspace":w,"conversations":cs.len(),"items":cs}))
                 .collect();
             Ok(
-                json!({"workspaces":workspaces,"unattributed_conversations":unattributed,"unreadable_records":history.unreadable_records}),
+                json!({"workspaces":workspaces,"unattributed_conversations":unattributed,"empty_conversations":history.empty_conversations,"unreadable_records":history.unreadable_records}),
             )
         }
         CursorHistory::Show {
