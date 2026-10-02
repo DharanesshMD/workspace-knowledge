@@ -98,3 +98,67 @@ pub fn fixture(base: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     );
     (user, product)
 }
+
+fn slug(path: &Path) -> String {
+    let p = path.canonicalize().unwrap();
+    p.to_string_lossy()
+        .trim_start_matches('/')
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// Synthetic `~/.cursor` with agent transcripts for the product, a personal folder and a
+/// project whose path no longer exists. Returns the fake `.cursor` directory.
+pub fn transcripts(base: &Path, product: &Path) -> std::path::PathBuf {
+    let dot = base.join("dot-cursor");
+    let write = |slug: &str, name: &str, lines: &[serde_json::Value], extra: &str| {
+        let dir = dot.join("projects").join(slug).join("agent-transcripts");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body: String = lines.iter().map(|l| l.to_string() + "\n").collect();
+        body.push_str(extra);
+        std::fs::write(dir.join(name), body).unwrap();
+    };
+    let msg =
+        |role: &str, items: serde_json::Value| json!({"role": role, "message": {"content": items}});
+    write(
+        &slug(product),
+        "11111111-aaaa.jsonl",
+        &[
+            msg(
+                "user",
+                json!([{"type":"text","text":"<attached_files>ATTACHED_CANARY</attached_files>\n<user_query>\nReuse the limiter for billing\n</user_query>"}]),
+            ),
+            msg(
+                "assistant",
+                json!([{"type":"thinking","text":"THINKING_CANARY"},{"type":"text","text":"Checking the middleware."}]),
+            ),
+            msg(
+                "assistant",
+                json!([{"type":"tool_use","name":"read_file","input":{"path":"TOOL_CANARY"}}]),
+            ),
+            msg(
+                "assistant",
+                json!([{"type":"text","text":"Billing now uses the shared limiter."}]),
+            ),
+        ],
+        "not json\n",
+    );
+    let personal = base.join("personal");
+    write(
+        &slug(&personal),
+        "22222222-bbbb.jsonl",
+        &[msg(
+            "user",
+            json!([{"type":"text","text":"PERSONAL_TRANSCRIPT_CANARY"}]),
+        )],
+        "",
+    );
+    write(
+        "Users-nobody-deleted-project",
+        "33333333-cccc.jsonl",
+        &[msg("user", json!([{"type":"text","text":"Gone project"}]))],
+        "",
+    );
+    dot
+}

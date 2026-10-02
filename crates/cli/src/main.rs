@@ -61,6 +61,9 @@ enum Command {
         /// Cursor user-data directory; defaults to the standard location for this OS.
         #[arg(long, global = true)]
         cursor_dir: Option<PathBuf>,
+        /// Cursor agent data directory (`~/.cursor` by default), which holds agent transcripts.
+        #[arg(long, global = true)]
+        dot_cursor_dir: Option<PathBuf>,
         #[command(subcommand)]
         action: CursorHistory,
     },
@@ -212,7 +215,11 @@ fn save_binding(state: &Path, binding: &Binding) -> Result<(), String> {
 }
 fn run(cli: Cli) -> Result<Value, String> {
     match cli.command {
-        Command::CursorHistory { cursor_dir, action } => cursor_history(cursor_dir, action),
+        Command::CursorHistory {
+            cursor_dir,
+            dot_cursor_dir,
+            action,
+        } => cursor_history(cursor_dir, dot_cursor_dir, action),
         Command::Agent { args } => forward("wk-agent", cli.state_dir.as_deref(), args),
         Command::Env { args } => forward("wk-env", None, args),
         Command::Search {
@@ -361,7 +368,11 @@ fn search(product: &str, query: &str, limit: u32) -> Result<Value, String> {
     }
     serde_json::from_slice(&bytes).map_err(|_| "invalid response".into())
 }
-fn cursor_history(dir: Option<PathBuf>, action: CursorHistory) -> Result<Value, String> {
+fn cursor_history(
+    dir: Option<PathBuf>,
+    dot: Option<PathBuf>,
+    action: CursorHistory,
+) -> Result<Value, String> {
     use wk_adapters::cursor_history as ch;
     let dir = dir
         .or_else(ch::default_dir)
@@ -369,9 +380,10 @@ fn cursor_history(dir: Option<PathBuf>, action: CursorHistory) -> Result<Value, 
     if !dir.is_dir() {
         return Err("Cursor directory not found; pass --cursor-dir".into());
     }
-    let history = ch::read(&dir)?;
+    let dot = dot.or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cursor")));
+    let history = ch::read_with(&dir, dot.as_deref())?;
     match action {
-        CursorHistory::Diagnose => ch::diagnose(&dir),
+        CursorHistory::Diagnose => ch::diagnose_with(&dir, dot.as_deref()),
         CursorHistory::List => {
             let mut groups: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
             let mut unattributed = 0;

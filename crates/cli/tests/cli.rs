@@ -131,10 +131,15 @@ fn cursor_history_show_and_export_are_scoped_masked_and_confirmed() {
     let d = tempfile::tempdir().unwrap();
     let (user, product) = cursor_fixture::fixture(d.path());
     let (u, p) = (user.to_str().unwrap(), product.to_str().unwrap());
+    // Never read the developer's real ~/.cursor during tests.
+    let dot = cursor_fixture::transcripts(d.path(), &product);
+    let dc = dot.to_str().unwrap();
     let shown = run(&[
         "cursor-history",
         "--cursor-dir",
         u,
+        "--dot-cursor-dir",
+        dc,
         "show",
         "--workspace",
         p,
@@ -142,6 +147,10 @@ fn cursor_history_show_and_export_are_scoped_masked_and_confirmed() {
     assert!(shown.status.success());
     let text = String::from_utf8(shown.stdout).unwrap();
     assert!(text.contains("## Tenant rate limiter") && text.contains("Use the shared middleware."));
+    assert!(
+        text.contains("## Reuse the limiter for billing")
+            && !text.contains("PERSONAL_TRANSCRIPT_CANARY")
+    );
     for absent in [
         "sk-SYNTHETIC",
         "PERSONAL_CANARY",
@@ -150,10 +159,19 @@ fn cursor_history_show_and_export_are_scoped_masked_and_confirmed() {
     ] {
         assert!(!text.contains(absent), "{absent} shown");
     }
-    let listed: serde_json::Value =
-        serde_json::from_slice(&run(&["cursor-history", "--cursor-dir", u, "list"]).stdout)
-            .unwrap();
-    assert_eq!(listed["unattributed_conversations"], 1);
+    let listed: serde_json::Value = serde_json::from_slice(
+        &run(&[
+            "cursor-history",
+            "--cursor-dir",
+            u,
+            "--dot-cursor-dir",
+            dc,
+            "list",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(listed["unattributed_conversations"], 2);
 
     let out = d.path().join("exports");
     let o = out.to_str().unwrap();
@@ -161,6 +179,8 @@ fn cursor_history_show_and_export_are_scoped_masked_and_confirmed() {
         "cursor-history",
         "--cursor-dir",
         u,
+        "--dot-cursor-dir",
+        dc,
         "export",
         "--workspace",
         p,
@@ -177,6 +197,8 @@ fn cursor_history_show_and_export_are_scoped_masked_and_confirmed() {
         "cursor-history",
         "--cursor-dir",
         u,
+        "--dot-cursor-dir",
+        dc,
         "export",
         "--workspace",
         p,
@@ -197,6 +219,8 @@ fn cursor_history_show_and_export_are_scoped_masked_and_confirmed() {
         "cursor-history",
         "--cursor-dir",
         u,
+        "--dot-cursor-dir",
+        dc,
         "export",
         "--workspace",
         p,

@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use wk_adapters::cursor_history::{read, redact, within};
+use wk_adapters::cursor_history::{read_with, redact, within};
 #[path = "support/cursor_fixture.rs"]
 mod support;
 use support::fixture;
@@ -8,7 +8,7 @@ use support::fixture;
 fn reads_both_layouts_and_scopes_to_the_workspace() {
     let d = tempfile::tempdir().unwrap();
     let (user, product) = fixture(d.path());
-    let history = read(&user).unwrap();
+    let history = read_with(&user, None).unwrap();
     assert_eq!(
         history.unreadable_records, 1,
         "missing bubble is counted, not invented"
@@ -57,7 +57,7 @@ fn snapshot_leaves_source_unchanged_and_works_while_locked() {
     let before = std::fs::read(&db).unwrap();
     let lock = Connection::open(&db).unwrap();
     lock.execute_batch("BEGIN EXCLUSIVE").unwrap();
-    assert!(!read(&user).unwrap().conversations.is_empty());
+    assert!(!read_with(&user, None).unwrap().conversations.is_empty());
     lock.execute_batch("ROLLBACK").unwrap();
     assert_eq!(std::fs::read(&db).unwrap(), before);
 }
@@ -75,7 +75,7 @@ fn redaction_masks_tokens_and_key_blocks_but_keeps_prose() {
 #[test]
 fn missing_directory_yields_empty_history() {
     let d = tempfile::tempdir().unwrap();
-    assert!(read(d.path()).unwrap().conversations.is_empty());
+    assert!(read_with(d.path(), None).unwrap().conversations.is_empty());
 }
 
 #[test]
@@ -113,4 +113,51 @@ fn diagnose_reports_structure_without_values_paths_or_ids() {
     ] {
         assert!(report.contains(present), "{present} missing");
     }
+}
+
+#[test]
+fn agent_transcripts_are_attributed_by_resolved_project_path() {
+    let d = tempfile::tempdir().unwrap();
+    let (user, product) = fixture(d.path());
+    let dot = support::transcripts(d.path(), &product);
+    let history = read_with(&user, Some(&dot)).unwrap();
+    assert_eq!(
+        history.unreadable_records, 2,
+        "missing bubble + malformed transcript line"
+    );
+    let mine = within(&history, &product);
+    let t = mine
+        .iter()
+        .find(|c| c.source == "cursor-agent-transcript")
+        .expect("transcript in workspace");
+    assert_eq!(t.title, "Reuse the limiter for billing");
+    assert_eq!(
+        t.messages.len(),
+        2,
+        "assistant steps merge into one message"
+    );
+    assert_eq!(t.messages[0].text, "Reuse the limiter for billing");
+    assert_eq!(
+        t.messages[1].text,
+        "Checking the middleware.\n\nBilling now uses the shared limiter."
+    );
+    let shown = serde_json::to_string(&mine).unwrap();
+    for absent in [
+        "THINKING_CANARY",
+        "TOOL_CANARY",
+        "ATTACHED_CANARY",
+        "PERSONAL_TRANSCRIPT_CANARY",
+        "Gone project",
+    ] {
+        assert!(!shown.contains(absent), "{absent} leaked");
+    }
+    let gone = history
+        .conversations
+        .iter()
+        .find(|c| c.title == "Gone project")
+        .unwrap();
+    assert!(
+        gone.workspace.is_none(),
+        "unresolvable project must stay unattributed"
+    );
 }

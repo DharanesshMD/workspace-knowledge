@@ -30,7 +30,7 @@ Official protocol references checked during implementation: [Claude Code hooks](
 
 ## Cursor history import (for evaluation sets)
 
-`wk cursor-history` reads your own local Cursor chats from a read-only snapshot of Cursor's undocumented SQLite storage (global `cursorDiskKV` composer/bubble records and per-workspace `ItemTable` entries, including legacy chat tabs). It never modifies Cursor's files and works while Cursor is running. Only visible message text is read; thinking and tool payloads are ignored, and missing records are counted rather than guessed.
+`wk cursor-history` reads your own local Cursor chats from a read-only snapshot of Cursor's undocumented SQLite storage (global `cursorDiskKV` composer/bubble records and per-workspace `ItemTable` entries, including legacy chat tabs). It also reads newer Cursor agent transcripts from `~/.cursor/projects/<path-slug>/agent-transcripts/*.jsonl`; a project is attributed only when its slug resolves to an existing directory, otherwise the chat stays unattributed. Override that location with `--dot-cursor-dir`. It never modifies Cursor's files and works while Cursor is running. Only visible message text is read; thinking and tool payloads are ignored, and missing records are counted rather than guessed.
 
 1. `wk cursor-history list` shows titles and counts per workspace folder, plus unattributed chats (which are never assigned to a workspace).
 2. `wk cursor-history show --workspace /work/product` prints that workspace's chats as Markdown with likely credentials masked. Review them.

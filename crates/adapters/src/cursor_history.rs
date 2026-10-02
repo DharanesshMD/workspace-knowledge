@@ -127,7 +127,14 @@ fn role(v: &Value) -> Option<&'static str> {
     }
 }
 
+/// Read chats from Cursor's user-data directory and `~/.cursor` agent transcripts.
 pub fn read(user_dir: &Path) -> Result<History, String> {
+    let dot = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cursor"));
+    read_with(user_dir, dot.as_deref())
+}
+
+/// `read` with an explicit `~/.cursor` location (tests must never read the real one).
+pub fn read_with(user_dir: &Path, dot_cursor: Option<&Path>) -> Result<History, String> {
     let scratch = tempfile::tempdir().map_err(|_| "cannot create private scratch directory")?;
     let mut history = History::default();
     let mut owner: BTreeMap<String, PathBuf> = BTreeMap::new();
@@ -275,10 +282,175 @@ pub fn read(user_dir: &Path) -> Result<History, String> {
             }
         }
     }
+    if let Some(dot) = dot_cursor {
+        read_transcripts(&dot.join("projects"), &mut history);
+    }
     history
         .conversations
         .sort_by_key(|c| std::cmp::Reverse(c.created_at_ms));
     Ok(history)
+}
+
+/// Cursor agent transcripts: `projects/<path-slug>/agent-transcripts/**/*.jsonl`, one JSON
+/// record per line: `{"role":"user"|"assistant","message":{"content":[{"type":"text","text":..}]}}`.
+/// Only `text` items are read. Consecutive same-role records are merged into one message.
+fn read_transcripts(projects: &Path, history: &mut History) {
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(projects)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    for project in dirs {
+        let slug = project
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let workspace = resolve_slug(&slug);
+        let root = project.join("agent-transcripts");
+        let mut files: Vec<PathBuf> = walk_files(&root, 0)
+            .into_iter()
+            .filter(|f| f.extension().is_some_and(|e| e == "jsonl"))
+            .collect();
+        files.sort();
+        for file in files {
+            if file.metadata().map(|m| m.len()).unwrap_or(u64::MAX) > 32 * 1024 * 1024 {
+                history.unreadable_records += 1;
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                history.unreadable_records += 1;
+                continue;
+            };
+            let rel = file.strip_prefix(&root).unwrap_or(&file).with_extension("");
+            let id = rel.to_string_lossy().replace(['/', '\\'], "_");
+            let mut messages: Vec<Message> = Vec::new();
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                let Ok(v) = serde_json::from_str::<Value>(line) else {
+                    history.unreadable_records += 1;
+                    continue;
+                };
+                let role = match v["role"].as_str() {
+                    Some("user") => "user",
+                    Some("assistant") => "assistant",
+                    _ => continue,
+                };
+                let body: Vec<&str> = v["message"]["content"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|c| c["type"] == "text")
+                    .filter_map(|c| c["text"].as_str())
+                    .collect();
+                let mut body = body.join("\n").trim().to_string();
+                if role == "user" {
+                    body = user_query(&body);
+                }
+                if body.is_empty() {
+                    continue;
+                }
+                match messages.last_mut() {
+                    Some(last) if last.role == role => {
+                        last.text.push_str("\n\n");
+                        last.text.push_str(&body);
+                    }
+                    _ => messages.push(Message {
+                        id: format!("{id}-{}", messages.len()),
+                        role: role.into(),
+                        text: body,
+                    }),
+                }
+            }
+            if messages.is_empty() {
+                history.empty_conversations += 1;
+                continue;
+            }
+            let title = messages
+                .iter()
+                .find(|m| m.role == "user")
+                .and_then(|m| m.text.lines().find(|l| !l.trim().is_empty()))
+                .map(|l| {
+                    let t: String = l.trim().chars().take(80).collect();
+                    t
+                })
+                .unwrap_or_else(|| "Untitled chat".into());
+            let modified = file
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64);
+            history.conversations.push(Conversation {
+                id: format!("cursor-transcript:{id}"),
+                title,
+                workspace: workspace.clone(),
+                created_at_ms: modified,
+                source: "cursor-agent-transcript",
+                messages,
+            });
+        }
+    }
+}
+
+/// Prefer the explicit `<user_query>` section Cursor wraps around the typed request.
+fn user_query(text: &str) -> String {
+    match (text.find("<user_query>"), text.find("</user_query>")) {
+        (Some(a), Some(b)) if b > a => text[a + "<user_query>".len()..b].trim().to_string(),
+        _ => text.trim().to_string(),
+    }
+}
+
+/// Resolve a Cursor project slug (path with separators replaced by `-`) back to an existing
+/// directory by walking the real filesystem. Ambiguous or missing paths stay unattributed.
+pub fn resolve_slug(slug: &str) -> Option<PathBuf> {
+    fn norm(s: &str) -> String {
+        s.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect()
+    }
+    fn walk(dir: &Path, rest: &str, depth: usize) -> Option<PathBuf> {
+        if depth > 40 || rest.is_empty() {
+            return None;
+        }
+        let mut children: Vec<String> = std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        children.sort();
+        for child in children {
+            let n = norm(&child);
+            if n.is_empty() {
+                continue;
+            }
+            if rest == n {
+                return Some(dir.join(&child));
+            }
+            if let Some(tail) = rest.strip_prefix(&format!("{n}-")) {
+                if let Some(found) = walk(&dir.join(&child), tail, depth + 1) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+    let slug = norm(slug);
+    if cfg!(windows) {
+        let (drive, rest) = slug.split_once('-')?;
+        walk(Path::new(&format!("{drive}:\\")), rest, 0)
+    } else {
+        walk(Path::new("/"), slug.trim_start_matches('-'), 0)
+    }
 }
 
 /// Keep conversations attributed to `root` or a folder inside it. Unattributed conversations
@@ -432,7 +604,7 @@ pub fn diagnose_with(user_dir: &Path, dot_cursor: Option<&Path>) -> Result<Value
         .filter(|(k, _)| chat_like(k))
         .collect::<BTreeMap<_, _>>());
     report["workspace_chat_like_value_fields"] = Value::Object(ws_shapes);
-    let h = read(user_dir)?;
+    let h = read_with(user_dir, dot_cursor)?;
     let mut dbs = Vec::new();
     let mut n = 0;
     let mut roots = vec![user_dir.join("globalStorage")];
