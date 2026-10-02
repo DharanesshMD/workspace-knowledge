@@ -10,3 +10,6 @@ rmcp={version="3.5",features=["transport-io"]}
 tokio={version="1",features=["macros","rt-multi-thread","io-std"]}
 reqwest={version="0.12",default-features=false,features=["json","rustls-tls"]}
 uuid="1"
+
+wk-contracts={path="../contracts"}
+wk-summarize={path="../summarize"}

@@ -39,6 +39,21 @@ async def main():
         assert post(base + '/v1/search', token, query)['cards'] == []
         post(base + '/v1/cards/' + card['id'] + '/publish', token, {'product': 'demo'})
         assert len(post(base + '/v1/search', token, query)['cards']) == 1
+        def remote_rpc(method, params, identity=token, origin=None):
+            headers={'Authorization':'Bearer '+identity,'Content-Type':'application/json','Accept':'application/json, text/event-stream','MCP-Protocol-Version':'2025-03-26'}
+            if origin: headers['Origin']=origin
+            request=urllib.request.Request(base+'/mcp/demo',data=json.dumps({'jsonrpc':'2.0','id':1,'method':method,'params':params}).encode(),headers=headers)
+            with urllib.request.urlopen(request,timeout=10) as response: return json.load(response)
+        remote_rpc('initialize',{'protocolVersion':'2025-03-26','capabilities':{},'clientInfo':{'name':'synthetic','version':'1'}})
+        remote_tools=remote_rpc('tools/list',{})['result']['tools']
+        assert 'knowledge.assess' in {tool['name'] for tool in remote_tools}
+        found=remote_rpc('tools/call',{'name':'knowledge.search','arguments':{'query':marker,'limit':5}})
+        assert card['id'] in json.dumps(found)
+        for identity,origin,status in [('invalid',None,401),(token,'https://evil.example',403)]:
+            try:
+                remote_rpc('tools/list',{},identity,origin)
+                raise AssertionError('remote authorization bypass')
+            except urllib.error.HTTPError as exc: assert exc.code==status
         env.update(WK_SERVER_URL=base, WK_PRODUCT='demo')
         mcp = await asyncio.create_subprocess_exec(str(ROOT / 'target/debug' / ('wk-mcp' + suffix)), env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         async def rpc(message):
@@ -57,13 +72,25 @@ async def main():
         await rpc({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-03-26', 'capabilities': {}, 'clientInfo': {'name': 'wk-synthetic-test', 'version': '0.1'}}})
         await rpc({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         listing = await rpc({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})
-        assert {'knowledge.search', 'knowledge.get', 'knowledge.context'} <= {t['name'] for t in listing['tools']}
+        assert {'knowledge.search', 'knowledge.get', 'knowledge.context', 'knowledge.record', 'knowledge.feedback', 'workspace.status', 'environment.describe', 'knowledge.assess'} == {t['name'] for t in listing['tools']}
         result = await rpc({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'knowledge.search', 'arguments': {'query': marker, 'limit': 5}}})
         assert not result.get('isError', False)
         assert card['id'] in json.dumps(result)
         context = await rpc({'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call', 'params': {'name': 'knowledge.context', 'arguments': {'query': marker, 'budget_tokens': 200}}})
         assert card['id'] in json.dumps(context)
-        print('PASS: real PostgreSQL, HTTP authentication, draft/publication, MCP initialization, discovery, search and bounded context')
+        replacement_body = dict(body, idempotency_key=marker + '-replacement')
+        replacement = post(base + '/v1/cards', token, {'product':'demo','card':replacement_body})['card']
+        post(base + '/v1/cards/' + replacement['id'] + '/publish', token, {'product':'demo'})
+        relationship = {'source_card':replacement['id'], 'target_card':card['id'], 'source_revision':1, 'target_revision':1, 'kind':'supersedes'}
+        post(base + '/v1/products/demo/relationships', token, relationship)
+        current = post(base + '/v1/search', token, query)['cards']
+        assert len(current) == 1 and current[0]['id'] == replacement['id']
+        try:
+            post(base + '/v1/products/demo/relationships', token, relationship)
+            raise AssertionError('stale supersession accepted')
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 409
+        print('PASS: real PostgreSQL, HTTP authentication, draft/publication, MCP initialization, discovery, search, bounded context and revision-safe supersession')
     finally:
         for process in (mcp, server):
             if process and process.returncode is None:

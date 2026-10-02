@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
 };
 use wk_scope::enrollment::Binding;
-#[derive(Serialize, Deserialize, PartialEq)]
+#[derive(schemars::JsonSchema, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum Kind {
     UserPrompt,
@@ -15,13 +15,18 @@ enum Kind {
     TurnEnd,
     CaptureGap,
 }
-#[derive(Serialize, Deserialize, PartialEq)]
+#[derive(schemars::JsonSchema, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct Event {
+    #[schemars(range(min = 1, max = 1))]
     schema_version: u32,
+    #[schemars(length(min = 1, max = 256))]
     event_id: String,
+    #[schemars(length(min = 1, max = 256))]
     session_id: String,
+    #[schemars(length(min = 1, max = 256))]
     agent_id: String,
+    #[schemars(length(min = 1, max = 256))]
     turn_id: String,
     sequence: u32,
     kind: Kind,
@@ -83,3 +88,11 @@ pub fn inspect(binding: &Binding, input: &str) -> Result<Value, String> {
 }
 
 pub mod journal;
+
+/// Local-only normalized event format; never accepted by shared knowledge APIs.
+pub fn event_schema() -> serde_json::Value {
+    let mut schema =
+        serde_json::to_value(schemars::schema_for!(Event)).expect("schema serialization");
+    schema["$id"] = json!("urn:workspace-knowledge:private-event:v1");
+    schema
+}

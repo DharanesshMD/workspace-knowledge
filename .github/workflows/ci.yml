@@ -11,6 +11,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
       - run: cargo fmt --all --check
@@ -36,8 +38,41 @@ jobs:
       WK_TEST_DATABASE_URL: postgres://wk_test:wk-test-only@127.0.0.1:5432/wk_test
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - run: rustup toolchain install 1.98.1 --profile minimal
       - run: cargo test -p wk-knowledge --test access --locked -- --ignored
       - run: cargo build --workspace --locked
       - run: python3 scripts/integration.py
       - run: python3 scripts/demo.py
+
+  console:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run build && npm test
+        working-directory: web
+
+  environments:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.98.1 --profile minimal
+      - run: cargo build -p wk-environments --locked
+      - name: Start disposable TLS vault
+        run: >-
+          docker run --detach --name wk-final-bao
+          -e BAO_DEV_ROOT_TOKEN_ID=wk-synthetic-root -p 127.0.0.1::8200
+          --entrypoint sh openbao/openbao:2.4.3
+          -c 'mkdir -p /tmp/wk-tls && exec bao server -dev -dev-tls -dev-tls-cert-dir=/tmp/wk-tls -dev-listen-address=0.0.0.0:8200 -dev-no-store-token'
+      - run: python3 scripts/environment-integration.py
+      - if: always()
+        run: docker rm -f wk-final-bao

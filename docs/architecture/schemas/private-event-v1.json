@@ -1,0 +1,72 @@
+{
+  "$defs": {
+    "Kind": {
+      "enum": [
+        "user_prompt",
+        "assistant_response",
+        "tool_result",
+        "turn_end",
+        "capture_gap"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:workspace-knowledge:private-event:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "agent_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "event_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/Kind"
+    },
+    "path": {
+      "type": "string"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "maximum": 1,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "sequence": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "session_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    },
+    "turn_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "event_id",
+    "session_id",
+    "agent_id",
+    "turn_id",
+    "sequence",
+    "kind",
+    "path",
+    "text"
+  ],
+  "title": "Event",
+  "type": "object"
+}

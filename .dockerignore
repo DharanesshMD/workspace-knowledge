@@ -1,0 +1,13 @@
+.git
+target
+.tooling
+.superpowers
+.worktrees
+.codex
+**/node_modules
+**/.env
+**/.env.*
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.age

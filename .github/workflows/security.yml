@@ -1,0 +1,18 @@
+name: Dependency audit
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo install cargo-audit --locked
+      - name: Confirm audited rsa exception is not compiled
+        run: test -z "$(cargo tree -i rsa --target all -e all 2>/dev/null)"
+      - run: cargo audit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci && npm audit --omit=dev
+        working-directory: web

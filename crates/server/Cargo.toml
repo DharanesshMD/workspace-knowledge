@@ -12,7 +12,12 @@ wk-contracts = {path="../contracts"}
 axum = "0.8"
 tokio = { version="1", features=["macros","rt-multi-thread","net","signal"] }
 uuid = { version="1",features=["serde"] }
-[dev-dependencies]
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+wk-summarize={path="../summarize"}
+tower-http={version="0.6",features=["fs","set-header"]}
+rmcp={version="3.5",features=["transport-streamable-http-server"]}
 tower = {version="0.5",features=["util"]}
+[dev-dependencies]
 http-body-util = "0.1"
 sqlx = {version="0.8",default-features=false,features=["runtime-tokio","postgres"]}

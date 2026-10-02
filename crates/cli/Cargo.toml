@@ -13,6 +13,9 @@ clap = { version = "4", features = ["derive"] }
 wk-capture = { path = "../capture" }
 tempfile.workspace = true
 
+reqwest={version="0.12",default-features=false,features=["blocking","json","rustls-tls"]}
+wk-summarize={path="../summarize"}
+
 [[bin]]
 name = "wk"
 path = "src/main.rs"

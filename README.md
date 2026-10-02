@@ -1,102 +1,87 @@
 # Workspace Knowledge
 
-An open-source, on-premises knowledge system for AI-assisted development in explicitly approved product folders.
+Open-source, on-premises knowledge sharing for developers working in explicitly approved product folders. Raw conversations remain inside a private capture boundary; agents and teammates retrieve scoped summaries.
 
-**Status: working development foundation.** Local consent, offline capture inspection, encrypted outbox, PostgreSQL summary storage, a loopback API, and a read-only MCP bridge are implemented. Live conversation capture and automatic knowledge generation are not implemented yet. Use synthetic data only until the production privacy and identity controls are complete.
+**Status: development implementation, not a certified production release.** The implementation spans collector, summaries, shared API, MCP, console and environment tooling. The [completion matrix](docs/architecture/completion-matrix.md) records remaining implementation and live-certification gaps. In particular, universal native capture, policy-auto, live-client remote MCP OAuth, a configured Jev endpoint and signed releases are not claimed complete.
 
-## Implemented
+## Components
 
-- `wk` CLI: local workspace approval, scope checks, pause/revoke, sanitized card validation, offline synthetic JSONL replay.
-- Service-folder boundaries: reject personal/sibling paths, sensitive filenames, symlink aliases, unapproved nested repositories, changed scope, and replaced roots.
-- Private outbox library: SQLite with XChaCha20-Poly1305 authenticated payload encryption, duplicate protection, bounded payload quota, expiry and acknowledgment.
-- Private capture journal: atomic encrypted session updates, restart-safe deduplication, persistent mixed-session holds, and closed-session guards after payload expiry. See [capture journal](docs/architecture/private-capture-journal.md).
-- Replay correlation: separate parallel agents/turns, flag mixed-session context, reject conflicting duplicates, and report completion without printing conversation text.
-- Strict shared-card contracts that reject raw-payload fields and untrusted implementation-status promotions.
+| Command | Purpose |
+|---|---|
+| `wk` | Local workspace approval, scope checks, pause/revoke, card validation, replay, search/context and companion commands |
+| `wk-agent` | Native-keyring collector, authenticated local receiver, hook setup, explicit imports, instrumented local chat, private summaries, doctor |
+| `wk-server` | PostgreSQL knowledge API, OIDC verification, provisioning, migrations, revisions, withdrawal, feedback, provenance graph and console hosting |
+| `wk-mcp` | Standard stdio tools: knowledge search/get/context/record/feedback, workspace status and environment schema |
+| `wk-env` | Separate OpenBao schema/import/run/export broker; no secret-value MCP tool |
 
-- PostgreSQL cards: private drafts, reviewer publication, tenant/service membership enforcement, idempotency, policy revision checks, and full-text retrieval.
-- Development API: authenticated loopback HTTP with sanitized errors.
-- Standard stdio MCP: `knowledge.search`, `knowledge.get`, and bounded `knowledge.context`.
+The native collector uses encrypted SQLite records, fixed raw retention, durable closed-session guards, duplicate detection and persistent mixed-context holds. Capture occurs only after local approval and a current server membership check. Missing keyring, consent, or membership fails closed. A hook failure does not block the developer's AI agent; it stops knowledge submission until a clean-session reset.
 
-The outbox accepts a caller-supplied encryption key; production OS credential storage and daemon integration are not implemented. It is deliberately not exposed through the CLI yet. Scope checks classify metadata and are not a secure file-opening primitive or an agent sandbox. Replay eligibility is local inspection only, never authorization to publish.
+Cursor, Claude Code and Gemini hook adapters collect documented visible fields with **partial, unverified coverage**. Codex and Antigravity native capture remain unsupported; standard MCP retrieval and the managed chat alternative are separate capabilities. Claude Desktop general chat has an explicit Enterprise bound-chat text pull for an isolated broker, requiring entitlement and chat consent. MCP alone does not capture conversations.
 
-## Build
+Summaries are generated through an explicitly configured loopback OpenAI-compatible model endpoint. Candidate summaries stay encrypted locally; `drafts` and `submit --reviewed` support owner review. Submitted summaries become server drafts before reviewer publication. No cloud fallback, hidden-reasoning collection, global transcript scan or automatic `.env` collection exists. Automatic policy publication requires further privacy evaluation and remains disabled.
 
-Install Rust via [rustup](https://rust-lang.org/tools/install/). The toolchain is pinned in `rust-toolchain.toml`.
+## Build and development
 
-```sh
-cargo test --workspace --locked
-cargo run -p wk-cli -- --help
-```
-
-This development checkout also has a project-local Rust installation. On this machine use `./scripts/cargo` instead of `cargo`; the wrapper falls back to system Cargo elsewhere. The `.tooling` directory is ignored and not distributed.
-
-## Safe demonstration
-
-Requires Python 3 and a built `wk` binary. Creates temporary synthetic product folders and removes them afterward. No real chat or project data is read.
-
-```sh
-cargo build -p wk-cli
-python3 scripts/demo.py
-```
-
-On Windows the script automatically selects `target/debug/wk.exe`.
-
-For local consent commands, provide a dedicated private state directory outside the product:
-
-```sh
-wk --state-dir /private/state/workspace-knowledge workspace approve /work/product \
-  --product example --service backend --service frontend --yes
-wk --state-dir /private/state/workspace-knowledge workspace check /work/product /work/product/backend
-wk --state-dir /private/state/workspace-knowledge workspace pause /work/product
-```
-
-`--yes` approves only the explicitly listed local services. Responses say `team_authorized: false` and `live_capture_enabled: false` until the server and enrollment protocol are implemented. Do not point the state directory at a shared existing folder. Private state writes are atomic; Unix state directories require mode 0700. Windows ACL hardening still needs implementation and native certification.
-
-## Development API and MCP
-
-Use a dedicated PostgreSQL database named `wk_dev` (or `wk_test` for tests). The server creates its development schema and seeds one development identity for product `demo`, covering `frontend`, `backend`, and `ai-engine`. It is not a production authentication service.
+Install the pinned Rust toolchain through rustup, Node.js 22 and Python 3. Linux collector builds require `libdbus-1-dev` and `pkg-config`, and runtime Secret Service. Native keyring availability is required for persistent collector use.
 
 ```sh
 cargo build --workspace --locked
-export WK_DATABASE_URL='postgres://USER:PASSWORD@127.0.0.1:5432/wk_dev'
-export WK_DEV_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-export WK_PORT=4318
-target/debug/wk-server --dev
+cargo test --workspace --locked
+cd web
+npm ci
+npm run build
 ```
 
-In an MCP client, configure the absolute path to `target/debug/wk-mcp` (Windows: `wk-mcp.exe`) as a stdio server, with these environment variables:
+This checkout has an ignored local toolchain; `./scripts/cargo` uses it and otherwise falls back to system Cargo. On Windows binaries have `.exe` suffixes. CI describes Linux/macOS/Windows builds; configured CI is not proof that those platforms passed.
 
-- `WK_SERVER_URL`: `http://127.0.0.1:4318`
-- `WK_DEV_TOKEN`: the same generated development token
-- `WK_PRODUCT`: `demo`
+The synthetic scope demo does not access real chats:
 
-Registration in individual clients has not been tested. MCP provides retrieval here; it does not observe their conversations. Avoid committing credentials in client configuration.
+```sh
+python3 scripts/demo.py
+```
 
-The API accepts `POST /v1/cards` to create a strict summary draft, `POST /v1/cards/{id}/publish` for authorized review, `POST /v1/search`, and `GET /v1/products/{product}/cards/{id}`. See [the executable smoke test](scripts/integration.py) for a complete synthetic request example. The development identity can review its own draft; production separation of duties is pending. Schema validation rejects raw fields but is not semantic redaction: do not submit real conversations or secrets.
-
-To run database checks against a disposable `wk_test` database:
+Use a disposable PostgreSQL database named `wk_test` for integration checks:
 
 ```sh
 export WK_TEST_DATABASE_URL='postgres://USER:PASSWORD@127.0.0.1:5432/wk_test'
 cargo test -p wk-knowledge --test access --locked -- --ignored
-cargo build --workspace --locked
 python3 scripts/integration.py
 ```
 
-The normal workspace test command skips database tests; the separate PostgreSQL CI job runs them explicitly. The smoke test writes synthetic cards, so never point it at a valued database.
+The normal workspace test command skips the database tests; run them explicitly. The smoke script writes synthetic cards. Never use a valued database.
 
-## Development roadmap
+## Start a local development service
 
-The [build package](docs/START-HERE.md) and [capture revision](docs/CONVERSATION-CAPTURE-ADDENDUM.md) define the full product. [Progress and deviations](docs/PROGRESS.md) distinguish implemented foundations from pending plan requirements.
+Create a dedicated PostgreSQL database named `wk_dev`. Development mode seeds one identity for product `demo` with `frontend`, `backend`, and `ai-engine` membership. Use synthetic data only.
 
-Next: native key management and authenticated daemon IPC; production identity and enrollment; real client capture adapters; local sanitization and summarization with policy-approved publication; Enterprise capture broker and instrumented chat; evidence graph; environment broker; console and release packaging.
+```sh
+export WK_DATABASE_URL='postgres://USER:PASSWORD@127.0.0.1:5432/wk_dev'
+export WK_DEV_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export WK_PORT=4318
+export WK_WEB_DIR="$PWD/web/dist"
+export WK_CONSOLE_ORIGIN='http://127.0.0.1:4318'
+target/debug/wk-server --dev
+```
 
-macOS arm64 tests run locally. CI is configured for Linux, macOS, and Windows; this is not a claim those remote runs have passed. Live client, provider, Windows ACL, and cross-platform filesystem certification remain pending. Real PostgreSQL 17 integration and HTTP-to-MCP smoke checks have passed locally using a disposable Docker database.
+Open the console at the local origin, connect to `demo` using the generated token, and use approved summary cards. Development identity can review its own drafts. Production identity provisioning and migration commands are described in [backend operations](docs/architecture/backend.md).
 
-## Privacy
+Configure an MCP client with the absolute `wk-mcp` executable, `WK_SERVER_URL`, `WK_PRODUCT`, and `WK_ACCESS_TOKEN` (or `WK_DEV_TOKEN` for development). It supports HTTPS origins or literal loopback HTTP. No client profiles have been modified by development. Clients may send returned summaries to their model provider; deployment egress policy must account for that.
 
-Raw conversations belong only in the private capture boundary. Shared knowledge will contain sanitized summaries and provenance. Secrets belong in a separate vault/broker, never knowledge search. Local consent does not grant team access, and full transcript capture does not prove an implementation exists.
+## Setup and operations
+
+- [Collector, hooks, managed chat and Desktop capture](docs/adapters/setup.md)
+- [Private journal and retention boundaries](docs/architecture/private-capture-journal.md)
+- [Shared service and identity configuration](docs/architecture/backend.md)
+- [Console](docs/architecture/console.md)
+- [Remote MCP](docs/architecture/remote-mcp.md)
+- [Signed evidence connectors](docs/architecture/evidence-connectors.md)
+- [Jev decision layer](docs/architecture/jev-decisions.md)
+- [Operations](docs/operations/install.md)
+- [Implementation ledger](docs/PROGRESS.md)
+- [Original full plan](docs/docs/superpowers/plans/2026-09-30-workspace-knowledge.md)
+
+Keep the secret broker independently authorized. Capture keys, identity tokens and OpenBao values never belong in source control, shared knowledge cards, logs or MCP output. Source scanners, classifiers and operating-system isolation have limits; see [security reporting](SECURITY.md) and the documented certification gates.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE). Dependencies retain their own licenses. No telemetry, hosted service, API credential, or provider account is required to run these foundation tests.
+Apache-2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE), and [contribution policy](CONTRIBUTING.md). No telemetry or hosted account is required for synthetic foundation checks. Deployment, account access, real conversation capture, signing and publication require explicit operator setup.

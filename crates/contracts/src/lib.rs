@@ -1,7 +1,8 @@
 //! Strict shared knowledge contracts. Raw conversation types never belong here.
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(JsonSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Lifecycle {
     Proposed,
@@ -11,14 +12,14 @@ pub enum Lifecycle {
     Superseded,
     Deprecated,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(JsonSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Completeness {
     Complete,
     Partial,
     Truncated,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceKind {
     ConversationReport,
@@ -28,24 +29,28 @@ pub enum EvidenceKind {
     TestResult,
     OwnerAttestation,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Evidence {
     pub kind: EvidenceKind,
     pub reference: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CardSubmission {
+    #[schemars(range(min = 1, max = 1))]
     pub schema_version: u32,
     pub idempotency_key: String,
+    #[schemars(range(min = 1))]
     pub policy_revision: u64,
+    #[schemars(length(min = 1, max = 256))]
     pub title: String,
     pub intent: String,
     pub rationale: String,
     pub decisions: Vec<String>,
     pub constraints: Vec<String>,
     pub open_questions: Vec<String>,
+    #[schemars(length(min = 1))]
     pub service_ids: Vec<String>,
     pub evidence: Vec<Evidence>,
     pub lifecycle: Lifecycle,
@@ -96,4 +101,20 @@ pub fn validate_card(value: &serde_json::Value) -> Result<(), String> {
     let card: CardSubmission =
         serde_json::from_value(value.clone()).map_err(|_| "invalid card schema".to_string())?;
     card.validate()
+}
+
+/// Versioned public submission shape. Runtime authorization, UTF-8 byte limits,
+/// privacy screening and evidence verification remain mandatory after validation.
+pub fn submission_schema() -> serde_json::Value {
+    let mut schema =
+        serde_json::to_value(schemars::schema_for!(CardSubmission)).expect("schema serialization");
+    schema["$id"] = serde_json::json!("urn:workspace-knowledge:card-submission:v1");
+    schema["properties"]["lifecycle"] =
+        serde_json::json!({"type":"string","enum":["proposed","in_progress"]});
+    schema["properties"]["service_ids"]["items"] =
+        serde_json::json!({"type":"string","pattern":"^[A-Za-z0-9_-]{1,128}$"});
+    for field in ["title", "intent", "idempotency_key"] {
+        schema["properties"][field]["pattern"] = serde_json::json!("\\S");
+    }
+    schema
 }

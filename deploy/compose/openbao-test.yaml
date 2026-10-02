@@ -1,0 +1,10 @@
+# SYNTHETIC TESTS ONLY. Not production: dev storage is ephemeral and unsealed.
+services:
+  openbao:
+    image: openbao/openbao:2.4.3
+    entrypoint: [sh, -c]
+    command: ['mkdir -p /tmp/wk-tls && exec bao server -dev -dev-tls -dev-tls-cert-dir=/tmp/wk-tls -dev-listen-address=0.0.0.0:8200 -dev-no-store-token']
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: ${WK_TEST_BAO_TOKEN:?Provide an ephemeral synthetic test token}
+    ports: ['127.0.0.1:18200:8200']
+    cap_add: [IPC_LOCK]

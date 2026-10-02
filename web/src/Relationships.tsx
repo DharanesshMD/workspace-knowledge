@@ -1,0 +1,18 @@
+import {useEffect,useState} from 'react';
+import {ApiError,productPath,request} from './api';
+import type {Card} from './types';
+export function Relationships({token,product,onSaved}:{token:string;product:string;onSaved:()=>void}) {
+ const [allowed,setAllowed]=useState(false),[cards,setCards]=useState<Card[]>([]),[query,setQuery]=useState(''),[source,setSource]=useState(''),[target,setTarget]=useState(''),[kind,setKind]=useState('contradicts'),[confirmed,setConfirmed]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ useEffect(()=>{const c=new AbortController();request<{policy:{can_review:boolean}}>(token,`/v1/policy?product=${encodeURIComponent(product)}`,undefined,undefined,c.signal).then(v=>{if(!c.signal.aborted)setAllowed(v.policy.can_review);}).catch(()=>{});return()=>c.abort();},[token,product]);
+ const fail=(e:unknown)=>setError(e instanceof ApiError?e.message:'The service is unavailable.');
+ if(!allowed)return <p className="muted">Relationship changes require reviewer access.</p>;
+ return <details><summary>Add a reviewed relationship</summary><p>Find both summaries, then choose their relationship. Superseding keeps the older summary in history and removes it from ordinary search.</p>
+ <form onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');setNotice('');setSource('');setTarget('');setConfirmed(false);try{const r=await request<{cards:Card[]}>(token,'/v1/search',{product,query,limit:20});setCards(r.cards.filter(c=>c.published&&!['superseded','deprecated'].includes(c.body.lifecycle)));}catch(e){setCards([]);fail(e);}finally{setBusy(false);}}}><label>Find related summaries<input value={query} onChange={e=>setQuery(e.target.value)} required maxLength={1024}/></label><button disabled={busy}>Find summaries</button></form>
+ <form onSubmit={async e=>{e.preventDefault();const a=cards.find(c=>c.id===source),b=cards.find(c=>c.id===target);if(!a||!b)return;setBusy(true);setError('');setNotice('');try{await request(token,`${productPath(product)}/relationships`,{source_card:a.id,target_card:b.id,source_revision:a.revision,target_revision:b.revision,kind});setNotice('Relationship saved.');setCards([]);setSource('');setTarget('');setConfirmed(false);onSaved();}catch(e){fail(e);if(e instanceof ApiError&&e.status===409){setCards([]);setSource('');setTarget('');setConfirmed(false);}}finally{setBusy(false);}}}>
+ <label>Source summary<select value={source} disabled={busy} onChange={e=>{setSource(e.target.value);setConfirmed(false);}}><option value="">Choose a summary</option>{cards.map(c=><option value={c.id} key={c.id}>{c.body.title} — revision {c.revision}</option>)}</select></label>
+ <label>Relationship<select value={kind} disabled={busy} onChange={e=>{setKind(e.target.value);setConfirmed(false);}}><option value="contradicts">Conflicts with</option><option value="depends_on">Depends on</option><option value="supersedes">Supersedes</option></select></label>
+ <label>Related summary<select value={target} disabled={busy} onChange={e=>{setTarget(e.target.value);setConfirmed(false);}}><option value="">Choose a summary</option>{cards.map(c=><option value={c.id} key={c.id}>{c.body.title} — revision {c.revision}</option>)}</select></label>
+ {kind==='supersedes'&&<label className="checkbox"><input type="checkbox" checked={confirmed} disabled={busy} onChange={e=>setConfirmed(e.target.checked)}/>Remove the related summary from ordinary search while retaining its history.</label>}
+ <button className="primary" disabled={busy||!source||!target||source===target||kind==='supersedes'&&!confirmed}>Save relationship</button></form>
+ {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}</details>;
+}

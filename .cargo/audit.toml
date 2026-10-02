@@ -1,0 +1,6 @@
+# RUSTSEC-2023-0071 (rsa Marvin attack): rsa appears in Cargo.lock only through
+# sqlx-mysql, an optional sqlx driver this workspace never enables. Verified with
+# `cargo tree -i rsa --target all -e all` (no path). JWT verification uses the
+# aws-lc-rs backend. Remove this exception if rsa ever enters the build graph.
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]

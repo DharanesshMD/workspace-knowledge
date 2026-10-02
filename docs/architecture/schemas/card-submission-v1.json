@@ -1,0 +1,150 @@
+{
+  "$defs": {
+    "Completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "truncated"
+      ],
+      "type": "string"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EvidenceKind"
+        },
+        "reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "reference"
+      ],
+      "type": "object"
+    },
+    "EvidenceKind": {
+      "enum": [
+        "conversation_report",
+        "file_observation",
+        "commit",
+        "reviewed_pr",
+        "test_result",
+        "owner_attestation"
+      ],
+      "type": "string"
+    },
+    "Lifecycle": {
+      "enum": [
+        "proposed",
+        "in_progress",
+        "implemented",
+        "verified",
+        "superseded",
+        "deprecated"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:workspace-knowledge:card-submission:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "base_revision": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "capture_completeness": {
+      "$ref": "#/$defs/Completeness"
+    },
+    "constraints": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "decisions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/Evidence"
+      },
+      "type": "array"
+    },
+    "idempotency_key": {
+      "pattern": "\\S",
+      "type": "string"
+    },
+    "intent": {
+      "pattern": "\\S",
+      "type": "string"
+    },
+    "lifecycle": {
+      "enum": [
+        "proposed",
+        "in_progress"
+      ],
+      "type": "string"
+    },
+    "open_questions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "policy_revision": {
+      "format": "uint64",
+      "minimum": 1,
+      "type": "integer"
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "maximum": 1,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "service_ids": {
+      "items": {
+        "pattern": "^[A-Za-z0-9_-]{1,128}$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "title": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "\\S",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "idempotency_key",
+    "policy_revision",
+    "title",
+    "intent",
+    "rationale",
+    "decisions",
+    "constraints",
+    "open_questions",
+    "service_ids",
+    "evidence",
+    "lifecycle",
+    "capture_completeness"
+  ],
+  "title": "CardSubmission",
+  "type": "object"
+}

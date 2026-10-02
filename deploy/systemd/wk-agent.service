@@ -1,0 +1,12 @@
+[Unit]
+Description=Workspace Knowledge per-user agent
+After=network-online.target
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/wk-agent --state-dir %h/.local/share/workspace-knowledge serve
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+[Install]
+WantedBy=default.target

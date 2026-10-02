@@ -11,7 +11,7 @@ use wk_scope::enrollment::Binding;
 #[command(
     name = "wk",
     version,
-    about = "Workspace Knowledge — local foundation (no live collection or sharing)"
+    about = "Workspace Knowledge — workspace approval, knowledge retrieval and agent tools"
 )]
 struct Cli {
     /// Private local consent directory, outside the approved product.
@@ -22,6 +22,31 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Run the native collector/setup CLI.
+    Agent {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
+    },
+    /// Run the separately authorized environment broker CLI.
+    Env {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
+    },
+    Search {
+        #[arg(long)]
+        product: String,
+        #[arg(long)]
+        query: String,
+        #[arg(long, default_value_t = 8)]
+        limit: u32,
+    },
+    Context {
+        #[arg(long)]
+        product: String,
+        #[arg(long)]
+        query: String,
+    },
+
     /// Manage explicit local folder consent. Does not grant team membership.
     Workspace {
         #[command(subcommand)]
@@ -151,6 +176,30 @@ fn save_binding(state: &Path, binding: &Binding) -> Result<(), String> {
 }
 fn run(cli: Cli) -> Result<Value, String> {
     match cli.command {
+        Command::Agent { args } => forward("wk-agent", cli.state_dir.as_deref(), args),
+        Command::Env { args } => forward("wk-env", None, args),
+        Command::Search {
+            product,
+            query,
+            limit,
+        } => search(&product, &query, limit),
+        Command::Context { product, query } => {
+            let result = search(&product, &query, 8)?;
+            let mut cards = Vec::new();
+            for card in result["cards"].as_array().ok_or("invalid response")? {
+                let mut next = cards.clone();
+                next.push(json!({"id":card["id"],"revision":card["revision"],"title":card["body"]["title"],"intent":card["body"]["intent"]}));
+                if serde_json::to_vec(&next)
+                    .map_err(|_| "invalid context")?
+                    .len()
+                    <= 1900
+                {
+                    cards = next;
+                }
+            }
+            Ok(json!({"cards":cards,"budget_tokens":2000}))
+        }
+
         Command::ValidateCard { file } => {
             let value: Value =
                 serde_json::from_str(&limited(&file, 65536)?).map_err(|_| "invalid JSON")?;
@@ -209,6 +258,71 @@ fn run(cli: Cli) -> Result<Value, String> {
             }
         },
     }
+}
+fn forward(
+    binary: &str,
+    state: Option<&Path>,
+    args: Vec<std::ffi::OsString>,
+) -> Result<Value, String> {
+    let executable = std::env::current_exe()
+        .map_err(|_| "executable unavailable")?
+        .with_file_name(format!("{binary}{}", std::env::consts::EXE_SUFFIX));
+    let mut command = std::process::Command::new(executable);
+    if let Some(state) = state {
+        command.arg("--state-dir").arg(state);
+    }
+    let status = command
+        .args(args)
+        .status()
+        .map_err(|_| "companion binary unavailable; build workspace")?;
+    if !status.success() {
+        return Err("companion command failed".into());
+    }
+    Ok(json!({"completed":true}))
+}
+fn search(product: &str, query: &str, limit: u32) -> Result<Value, String> {
+    if !wk_contracts::valid_id(product) || wk_summarize::sensitive(query) {
+        return Err("invalid or sensitive search".into());
+    }
+    let base = std::env::var("WK_SERVER_URL").map_err(|_| "WK_SERVER_URL required")?;
+    let u = reqwest::Url::parse(&base).map_err(|_| "invalid server URL")?;
+    if !(u.scheme() == "https"
+        || (u.scheme() == "http" && matches!(u.host_str(), Some("127.0.0.1" | "[::1]"))))
+        || !u.username().is_empty()
+        || u.password().is_some()
+        || u.path() != "/"
+        || u.query().is_some()
+        || u.fragment().is_some()
+    {
+        return Err("invalid server origin".into());
+    }
+    let token = std::env::var("WK_ACCESS_TOKEN")
+        .or_else(|_| std::env::var("WK_DEV_TOKEN"))
+        .map_err(|_| "knowledge access token required")?;
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|_| "network unavailable")?;
+    let response = client
+        .post(format!("{}/v1/search", base.trim_end_matches('/')))
+        .bearer_auth(token)
+        .json(&json!({"product":product,"query":query,"limit":limit}))
+        .send()
+        .map_err(|_| "knowledge unavailable")?;
+    if !response.status().is_success() {
+        return Err("knowledge request denied or unavailable".into());
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "invalid response")?;
+    if bytes.len() > 1024 * 1024 {
+        return Err("response exceeds limit".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|_| "invalid response".into())
 }
 fn main() {
     match run(Cli::parse()) {

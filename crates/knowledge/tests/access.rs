@@ -87,3 +87,429 @@ async fn submissions_are_idempotent_and_stale_policy_denied() {
     stale.policy_revision = 2;
     assert_eq!(k.submit(&a, &p, stale).await.unwrap_err(), Error::Denied);
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn corrections_withdrawal_and_graph_follow_current_permissions() {
+    let (k, a, b, p) = setup().await;
+    let c = k
+        .submit(&a, &p, card("lifecycle", vec!["backend"]))
+        .await
+        .unwrap();
+    k.publish(&a, &p, c.id).await.unwrap();
+    let provenance = wk_knowledge::graph::Provenance {
+        source_reference: "opaque-source".into(),
+        observed_revision: "revision1".into(),
+        source_boundary: "synthetic".into(),
+        capture_mode: "cooperative".into(),
+        coverage: "partial".into(),
+        missing_context: vec![],
+        extraction_version: "1".into(),
+    };
+    k.reconcile_graph(&a, &p, c.id, 1, provenance)
+        .await
+        .unwrap();
+    assert!(!k.graph(&b, &p).await.unwrap()["nodes"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let mut next = card("lifecycle", vec!["backend"]);
+    next.base_revision = Some(1);
+    next.intent = "Revised scope".into();
+    let updated = k.correct(&a, &p, c.id, next.clone()).await.unwrap();
+    assert_eq!(updated.revision, 2);
+    assert!(!updated.published);
+    assert_eq!(
+        k.correct(&a, &p, c.id, next).await.unwrap_err(),
+        Error::Conflict
+    );
+    assert!(k.graph(&b, &p).await.unwrap()["nodes"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    k.publish(&a, &p, c.id).await.unwrap();
+    k.withdraw(&a, &p, c.id, 2).await.unwrap();
+    k.replay_tombstones().await.unwrap();
+    assert_eq!(k.get(&b, &p, c.id).await.unwrap_err(), Error::NotFound);
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn workspace_binding_requires_current_membership_policy() {
+    let (k, a, b, p) = setup().await;
+    let hash = "a".repeat(64);
+    assert!(k
+        .bind_workspace(&a, &p, "device", &hash, &["backend".into()], 1)
+        .await
+        .is_ok());
+    assert_eq!(
+        k.bind_workspace(&b, &p, "device", &hash, &["frontend".into()], 1)
+            .await
+            .unwrap_err(),
+        Error::Denied
+    );
+    k.grant(&a, &p, &["backend".into()], true).await.unwrap();
+    assert_eq!(k.policy(&a, &p).await.unwrap().policy_revision, 2);
+    assert_eq!(
+        k.bind_workspace(&a, &p, "device", &hash, &["backend".into()], 1)
+            .await
+            .unwrap_err(),
+        Error::Denied
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn runtime_role_has_rls_and_request_context_does_not_leak() {
+    let (admin, a, b, p) = setup().await;
+    let c = admin
+        .submit(&a, &p, card("rls", vec!["backend"]))
+        .await
+        .unwrap();
+    admin.publish(&a, &p, c.id).await.unwrap();
+    let url = std::env::var("WK_TEST_DATABASE_URL").unwrap();
+    assert!(url.ends_with("/wk_test"));
+    let owner = sqlx::PgPool::connect(&url).await.unwrap();
+    let role = format!("wk_rls_{}", uuid::Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE ROLE {role} NOLOGIN"))
+        .execute(&owner)
+        .await
+        .unwrap();
+    let grants =
+        include_str!("../../../deploy/scripts/application-role.sql").replace("wk_app", &role);
+    sqlx::raw_sql(&grants).execute(&owner).await.unwrap();
+    let selected = role.clone();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .after_connect(move |conn, _| {
+            let role = selected.clone();
+            Box::pin(async move {
+                sqlx::query(&format!("SET ROLE {role}"))
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    let runtime = Knowledge::from_pool(pool.clone());
+    assert_eq!(runtime.get(&b, &p, c.id).await.unwrap().id, c.id);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM cards")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let draft = runtime
+        .submit(&a, &p, card("rls-write", vec!["backend"]))
+        .await
+        .unwrap();
+    runtime.publish(&a, &p, draft.id).await.unwrap();
+    runtime
+        .relate_cards(
+            &a,
+            &p,
+            wk_knowledge::graph::CardRelationship {
+                source_card: draft.id,
+                target_card: c.id,
+                source_revision: 1,
+                target_revision: 1,
+                kind: "supersedes".into(),
+            },
+        )
+        .await
+        .unwrap();
+    runtime.withdraw(&a, &p, draft.id, 1).await.unwrap();
+    admin.revoke(&b, &p).await.unwrap();
+    assert_eq!(
+        runtime.get(&b, &p, c.id).await.unwrap_err(),
+        Error::NotFound
+    );
+    pool.close().await;
+    sqlx::raw_sql(&format!("DROP OWNED BY {role}; DROP ROLE {role};"))
+        .execute(&owner)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn publication_builds_graph_and_evidence_never_downgrades_observed_code() {
+    use wk_knowledge::evidence::VerifiedEvidence;
+    let (k, a, b, p) = setup().await;
+    let c = k
+        .submit(&a, &p, card("evidence", vec!["backend"]))
+        .await
+        .unwrap();
+    k.publish(&a, &p, c.id).await.unwrap();
+    let graph = k.graph(&b, &p).await.unwrap();
+    assert!(!graph["nodes"].as_array().unwrap().is_empty());
+    let hosts = vec!["example.org".into()];
+    for (kind, expected, metadata) in [
+        ("code_observed", "implemented", serde_json::json!({})),
+        ("owner_confirmed", "implemented", serde_json::json!({})),
+        (
+            "tests_verified",
+            "verified",
+            serde_json::json!({"passed":true,"command":"cargo test","executed_at":"2026-10-01T00:00:00Z","environment":"synthetic"}),
+        ),
+    ] {
+        k.attest(
+            &a,
+            &p,
+            c.id,
+            c.revision,
+            VerifiedEvidence {
+                provider: "synthetic-connector".into(),
+                reference: "https://example.org/commit/abcdef123".into(),
+                code_revision: "abcdef123".into(),
+                kind: kind.into(),
+                metadata,
+            },
+            &hosts,
+        )
+        .await
+        .unwrap();
+        let value = serde_json::to_value(k.get(&b, &p, c.id).await.unwrap()).unwrap();
+        assert_eq!(value["body"]["lifecycle"], expected);
+    }
+    let evidence = k.evidence(&b, &p, c.id).await.unwrap();
+    assert_eq!(evidence.len(), 3);
+    assert!(evidence
+        .iter()
+        .all(|e| e["stale"] == false && e.get("metadata").is_none()));
+    k.publish(&a, &p, c.id).await.unwrap();
+    assert!(k.graph(&b, &p).await.unwrap()["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|n| n["provenance"]["verification"] == "tests_verified"));
+    k.revoke(&b, &p).await.unwrap();
+    assert_eq!(k.evidence(&b, &p, c.id).await.unwrap_err(), Error::NotFound);
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn relationships_preserve_history_and_require_both_current_visible_cards() {
+    use wk_knowledge::graph::CardRelationship;
+    let (k, a, b, p) = setup().await;
+    let old = k
+        .submit(&a, &p, card("old", vec!["backend"]))
+        .await
+        .unwrap();
+    let new = k
+        .submit(&a, &p, card("new", vec!["backend"]))
+        .await
+        .unwrap();
+    k.publish(&a, &p, old.id).await.unwrap();
+    k.publish(&a, &p, new.id).await.unwrap();
+    let relation = |kind: &str, revision| CardRelationship {
+        source_card: new.id,
+        target_card: old.id,
+        source_revision: 1,
+        target_revision: revision,
+        kind: kind.into(),
+    };
+    assert_eq!(
+        k.relate_cards(&b, &p, relation("contradicts", 1))
+            .await
+            .unwrap_err(),
+        Error::NotFound
+    );
+    assert_eq!(
+        k.relate_cards(&a, &p, relation("contradicts", 99))
+            .await
+            .unwrap_err(),
+        Error::Conflict
+    );
+    k.relate_cards(&a, &p, relation("contradicts", 1))
+        .await
+        .unwrap();
+    k.relate_cards(&a, &p, relation("contradicts", 1))
+        .await
+        .unwrap();
+    // Republishing must not destroy reviewed cross-card links.
+    k.publish(&a, &p, new.id).await.unwrap();
+    let g = k.graph(&b, &p).await.unwrap();
+    assert_eq!(
+        g["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "contradicts")
+            .count(),
+        1
+    );
+    k.relate_cards(&a, &p, relation("supersedes", 1))
+        .await
+        .unwrap();
+    let visible = k.search(&b, &p, "limiter", 10).await.unwrap();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].id, new.id);
+    let retired = k.get(&b, &p, old.id).await.unwrap();
+    assert_eq!(retired.revision, 2);
+    assert_eq!(retired.body.lifecycle, wk_contracts::Lifecycle::Superseded);
+    let revisions = k.revisions(&b, &p, old.id).await.unwrap();
+    assert_eq!(revisions.len(), 2);
+    assert_eq!(
+        k.relate_cards(&a, &p, relation("supersedes", 1))
+            .await
+            .unwrap_err(),
+        Error::Conflict
+    );
+    // A reviewer with only backend access cannot link a hidden frontend card.
+    k.grant(&b, &p, &["backend".into()], true).await.unwrap();
+    let hidden = k
+        .submit(&a, &p, card("hidden", vec!["frontend"]))
+        .await
+        .unwrap();
+    k.publish(&a, &p, hidden.id).await.unwrap();
+    assert_eq!(
+        k.relate_cards(
+            &b,
+            &p,
+            CardRelationship {
+                source_card: new.id,
+                target_card: hidden.id,
+                source_revision: 1,
+                target_revision: 1,
+                kind: "contradicts".into()
+            }
+        )
+        .await
+        .unwrap_err(),
+        Error::NotFound
+    );
+    k.withdraw(&a, &p, new.id, 1).await.unwrap();
+    assert!(k.search(&b, &p, "limiter", 10).await.unwrap().is_empty());
+    assert!(!k.graph(&b, &p).await.unwrap()["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == "supersedes"));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn evidence_keeps_historical_service_boundaries_after_scope_narrows() {
+    let (k, a, b, p) = setup().await;
+    let c = k
+        .submit(&a, &p, card("broad", vec!["backend", "frontend"]))
+        .await
+        .unwrap();
+    k.attest(
+        &a,
+        &p,
+        c.id,
+        1,
+        wk_knowledge::evidence::VerifiedEvidence {
+            provider: "synthetic".into(),
+            reference: "https://example.org/private-frontend".into(),
+            code_revision: "abcdef123".into(),
+            kind: "code_observed".into(),
+            metadata: serde_json::json!({"private":"must-not-return"}),
+        },
+        &["example.org".into()],
+    )
+    .await
+    .unwrap();
+    let mut corrected = card("narrow", vec!["backend"]);
+    corrected.base_revision = Some(1);
+    k.correct(&a, &p, c.id, corrected).await.unwrap();
+    k.publish(&a, &p, c.id).await.unwrap();
+    assert!(k.evidence(&b, &p, c.id).await.unwrap().is_empty());
+    let history = k.evidence(&a, &p, c.id).await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["stale"], true);
+    assert!(!serde_json::to_string(&history)
+        .unwrap()
+        .contains("must-not-return"));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn signed_evidence_replay_rotation_and_revocation() {
+    use ed25519_dalek::{Signer, SigningKey};
+    use wk_knowledge::signed_evidence::{Envelope, Trust};
+    let (k, a, _, p) = setup().await;
+    let c = k
+        .submit(&a, &p, card("signed", vec!["backend"]))
+        .await
+        .unwrap();
+    let signing = SigningKey::from_bytes(&[11; 32]);
+    let trust:Trust=serde_json::from_value(serde_json::json!({"keys":{"ci":{"public_key_hex":hex::encode(signing.verifying_key().as_bytes()),"provider":"ci","org":a.org,"product":p,"hosts":["example.org"]}}})).unwrap();
+    let envelope = |event: uuid::Uuid, kind: &str, sha: &str, revoke: bool| {
+        let payload=serde_json::json!({"event_id":event,"org":a.org,"product":p,"card_id":c.id,"card_revision":1,"issued_at":100,"expires_at":200,"revoke":revoke,"evidence":{"provider":"ci","reference":"https://example.org/build/1","code_revision":sha,"kind":kind,"metadata":{"passed":true,"command":"cargo test","executed_at":"synthetic","environment":"synthetic"}}}).to_string();
+        Envelope {
+            key_id: "ci".into(),
+            signature_hex: hex::encode(signing.sign(payload.as_bytes()).to_bytes()),
+            payload,
+        }
+    };
+    let event = uuid::Uuid::new_v4();
+    trust
+        .ingest(
+            &k,
+            &a,
+            envelope(event, "code_observed", "abcdef123", false),
+            150,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        trust
+            .ingest(
+                &k,
+                &a,
+                envelope(event, "code_observed", "abcdef123", false),
+                150
+            )
+            .await
+            .unwrap_err(),
+        Error::Conflict
+    );
+    trust
+        .ingest(
+            &k,
+            &a,
+            envelope(uuid::Uuid::new_v4(), "tests_verified", "abcdef123", false),
+            150,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        k.get(&a, &p, c.id).await.unwrap().body.lifecycle,
+        wk_contracts::Lifecycle::Verified
+    );
+    trust
+        .ingest(
+            &k,
+            &a,
+            envelope(uuid::Uuid::new_v4(), "code_observed", "abcdef456", false),
+            150,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        k.get(&a, &p, c.id).await.unwrap().body.lifecycle,
+        wk_contracts::Lifecycle::Implemented
+    );
+    trust
+        .ingest(
+            &k,
+            &a,
+            envelope(uuid::Uuid::new_v4(), "owner_confirmed", "abcdef456", true),
+            150,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        k.get(&a, &p, c.id).await.unwrap().body.lifecycle,
+        wk_contracts::Lifecycle::InProgress
+    );
+    assert!(k
+        .evidence(&a, &p, c.id)
+        .await
+        .unwrap()
+        .iter()
+        .all(|e| e["stale"] == true));
+}

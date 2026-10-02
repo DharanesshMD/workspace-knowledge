@@ -1,0 +1,7 @@
+# Uninstall
+
+Pause capture and stop the per-user service before removing binaries. Linux: `systemctl --user disable --now wk-agent`; remove only the installed `wk-agent.service`, then daemon-reload. macOS: `launchctl bootout gui/$(id -u) PATH_TO_INSTALLED_PLIST`; remove that plist. Windows: run `deploy/windows/uninstall-startup.ps1` as the same user. Foreground mode exits with Ctrl-C.
+
+Run `deploy/scripts/uninstall.sh` for the standard POSIX source install or delete the four explicitly installed `.exe` files on Windows. This preserves local state, keys and agent configurations. Remove only the exact connector entries installed for Workspace Knowledge after backing up client configuration; never overwrite the whole client configuration. Revoke the device, membership and vault token through authorized administration.
+
+Deleting private local state or credential-store entries is a separate explicit destructive choice after retention/export review. Shared card withdrawal and backup expiry are server-side operations; deleting local binaries does not erase shared cards or vault secrets. Docker `down` preserves named volumes; never use `down -v` as a routine uninstall step.

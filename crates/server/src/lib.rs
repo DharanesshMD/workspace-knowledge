@@ -1,6 +1,10 @@
-//! Development HTTP surface. Production OIDC and deployment hardening are pending.
+//! Authenticated shared knowledge HTTP API.
+pub mod auth;
+pub mod decisions;
+pub mod environments;
+pub mod remote_mcp;
 use axum::{
-    extract::{rejection::JsonRejection, DefaultBodyLimit, Path, State},
+    extract::{rejection::JsonRejection, DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -13,8 +17,11 @@ use std::{collections::HashMap, sync::Arc};
 use wk_knowledge::{Actor, Error, Knowledge};
 #[derive(Clone)]
 struct Api {
+    decisions: Arc<std::sync::OnceLock<Result<decisions::Jev, String>>>,
     knowledge: Knowledge,
     tokens: Arc<HashMap<[u8; 32], Actor>>,
+    oidc: Option<auth::Oidc>,
+    origin: Option<String>,
 }
 struct Failure(StatusCode, &'static str);
 impl IntoResponse for Failure {
@@ -33,8 +40,11 @@ impl From<Error> for Failure {
         }
     }
 }
-fn actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
-    if headers.contains_key("origin") {
+async fn actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
+    if headers
+        .get("origin")
+        .is_some_and(|v| v.to_str().ok() != api.origin.as_deref())
+    {
         return Err(Failure(StatusCode::FORBIDDEN, "browser_access_disabled"));
     }
     let token = headers
@@ -42,6 +52,16 @@ fn actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .ok_or(Failure(StatusCode::UNAUTHORIZED, "unauthenticated"))?;
+    if let Some(oidc) = &api.oidc {
+        let (issuer, subject) = oidc
+            .verify(token)
+            .map_err(|_| Failure(StatusCode::UNAUTHORIZED, "unauthenticated"))?;
+        return api
+            .knowledge
+            .identity(issuer, &subject)
+            .await
+            .map_err(|_| Failure(StatusCode::UNAUTHORIZED, "unauthenticated"));
+    }
     let key: [u8; 32] = Sha256::digest(token.as_bytes()).into();
     api.tokens
         .get(&key)
@@ -75,8 +95,11 @@ async fn search(
     headers: HeaderMap,
     body: Result<Json<Search>, JsonRejection>,
 ) -> Result<Json<Value>, Failure> {
-    let who = actor(&api, &headers)?;
+    let who = actor(&api, &headers).await?;
     let request = parse(body)?;
+    if wk_summarize::sensitive(&request.query) {
+        return Err(Failure(StatusCode::UNPROCESSABLE_ENTITY, "sensitive_query"));
+    }
     let cards = api
         .knowledge
         .search(&who, &request.product, &request.query, request.limit)
@@ -88,8 +111,17 @@ async fn submit(
     headers: HeaderMap,
     body: Result<Json<Submission>, JsonRejection>,
 ) -> Result<Json<Value>, Failure> {
-    let who = actor(&api, &headers)?;
+    let who = actor(&api, &headers).await?;
     let request = parse(body)?;
+    if wk_summarize::sensitive(
+        &serde_json::to_string(&request.card)
+            .map_err(|_| Failure(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request"))?,
+    ) {
+        return Err(Failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "sensitive_summary",
+        ));
+    }
     let card = api
         .knowledge
         .submit(&who, &request.product, request.card)
@@ -102,7 +134,7 @@ async fn publish(
     Path(id): Path<String>,
     body: Result<Json<Product>, JsonRejection>,
 ) -> Result<Json<Value>, Failure> {
-    let who = actor(&api, &headers)?;
+    let who = actor(&api, &headers).await?;
     let request = parse(body)?;
     let id = uuid::Uuid::parse_str(&id).map_err(|_| Failure(StatusCode::NOT_FOUND, "not_found"))?;
     api.knowledge.publish(&who, &request.product, id).await?;
@@ -113,13 +145,221 @@ async fn card(
     headers: HeaderMap,
     Path((product, id)): Path<(String, String)>,
 ) -> Result<Json<Value>, Failure> {
-    let who = actor(&api, &headers)?;
+    let who = actor(&api, &headers).await?;
     let id = uuid::Uuid::parse_str(&id).map_err(|_| Failure(StatusCode::NOT_FOUND, "not_found"))?;
     Ok(Json(
         json!({"card":api.knowledge.get(&who,&product,id).await?}),
     ))
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Binding {
+    product: String,
+    device_id: String,
+    approval_hash: String,
+    services: Vec<String>,
+    policy_revision: i64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Revision {
+    product: String,
+    revision: i64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Feedback {
+    product: String,
+    revision: i64,
+    issue: String,
+    suggestion: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraphRequest {
+    product: String,
+    revision: i64,
+    provenance: wk_knowledge::graph::Provenance,
+}
+fn uuid(id: &str) -> Result<uuid::Uuid, Failure> {
+    uuid::Uuid::parse_str(id).map_err(|_| Failure(StatusCode::NOT_FOUND, "not_found"))
+}
+async fn policy(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Query(r): Query<Product>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    Ok(Json(
+        json!({"policy":api.knowledge.policy(&a,&r.product).await?}),
+    ))
+}
+async fn binding(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    body: Result<Json<Binding>, JsonRejection>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    let r = parse(body)?;
+    Ok(Json(
+        json!({"binding_id":api.knowledge.bind_workspace(&a,&r.product,&r.device_id,&r.approval_hash,&r.services,r.policy_revision).await?}),
+    ))
+}
+async fn correct(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<Submission>, JsonRejection>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    let r = parse(body)?;
+    Ok(Json(
+        json!({"card":api.knowledge.correct(&a,&r.product,uuid(&id)?,r.card).await?}),
+    ))
+}
+async fn withdraw(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<Revision>, JsonRejection>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    let r = parse(body)?;
+    api.knowledge
+        .withdraw(&a, &r.product, uuid(&id)?, r.revision)
+        .await?;
+    Ok(Json(json!({"withdrawn":true})))
+}
+async fn feedback(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<Feedback>, JsonRejection>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    let r = parse(body)?;
+    Ok(Json(
+        json!({"feedback_id":api.knowledge.feedback(&a,&r.product,uuid(&id)?,r.revision,&r.issue,&r.suggestion).await?}),
+    ))
+}
+async fn revisions(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path((product, id)): Path<(String, String)>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    Ok(Json(
+        json!({"revisions":api.knowledge.revisions(&a,&product,uuid(&id)?).await?}),
+    ))
+}
+async fn review(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(product): Path<String>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    Ok(Json(
+        json!({"cards":api.knowledge.review_queue(&a,&product).await?}),
+    ))
+}
+async fn graph(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(product): Path<String>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    Ok(Json(api.knowledge.graph(&a, &product).await?))
+}
+async fn evidence(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path((product, id)): Path<(String, String)>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    Ok(Json(
+        json!({"evidence":api.knowledge.evidence(&a,&product,uuid(&id)?).await?}),
+    ))
+}
+async fn relate(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(product): Path<String>,
+    body: Result<Json<wk_knowledge::graph::CardRelationship>, JsonRejection>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    api.knowledge
+        .relate_cards(&a, &product, parse(body)?)
+        .await?;
+    Ok(Json(json!({"linked":true})))
+}
+async fn reconcile(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<GraphRequest>, JsonRejection>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    let r = parse(body)?;
+    api.knowledge
+        .reconcile_graph(&a, &r.product, uuid(&id)?, r.revision, r.provenance)
+        .await?;
+    Ok(Json(json!({"reconciled":true})))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvironmentQuery {
+    product: String,
+    service: String,
+}
+async fn schemas_for(api: &Api, a: &Actor, product: &str) -> Result<Vec<Value>, Failure> {
+    let policy = api.knowledge.policy(a, product).await?;
+    let schemas = environments::load()
+        .map_err(|_| Failure(StatusCode::SERVICE_UNAVAILABLE, "schema_unavailable"))?;
+    Ok(schemas.into_iter().filter(|s|s.org==a.org&&s.product==product&&s.service_ids.iter().all(|id|policy.services.contains(id))).map(|s|json!({"id":s.id,"name":s.name,"service_ids":s.service_ids,"variables":s.variables,"access":"schema_only"})).collect())
+}
+async fn environments(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(product): Path<String>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    Ok(Json(
+        json!({"profiles":schemas_for(&api,&a,&product).await?}),
+    ))
+}
+async fn environment(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(profile): Path<String>,
+    Query(q): Query<EnvironmentQuery>,
+) -> Result<Json<Value>, Failure> {
+    let a = actor(&api, &headers).await?;
+    let schemas = schemas_for(&api, &a, &q.product).await?;
+    let schema = schemas
+        .into_iter()
+        .find(|s| {
+            s["id"] == profile
+                && s["service_ids"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id == &q.service))
+        })
+        .ok_or(Failure(StatusCode::NOT_FOUND, "not_found"))?;
+    Ok(Json(json!({"schema":schema})))
+}
 pub fn router(knowledge: Knowledge, tokens: Vec<(String, Actor)>) -> Router {
+    configured_router(knowledge, tokens, None, None)
+}
+pub fn configured_router(
+    knowledge: Knowledge,
+    tokens: Vec<(String, Actor)>,
+    oidc: Option<auth::Oidc>,
+    origin: Option<String>,
+) -> Router {
+    let mode = if oidc.is_some() {
+        "production"
+    } else {
+        "development"
+    };
     let tokens = tokens
         .into_iter()
         .map(|(token, actor)| (Sha256::digest(token.as_bytes()).into(), actor))
@@ -127,15 +367,40 @@ pub fn router(knowledge: Knowledge, tokens: Vec<(String, Actor)>) -> Router {
     Router::new()
         .route(
             "/health",
-            get(|| async { Json(json!({"status":"ok","mode":"development"})) }),
+            get(move || async move { Json(json!({"status":"ok","mode":mode})) }),
+        )
+        .route("/mcp/{product}", axum::routing::any(remote_mcp::transport))
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(remote_mcp::metadata),
         )
         .route("/v1/search", post(search))
+        .route("/v1/products/{product}/decisions", post(decisions::assess))
+        .route("/v1/products/{product}/environments", get(environments))
+        .route("/v1/environments/{profile}/schema", get(environment))
+        .route("/v1/policy", get(policy))
+        .route("/v1/workspace-bindings", post(binding))
         .route("/v1/cards", post(submit))
         .route("/v1/cards/{id}/publish", post(publish))
+        .route("/v1/cards/{id}/correct", post(correct))
+        .route("/v1/cards/{id}/withdraw", post(withdraw))
+        .route("/v1/cards/{id}/feedback", post(feedback))
+        .route("/v1/cards/{id}/graph", post(reconcile))
         .route("/v1/products/{product}/cards/{id}", get(card))
+        .route("/v1/products/{product}/cards/{id}/evidence", get(evidence))
+        .route(
+            "/v1/products/{product}/cards/{id}/revisions",
+            get(revisions),
+        )
+        .route("/v1/products/{product}/review", get(review))
+        .route("/v1/products/{product}/graph", get(graph))
+        .route("/v1/products/{product}/relationships", post(relate))
         .layer(DefaultBodyLimit::max(65536))
         .with_state(Api {
+            decisions: Arc::new(std::sync::OnceLock::new()),
             knowledge,
             tokens: Arc::new(tokens),
+            oidc,
+            origin,
         })
 }

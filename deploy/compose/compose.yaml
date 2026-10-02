@@ -1,0 +1,38 @@
+# On-prem Linux deployment. Provision secrets externally; no default credentials.
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: workspace_knowledge
+      POSTGRES_USER: wk_owner
+      POSTGRES_PASSWORD: ${WK_POSTGRES_PASSWORD:?Set a strong database owner password}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U wk_owner -d workspace_knowledge']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+    environment:
+      WK_DATABASE_URL: ${WK_DATABASE_URL:?Set an application role connection URL}
+      WK_OIDC_ISSUER: ${WK_OIDC_ISSUER:?Set HTTPS OIDC issuer}
+      WK_OIDC_AUDIENCE: ${WK_OIDC_AUDIENCE:?Set OIDC audience}
+      WK_OIDC_JWKS_URL: ${WK_OIDC_JWKS_URL:?Set HTTPS JWKS endpoint}
+      WK_BIND: 0.0.0.0:8080
+      WK_CONSOLE_ORIGIN: ${WK_CONSOLE_ORIGIN:?Set exact HTTPS console origin}
+    ports: ['127.0.0.1:8080:8080']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs: ['/tmp']
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    restart: unless-stopped
+volumes:
+  postgres:

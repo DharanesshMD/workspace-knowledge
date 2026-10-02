@@ -1,0 +1,9 @@
+# Remote MCP
+
+The same server exposes the standard SDK's stateless Streamable HTTP transport at `/mcp/{product}`. Eight tools mirror the stdio bridge: search, get, context, record, feedback, workspace status, environment schema, and Jev assessment. Every HTTP request authenticates independently and checks membership in its route-bound product. Tool calls use the in-process knowledge service; bearer tokens are never forwarded to an upstream API. There is no shared mutable user session or global access token.
+
+Production requires existing OIDC configuration plus `WK_MCP_RESOURCE=https://knowledge.example` (an HTTPS origin with no trailing slash). Set `WK_OIDC_AUDIENCE` to exactly that resource identifier and configure the identity provider to issue tokens for it. Protected-resource metadata is available at `/.well-known/oauth-protected-resource`; 401 responses advertise that URL in `WWW-Authenticate`. The configured issuer supplies OAuth authorization/token endpoints and client registration. This application does not issue tokens or promise dynamic registration unsupported by the provider. No token refresh credentials are held by the resource server.
+
+Use a TLS reverse proxy for the HTTP listener. Browser Origin handling follows the exact configured console origin; all other browser origins are rejected. CLI requests may omit Origin. Request bodies are bounded to 64 KiB. Stdio remains the fallback for clients without compatible remote OAuth support. Dev-mode integration tests use a synthetic bearer identity on loopback only; that is not production OAuth.
+
+Synthetic integration passed for SDK initialize/discovery/search, invalid identity and forbidden browser origin. Real-client OAuth login, identity-provider registration and refresh flows remain external certification gates. Session resumption/server-push notifications are not offered by this stateless deployment.

@@ -1,0 +1,16 @@
+[package]
+name = "wk-environments"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+clap = { version = "4", features = ["derive"] }
+[dev-dependencies]
+tempfile.workspace = true
+[[bin]]
+name = "wk-env"
+path = "src/main.rs"

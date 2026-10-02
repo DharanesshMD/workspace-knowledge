@@ -1,0 +1,11 @@
+# Offline bundle recipe
+
+On a connected machine matching the target OS/architecture, pin a reviewed source commit and Rust/Node toolchains. Run `cargo vendor --locked vendor > vendor-config.toml`, retain `Cargo.lock`, archive registry source licenses, and configure `.cargo/config.toml` in the bundle with the generated source replacement. Retain target native dependencies and keyring libraries. Build/test using `cargo build --locked --offline --release --workspace` on a disconnected validation machine.
+
+Build the console from the locked npm dependencies on the connected staging machine, include `web/dist` before building server binaries, and retain dependency licenses/SBOM. An offline npm rebuild additionally requires an npm cache populated by `npm ci --cache PATH` and verified with `npm ci --offline --cache PATH`; a copied dist directory only supports serving, not rebuilding source.
+
+Bundle the four native binaries, console assets, schema migrations, runbooks, LICENSE/NOTICE, dependency license reports, checksums and detached signatures. For Docker use `docker save` for the built application and pinned database images, then `docker load` offline. Do not bundle secrets, authentication tokens, client transcripts, private local stores or development vault credentials. Record exact image digests and OS/tool versions. The release artifact workflow stages artifacts for review only and does not automatically produce a fully certified offline appliance.
+
+Generate `SHA256SUMS` and `dependencies.spdx.json` with `python3 scripts/release-manifest.py CURATED_DIRECTORY` after collecting the binaries, built console and license/notice files. This uses the pinned cargo metadata for the build host, with no network access; run it after fetching/building dependencies. The SPDX file is a dependency inventory, not a claim that every package is linked into every binary or that no vulnerabilities exist. Verify with `shasum -a 256 -c SHA256SUMS` (or an equivalent platform verifier). Checksums detect corruption but do not authenticate a publisher: production distribution still requires your release-signing key and trusted signature verification.
+
+A local macOS arm64 debug candidate was assembled in the ignored `.tooling/release-candidate` directory and its manifest was verified. It is neither a signed release nor a native Windows/Linux certification.

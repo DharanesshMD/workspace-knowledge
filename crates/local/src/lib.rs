@@ -21,6 +21,7 @@ impl LocalStore {
         db.busy_timeout(std::time::Duration::from_millis(100))
             .map_err(db_error)?;
         db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, nonce BLOB NOT NULL, payload BLOB NOT NULL, expires INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS session_guards(id TEXT PRIMARY KEY);").map_err(db_error)?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS scan_cursors(namespace TEXT PRIMARY KEY, after_id TEXT NOT NULL);").map_err(db_error)?;
         Ok(Self { db, cipher, quota })
     }
     pub fn enqueue(&mut self, id: &str, data: &[u8], now: i64, ttl: i64) -> Result<bool, String> {
@@ -230,6 +231,103 @@ impl LocalStore {
             result.push((id, plain));
         }
         Ok(result)
+    }
+    pub fn contains(&self, id: &str, now: i64) -> Result<bool, String> {
+        self.db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE id=? AND expires>?)",
+                params![id, now],
+                |r| r.get(0),
+            )
+            .map_err(db_error)
+    }
+    /// Metadata-only pagination: callers decrypt one record at a time. Prefixes
+    /// are literal, not SQL LIKE patterns. The cursor is an opaque record ID.
+    pub fn pending_ids(
+        &self,
+        prefix: &str,
+        after: &str,
+        now: i64,
+        limit: u32,
+    ) -> Result<Vec<String>, String> {
+        if prefix.len() > 64 || after.len() > 256 || !(1..=100).contains(&limit) {
+            return Err("invalid scan bounds".into());
+        }
+        let mut query = self.db.prepare("SELECT id FROM events WHERE substr(id,1,length(?1))=?1 AND id>?2 AND expires>?3 ORDER BY id LIMIT ?4").map_err(db_error)?;
+        let rows = query
+            .query_map(params![prefix, after, now, limit], |row| row.get(0))
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        Ok(rows)
+    }
+    /// Persist scan progress across daemon ticks and restarts so held sessions
+    /// cannot permanently starve later sessions. A crash skips only one cycle.
+    pub fn next_session_ids(&mut self, now: i64) -> Result<Vec<String>, String> {
+        let tx = self
+            .db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        tx.execute("DELETE FROM events WHERE expires<=?", [now])
+            .map_err(db_error)?;
+        let after: String = tx.query_row("SELECT COALESCE((SELECT after_id FROM scan_cursors WHERE namespace='sessions'),'')", [], |r| r.get(0)).map_err(db_error)?;
+        let mut query = tx.prepare("SELECT id FROM events WHERE substr(id,1,8)='session:' AND id>? ORDER BY id LIMIT 10").map_err(db_error)?;
+        let mut ids = query
+            .query_map([&after], |r| r.get::<_, String>(0))
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        if ids.is_empty() {
+            ids = query
+                .query_map([""], |r| r.get::<_, String>(0))
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+        }
+        drop(query);
+        tx.execute("INSERT INTO scan_cursors(namespace,after_id) VALUES('sessions',?) ON CONFLICT(namespace) DO UPDATE SET after_id=excluded.after_id", [ids.last().map(String::as_str).unwrap_or("")]).map_err(db_error)?;
+        tx.commit().map_err(db_error)?;
+        Ok(ids)
+    }
+    /// Guarded drafts remain seen after acknowledgement or expiry, preventing
+    /// automatic regeneration and extension of their private retention window.
+    pub fn seen(&self, id: &str) -> Result<bool, String> {
+        self.db.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE id=?1 UNION ALL SELECT 1 FROM session_guards WHERE id=?1)", [id], |r| r.get(0)).map_err(db_error)
+    }
+    pub fn read_record(&self, id: &str, now: i64) -> Result<Option<Vec<u8>>, String> {
+        use rusqlite::OptionalExtension;
+        let row = self
+            .db
+            .query_row(
+                "SELECT nonce,payload,expires FROM events WHERE id=? AND expires>?",
+                params![id, now],
+                |r| {
+                    Ok((
+                        r.get::<_, Vec<u8>>(0)?,
+                        r.get::<_, Vec<u8>>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some((nonce, payload, expires)) = row else {
+            return Ok(None);
+        };
+        if nonce.len() != 24 {
+            return Err("invalid encrypted event".into());
+        }
+        let aad = format!("v1:{id}:{expires}");
+        self.cipher
+            .decrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &payload,
+                    aad: aad.as_bytes(),
+                },
+            )
+            .map(Some)
+            .map_err(|_| "capture authentication failed".into())
     }
     pub fn ack(&mut self, id: &str) -> Result<(), String> {
         self.db

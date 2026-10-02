@@ -1,0 +1,30 @@
+{
+  "$id": "urn:workspace-knowledge:effective-policy:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "can_review": {
+      "type": "boolean"
+    },
+    "policy_revision": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "product": {
+      "type": "string"
+    },
+    "services": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "product",
+    "services",
+    "can_review",
+    "policy_revision"
+  ],
+  "title": "Policy",
+  "type": "object"
+}

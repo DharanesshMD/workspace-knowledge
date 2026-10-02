@@ -1,0 +1,5 @@
+export type Body = {schema_version:number; idempotency_key:string; policy_revision:number; title:string; intent:string; rationale:string; decisions:string[]; constraints:string[]; open_questions:string[]; service_ids:string[]; evidence:{kind:string; reference:string}[]; lifecycle:string; capture_completeness:string; base_revision:number|null};
+export type Card = {id:string; body:Body; revision:number; published:boolean; publication_mode?:string; review_reason?:string; evidence_freshness?:string};
+export type Status = {publication_mode?:string; inference_destination?:string; paused?:boolean; connectors?:{name:string; status:string; coverage?:string}[]; services?:string[]; policy_revision?:number};
+export type Profile = {id:string; name:string; service_ids:string[]; access:string; variables:{name:string; required:boolean; description?:string}[]};
+export type Edge = {source:string; target:string; relation:string};

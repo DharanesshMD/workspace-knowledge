@@ -1,0 +1,48 @@
+name: Build release candidates
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - run: rustup toolchain install 1.98.1 --profile minimal
+      - run: cargo build --release --workspace --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-${{ matrix.os }}
+          path: |
+            target/release/wk
+            target/release/wk.exe
+            target/release/wk-agent
+            target/release/wk-agent.exe
+            target/release/wk-env
+            target/release/wk-env.exe
+            target/release/wk-mcp
+            target/release/wk-mcp.exe
+            target/release/wk-server
+            target/release/wk-server.exe
+  console:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci && npm run build
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: console
+          path: web/dist
+# Deliberately builds candidates only. Signing/notarization and publication require
+# deployment-owned keys, supported-platform certification and release authorization.
