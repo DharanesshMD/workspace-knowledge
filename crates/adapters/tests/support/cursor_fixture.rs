@@ -101,7 +101,9 @@ pub fn fixture(base: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
 
 fn slug(path: &Path) -> String {
     let p = path.canonicalize().unwrap();
-    p.to_string_lossy()
+    let p = p.to_string_lossy();
+    // Cursor names projects after the plain path, without a Windows verbatim prefix.
+    p.trim_start_matches(r"\\?\")
         .trim_start_matches('/')
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })

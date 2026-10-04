@@ -21,18 +21,43 @@ pub struct Plan {
 const CLAUDE_EDIT_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
 const CURSOR_EDIT_TOOLS: &[&str] = &["Write", "StrReplace", "Edit", "Delete", "MultiEdit"];
 
-/// Workspace-relative form of `raw`, if it lies inside `root` (no traversal).
-pub fn relative(root: &Path, raw: &str) -> Option<String> {
-    let path = Path::new(raw.trim());
-    let rel = if path.is_absolute() {
-        path.strip_prefix(root).ok()?
+/// Comparable form of a path string: `/` separators, no Windows verbatim prefix (`\\?\`), and
+/// ASCII-lowercased on Windows (case-insensitive filesystem). Byte lengths are preserved.
+fn comparable(s: &str) -> String {
+    let s = s.replace('\\', "/");
+    let s = s.strip_prefix("//?/").unwrap_or(&s).to_string();
+    if cfg!(windows) {
+        s.to_ascii_lowercase()
     } else {
-        path
+        s
+    }
+}
+
+/// Workspace-relative form of `raw` (with `/` separators), if it lies inside `root`.
+/// Handles Windows verbatim/drive paths and separators; rejects traversal and other roots.
+pub fn relative(root: &Path, raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let rooted = Path::new(raw).is_absolute() || raw.starts_with('/') || raw.starts_with('\\');
+    let rel = if rooted {
+        let original = raw.replace('\\', "/");
+        let original = original
+            .strip_prefix("//?/")
+            .unwrap_or(&original)
+            .to_string();
+        let base = comparable(&root.to_string_lossy());
+        let base = base.trim_end_matches('/');
+        let candidate = comparable(raw);
+        let rest = candidate.strip_prefix(base)?.strip_prefix('/')?;
+        // Slice the original (case-preserving) string; ASCII lowercasing keeps byte offsets.
+        original[original.len() - rest.len()..].to_string()
+    } else {
+        raw.replace('\\', "/")
     };
-    let safe = rel
-        .components()
-        .all(|c| matches!(c, std::path::Component::Normal(_)));
-    (safe && !rel.as_os_str().is_empty()).then(|| rel.to_string_lossy().replace('\\', "/"))
+    let safe = !rel.is_empty()
+        && rel
+            .split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != ".." && !seg.contains(':'));
+    safe.then_some(rel)
 }
 
 /// Distinct content words from a prompt, at most 24, for a text lookup.

@@ -475,18 +475,7 @@ fn collect_tool_paths(
     read: &mut std::collections::BTreeSet<String>,
 ) {
     let Some(root) = workspace else { return };
-    let relative = |raw: &str| -> Option<String> {
-        let path = Path::new(raw.trim());
-        let rel = if path.is_absolute() {
-            path.strip_prefix(root).ok()?
-        } else {
-            path
-        };
-        let safe = rel
-            .components()
-            .all(|c| matches!(c, std::path::Component::Normal(_)));
-        (safe && !rel.as_os_str().is_empty()).then(|| rel.to_string_lossy().replace('\\', "/"))
-    };
+    let relative = |raw: &str| crate::team_context::relative(root, raw);
     for item in record["message"]["content"]
         .as_array()
         .into_iter()
@@ -588,8 +577,13 @@ pub fn resolve_slug(slug: &str) -> Option<PathBuf> {
     }
     let slug = norm(slug);
     if cfg!(windows) {
-        let (drive, rest) = slug.split_once('-')?;
-        walk(Path::new(&format!("{drive}:\\")), rest, 0)
+        // `C:\Users\x` becomes `c--users-x`: drive letter, then the rest.
+        let (drive, rest) = slug.trim_start_matches('-').split_once('-')?;
+        walk(
+            Path::new(&format!("{drive}:\\")),
+            rest.trim_start_matches('-'),
+            0,
+        )
     } else {
         walk(Path::new("/"), slug.trim_start_matches('-'), 0)
     }

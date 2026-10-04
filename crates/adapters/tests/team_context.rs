@@ -96,3 +96,46 @@ fn outputs_match_each_client_and_dedupe_per_session() {
     );
     assert!(render(&[]).is_none());
 }
+
+#[test]
+fn relative_paths_handle_separators_and_folder_boundaries() {
+    use wk_adapters::team_context::relative;
+    let root = Path::new("/work/product");
+    assert_eq!(
+        relative(root, "/work/product/web/app.tsx").as_deref(),
+        Some("web/app.tsx")
+    );
+    assert_eq!(
+        relative(root, "\\work\\product\\web\\app.tsx").as_deref(),
+        Some("web/app.tsx")
+    );
+    assert_eq!(
+        relative(root, "web\\app.tsx").as_deref(),
+        Some("web/app.tsx")
+    );
+    assert_eq!(
+        relative(root, "/work/product-personal/notes.md"),
+        None,
+        "sibling with shared prefix"
+    );
+    assert_eq!(relative(root, "/work/product"), None);
+    assert_eq!(relative(root, "/work/product/../secret"), None);
+    assert_eq!(relative(root, "C:/elsewhere/x"), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn relative_paths_handle_windows_drive_verbatim_and_case() {
+    use wk_adapters::team_context::relative;
+    let root = Path::new(r"\\?\D:\a\Product");
+    assert_eq!(
+        relative(root, r"D:\a\Product\web\App.tsx").as_deref(),
+        Some("web/App.tsx")
+    );
+    assert_eq!(
+        relative(root, "d:/a/product/web/App.tsx").as_deref(),
+        Some("web/App.tsx")
+    );
+    assert_eq!(relative(root, r"D:\a\Product2\x"), None);
+    assert_eq!(relative(root, r"E:\a\Product\x"), None);
+}
