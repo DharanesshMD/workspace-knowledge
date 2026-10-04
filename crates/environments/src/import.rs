@@ -2,7 +2,6 @@ use crate::{openbao::Values, profiles::key, Error, Result};
 use std::{
     fs,
     path::{Component, Path, PathBuf},
-    process::Command,
 };
 /// Reject symlink traversal, even for paths whose ultimate target lies inside the root.
 pub fn confined(root: &Path, path: &Path, must_exist: bool) -> Result<PathBuf> {
@@ -78,6 +77,7 @@ pub fn export(root: &Path, destination: &Path, values: &Values) -> Result<()> {
     {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
+        use std::process::Command;
         let path = confined(root, destination, false)?;
         let relative = path.strip_prefix(root).map_err(|_| Error::Denied)?;
         let tracked = Command::new("git")
