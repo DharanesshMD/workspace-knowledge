@@ -1,5 +1,10 @@
 name: Dependency audit
-on: [push, pull_request, workflow_dispatch]
+on:
+  # Run once per change: on main, on pull requests, or on demand (not on every branch push).
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
