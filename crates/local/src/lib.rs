@@ -18,7 +18,9 @@ impl LocalStore {
         let cipher = XChaCha20Poly1305::new((&key).into());
         key.zeroize();
         let db = Connection::open(path).map_err(db_error)?;
-        db.busy_timeout(std::time::Duration::from_millis(100))
+        // Writers take the lock up front (BEGIN IMMEDIATE), so waiting cannot deadlock. Windows
+        // file locking is slower, and 100 ms dropped concurrent updates there.
+        db.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(db_error)?;
         db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, nonce BLOB NOT NULL, payload BLOB NOT NULL, expires INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS session_guards(id TEXT PRIMARY KEY);").map_err(db_error)?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS scan_cursors(namespace TEXT PRIMARY KEY, after_id TEXT NOT NULL);").map_err(db_error)?;
