@@ -37,6 +37,13 @@ pub struct Card {
 pub struct Knowledge {
     pool: PgPool,
 }
+fn validate_shared_body(body: &serde_json::Value) -> Result<(), Error> {
+    if wk_summarize::sensitive(&body.to_string()) {
+        Err(Error::Invalid)
+    } else {
+        Ok(())
+    }
+}
 fn db(_: sqlx::Error) -> Error {
     Error::Storage
 }
@@ -173,6 +180,7 @@ impl Knowledge {
         }
         let policy = i64::try_from(body.policy_revision).map_err(|_| Error::Invalid)?;
         let value = serde_json::to_value(&body).map_err(|_| Error::Invalid)?;
+        validate_shared_body(&value)?;
         let mut tx = self.actor_tx(actor).await?;
         // Lock the membership row through insertion so concurrent revocation has an order.
         let allowed=sqlx::query("SELECT 1 FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3 AND services @> $4::text[] AND policy_revision=$5 FOR SHARE").bind(&actor.org).bind(product).bind(&actor.user).bind(&body.service_ids).bind(policy).fetch_optional(&mut *tx).await.map_err(db)?;
@@ -197,20 +205,19 @@ impl Knowledge {
     }
     pub async fn publish(&self, actor: &Actor, product: &str, id: uuid::Uuid) -> Result<(), Error> {
         let mut tx = self.actor_tx(actor).await?;
-        let result=sqlx::query("UPDATE cards c SET published=TRUE WHERE c.id=$1 AND c.org=$2 AND c.product=$3 AND NOT c.withdrawn AND c.body->>'capture_completeness'='complete' AND EXISTS(SELECT 1 FROM memberships m WHERE m.org=c.org AND m.product=c.product AND m.user_id=$4 AND m.can_review AND m.services @> c.services AND m.policy_revision=(c.body->>'policy_revision')::bigint)").bind(id).bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
-        if result.rows_affected() == 0 {
-            return Err(Error::Denied);
-        }
-        let row = sqlx::query(
-            "SELECT id,body,revision,published FROM cards WHERE id=$1 AND org=$2 AND product=$3",
-        )
-        .bind(id)
-        .bind(&actor.org)
-        .bind(product)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db)?;
-        let card = decode(row)?;
+        let row = sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$4 WHERE c.id=$1 AND c.org=$2 AND c.product=$3 AND NOT c.withdrawn AND c.body->>'capture_completeness'='complete' AND m.can_review AND m.services @> c.services AND m.policy_revision=(c.body->>'policy_revision')::bigint FOR UPDATE OF c FOR SHARE OF m")
+            .bind(id).bind(&actor.org).bind(product).bind(&actor.user)
+            .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::Denied)?;
+        let body: serde_json::Value = row.try_get("body").map_err(db)?;
+        validate_shared_body(&body)?;
+        let mut card = decode(row)?;
+        sqlx::query("UPDATE cards SET published=TRUE WHERE id=$1 AND revision=$2")
+            .bind(id)
+            .bind(card.revision)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        card.published = true;
         Self::write_graph(
             &mut tx,
             actor,

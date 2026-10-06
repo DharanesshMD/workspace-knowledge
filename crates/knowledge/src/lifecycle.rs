@@ -79,6 +79,8 @@ impl Knowledge {
         body: CardSubmission,
     ) -> Result<Card, Error> {
         body.validate().map_err(|_| Error::Invalid)?;
+        let v = serde_json::to_value(&body).map_err(|_| Error::Invalid)?;
+        validate_shared_body(&v)?;
         let base =
             i64::try_from(body.base_revision.ok_or(Error::Invalid)?).map_err(|_| Error::Invalid)?;
         let mut tx = self.actor_tx(a).await?;
@@ -88,7 +90,6 @@ impl Knowledge {
             return Err(Error::Conflict);
         }
         sqlx::query("INSERT INTO card_revisions(org,product,card_id,revision,body,changed_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING").bind(&a.org).bind(product).bind(id).bind(base).bind(serde_json::to_value(&old.body).map_err(|_|Error::Invalid)?).bind(&a.user).execute(&mut *tx).await.map_err(db)?;
-        let v = serde_json::to_value(&body).map_err(|_| Error::Invalid)?;
         let r=sqlx::query("UPDATE cards SET body=$1,services=$2,revision=revision+1,published=FALSE WHERE id=$3 RETURNING id,body,revision,published").bind(&v).bind(&body.service_ids).bind(id).fetch_one(&mut *tx).await.map_err(db)?;
         sqlx::query("INSERT INTO card_revisions(org,product,card_id,revision,body,changed_by) VALUES($1,$2,$3,$4,$5,$6)").bind(&a.org).bind(product).bind(id).bind(base+1).bind(v).bind(&a.user).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("DELETE FROM graph_nodes WHERE org=$1 AND product=$2 AND card_id=$3")

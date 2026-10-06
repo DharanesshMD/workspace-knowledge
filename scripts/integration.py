@@ -35,6 +35,13 @@ async def main():
         marker = 'limiter' + secrets.token_hex(8)
         body = {'schema_version': 1, 'idempotency_key': marker, 'policy_revision': 1, 'title': marker, 'intent': 'Synthetic tenant rate limiter', 'rationale': 'Reuse shared middleware', 'decisions': ['Tenant-aware limits'], 'constraints': [], 'open_questions': [], 'service_ids': ['backend'], 'evidence': [], 'lifecycle': 'proposed', 'capture_completeness': 'complete', 'base_revision': None}
         card = post(base + '/v1/cards', token, {'product': 'demo', 'card': body})['card']
+        corrected = dict(body, base_revision=card['revision'], rationale='password = SYNTHETIC-CORRECTION-CANARY')
+        try:
+            post(base + '/v1/cards/' + card['id'] + '/correct', token, {'product': 'demo', 'card': corrected})
+            raise AssertionError('sensitive correction accepted')
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 422
+            assert 'SYNTHETIC-CORRECTION-CANARY' not in exc.read().decode()
         query = {'product': 'demo', 'query': marker, 'limit': 5}
         assert post(base + '/v1/search', token, query)['cards'] == []
         post(base + '/v1/cards/' + card['id'] + '/publish', token, {'product': 'demo'})

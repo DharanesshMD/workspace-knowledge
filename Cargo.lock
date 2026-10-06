@@ -3849,6 +3849,7 @@ dependencies = [
  "url",
  "uuid",
  "wk-contracts",
+ "wk-summarize",
 ]
 
 [[package]]

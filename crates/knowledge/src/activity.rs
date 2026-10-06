@@ -138,7 +138,7 @@ impl Knowledge {
         &self,
         a: &Actor,
         product: &str,
-        u: ActivityUpdate,
+        mut u: ActivityUpdate,
     ) -> Result<(), Error> {
         let session_ok = !u.session_id.is_empty()
             && u.session_id.len() <= 128
@@ -154,6 +154,8 @@ impl Knowledge {
         {
             return Err(Error::Invalid);
         }
+        u.services.sort();
+        u.services.dedup();
         let mut tx = self.actor_tx(a).await?;
         let member = sqlx::query("SELECT 1 FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3 AND services @> $4::text[] FOR SHARE")
             .bind(&a.org).bind(product).bind(&a.user).bind(&u.services)
@@ -161,22 +163,25 @@ impl Knowledge {
         if member.is_none() {
             return Err(Error::Denied);
         }
-        if u.ended {
-            sqlx::query("UPDATE activity SET status='ended', last_seen=now(), expires_at=now() WHERE org=$1 AND product=$2 AND user_id=$3 AND session_id=$4")
-                .bind(&a.org).bind(product).bind(&a.user).bind(&u.session_id)
-                .execute(&mut *tx).await.map_err(db)?;
+        let result = if u.ended {
+            sqlx::query("UPDATE activity SET status='ended', last_seen=now(), expires_at=now() WHERE org=$1 AND product=$2 AND user_id=$3 AND session_id=$4 AND services @> $5::text[] AND $5::text[] @> services")
+                .bind(&a.org).bind(product).bind(&a.user).bind(&u.session_id).bind(&u.services)
+                .execute(&mut *tx).await.map_err(db)?
         } else {
             sqlx::query(
                 "INSERT INTO activity(org,product,user_id,session_id,services,files,intent,status,expires_at)
                  VALUES($1,$2,$3,$4,$5,$6,$7,'active',now()+make_interval(hours=>$8))
                  ON CONFLICT(org,product,user_id,session_id) DO UPDATE SET
-                   services=EXCLUDED.services,
                    files=(SELECT COALESCE(array_agg(f),'{}') FROM (SELECT DISTINCT f FROM unnest(activity.files||EXCLUDED.files) f ORDER BY f LIMIT 200) x),
-                   intent=EXCLUDED.intent, status='active', last_seen=now(), expires_at=EXCLUDED.expires_at",
+                   intent=EXCLUDED.intent, status='active', last_seen=now(), expires_at=EXCLUDED.expires_at
+                 WHERE activity.services @> EXCLUDED.services AND EXCLUDED.services @> activity.services",
             )
             .bind(&a.org).bind(product).bind(&a.user).bind(&u.session_id).bind(&u.services).bind(&u.files)
             .bind(u.intent.trim()).bind(ACTIVE_HOURS as i32)
-            .execute(&mut *tx).await.map_err(db)?;
+            .execute(&mut *tx).await.map_err(db)?
+        };
+        if result.rows_affected() != 1 {
+            return Err(Error::Conflict);
         }
         tx.commit().await.map_err(db)
     }
