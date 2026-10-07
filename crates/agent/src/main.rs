@@ -1,5 +1,7 @@
 mod chat;
 mod compliance;
+mod cursor_capture;
+mod cursor_source;
 mod daemon;
 mod network;
 mod process;
@@ -40,6 +42,11 @@ enum Command {
         yes: bool,
     },
     Serve,
+    /// Opt in to private Cursor 3.23.23 local session recovery (24 hours, reviewed sharing).
+    CursorEnroll {
+        #[arg(long)]
+        yes: bool,
+    },
     Hook {
         #[arg(long)]
         client: String,
@@ -211,6 +218,19 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 json!({"enrolled":true,"capture_enabled":false,"next":"wk-agent serve","automatic_publication":false}),
             )
         }
+        Command::CursorEnroll { yes } => {
+            if !yes {
+                return Err("pass --yes to allow private recovery of callback-bound Cursor 3.23.23 local sessions for 24 hours; sharing requires review".into());
+            }
+            let c = state::load(&state)?;
+            let b = state::binding(&c)?;
+            let t = state::token(&state, "server-token")?;
+            network::policy(&c, &b, &t).await?;
+            cursor_source::enroll(&state)?;
+            Ok(
+                json!({"native_cursor_enrolled":true,"version":cursor_source::VERSION,"surface":"agents-local","raw_ttl_hours":24,"automatic_publication":false,"missed_initial_sessions":"undetectable"}),
+            )
+        }
         Command::Serve => daemon::serve(state).await,
         Command::Hook { client, event } => {
             let input: Value =
@@ -296,7 +316,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 .await
                 .unwrap_or(json!({"available":false}));
             Ok(
-                json!({"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
+                json!({"native_cursor":cursor_capture::status(&state).unwrap_or(json!({"unavailable":true})),"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
             )
         }
         Command::Config { client } => wk_adapters::config(

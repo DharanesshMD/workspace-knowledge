@@ -158,10 +158,15 @@ fn limits_hold_instead_of_truncating() {
 
 #[test]
 fn observed_record_layout_preserves_visible_decision_and_file_evidence() {
-    let (_d,b)=setup();
-    let s=parse_transcript(include_bytes!("fixtures/cursor-session-v3.jsonl"),&b,"frontend").unwrap();
-    assert_eq!(s.turns.len(),1);
-    assert_eq!(s.turns[0].response,"Retries require idempotency.");
-    assert_eq!(s.turns[0].files_read,vec!["frontend/a.ts"]);
-    assert_eq!(s.turns[0].messages,MessageState::Complete);
+    let (_d, b) = setup();
+    let s = parse_transcript(
+        include_bytes!("fixtures/cursor-session-v3.jsonl"),
+        &b,
+        "frontend",
+    )
+    .unwrap();
+    assert_eq!(s.turns.len(), 1);
+    assert_eq!(s.turns[0].response, "Retries require idempotency.");
+    assert_eq!(s.turns[0].files_read, vec!["frontend/a.ts"]);
+    assert_eq!(s.turns[0].messages, MessageState::Complete);
 }

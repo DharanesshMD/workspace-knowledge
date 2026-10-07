@@ -90,6 +90,10 @@ pub fn now() -> Result<i64, String> {
         .as_secs() as i64)
 }
 pub async fn capture(dir: &Path, client: &str, payload: &Value) -> Result<Option<String>, String> {
+    if client == "cursor" && dir.join("cursor-consent.json").exists() {
+        crate::cursor_capture::receive(dir, payload).await?;
+        return Ok(Some("native_observation".into()));
+    }
     let Some(o) = wk_adapters::normalize(client, payload)? else {
         return Ok(None);
     };

@@ -62,3 +62,32 @@ fn guarded_draft_cannot_be_regenerated_after_submit_or_expiry() {
     assert!(s.seen("draft:b").unwrap());
     assert!(s.read_record("draft:b", 60).unwrap().is_none());
 }
+
+#[test]
+fn cleanup_does_not_need_a_server_and_guards_survive() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = LocalStore::open(&d.path().join("db"), [7; 32], 4096).unwrap();
+    s.update("native:test", 100, 10, |_| Ok(b"synthetic".to_vec()))
+        .unwrap();
+    assert_eq!(s.purge_expired(110).unwrap(), 1);
+    assert!(s.update("native:test", 111, 10, |_| Ok(vec![])).is_err());
+}
+#[test]
+fn native_scan_rotates_without_disturbing_legacy_scan() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = LocalStore::open(&d.path().join("db"), [7; 32], 100_000).unwrap();
+    for n in 0..25 {
+        s.update(&format!("native:{n:03}"), 100, 100, |_| Ok(vec![]))
+            .unwrap();
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for _ in 0..3 {
+        ids.extend(s.next_ids("native", "native:", 101, 10).unwrap());
+        assert!(s.next_session_ids(101).unwrap().is_empty());
+    }
+    assert_eq!(ids.len(), 25);
+    assert_eq!(
+        s.next_ids("native", "native:", 101, 10).unwrap()[0],
+        "native:000"
+    );
+}

@@ -3,6 +3,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 pub async fn run(dir: &Path) -> Result<Value, String> {
+    state::store(dir)?.purge_expired(daemon::now()?)?;
+    crate::cursor_capture::reconcile(dir).await?;
     if dir.join("capture-gap.json").exists() {
         return Err("capture gap requires reset into a clean session".into());
     }
@@ -12,7 +14,7 @@ pub async fn run(dir: &Path) -> Result<Value, String> {
     let policy = network::policy(&c, &b, &token).await?;
     let mut store = state::store(dir)?;
     let ids = store.next_session_ids(daemon::now()?)?;
-    let mut drafts = 0;
+    let mut drafts = native_run(dir, &c, &b, &policy).await?;
     let mut held = 0;
     for id in ids {
         let Some(bytes) = store.read_record(&id, daemon::now()?)? else {
@@ -134,6 +136,40 @@ pub async fn submit(dir: &Path, id: &str) -> Result<Value, String> {
         .read_record(id, daemon::now()?)?
         .ok_or("draft expired or unavailable")?;
     let v: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid private draft")?;
+    if v.get("native_turn_index").is_some() {
+        let key = v["source_id"].as_str().ok_or("missing_source")?;
+        crate::cursor_capture::reconcile_one(dir, key).await?;
+        let source =
+            crate::cursor_capture::read(&s, key, daemon::now()?)?.ok_or("source_expired")?;
+        let latest = state::binding(&c)?;
+        let consent = crate::cursor_source::load(dir)?;
+        let policy = network::policy(&c, &latest, &t).await?;
+        if consent.policy_hash != latest.policy_hash
+            || !native_matches(
+                &v,
+                &source.turns,
+                source.held.is_some(),
+                &latest.policy_hash,
+                policy["policy_revision"].as_u64().ok_or("invalid_policy")?,
+                source.expires_at,
+                daemon::now()?,
+            )
+        {
+            return Err("source_or_policy_changed_review_required".into());
+        }
+        if wk_summarize::sensitive(&v["card"].to_string()) {
+            return Err("sensitive_summary".into());
+        }
+        let response = network::post(
+            &c,
+            &t,
+            "/v1/cards",
+            &json!({"product":latest.product,"card":v["card"]}),
+        )
+        .await?;
+        s.ack(id)?;
+        return Ok(response);
+    }
     let source = s
         .read_record(
             v["source_id"].as_str().ok_or("missing source")?,
@@ -174,4 +210,212 @@ pub async fn submit(dir: &Path, id: &str) -> Result<Value, String> {
     .await?;
     s.ack(id)?;
     Ok(response)
+}
+
+fn native_eligible(turn: &wk_adapters::cursor_session::CursorTurn, held: bool) -> bool {
+    !held
+        && turn.messages == wk_adapters::cursor_session::MessageState::Complete
+        && turn.scope == wk_adapters::cursor_session::ScopeState::Verified
+}
+#[allow(clippy::too_many_arguments)]
+fn native_matches(
+    draft: &Value,
+    turns: &[wk_adapters::cursor_session::CursorTurn],
+    held: bool,
+    policy_hash: &str,
+    revision: u64,
+    expires: i64,
+    now: i64,
+) -> bool {
+    expires > now
+        && draft["policy_hash"] == policy_hash
+        && draft["card"]["policy_revision"] == revision
+        && turns.iter().any(|t| {
+            native_eligible(t, held)
+                && draft["native_turn_index"] == t.index
+                && draft["source_digest"] == t.digest
+        })
+}
+async fn native_run(
+    dir: &Path,
+    c: &state::Config,
+    b: &wk_scope::enrollment::Binding,
+    policy: &Value,
+) -> Result<usize, String> {
+    let mut store = state::store(dir)?;
+    let ids = store.next_ids("native-inference", "native:", daemon::now()?, 10)?;
+    let mut created = 0;
+    for id in ids {
+        let Some(session) = crate::cursor_capture::read(&store, &id, daemon::now()?)? else {
+            continue;
+        };
+        if session.policy_hash != b.policy_hash || session.source.is_none() {
+            continue;
+        }
+        for turn in &session.turns {
+            if !native_eligible(turn, session.held.is_some()) {
+                continue;
+            }
+            let hash = format!(
+                "{:x}",
+                Sha256::digest(
+                    serde_json::to_vec(&(
+                        &id,
+                        turn.index,
+                        &turn.digest,
+                        &b.policy_hash,
+                        &policy["policy_revision"],
+                        &c.model,
+                        "native-v1"
+                    ))
+                    .map_err(|_| "invalid_native_turn")?
+                )
+            );
+            let key = format!("draft:{hash}");
+            if store.seen(&key)? {
+                continue;
+            }
+            let source = format!("user: {}\nassistant: {}", turn.prompt, turn.response);
+            let Ok(extract) = wk_summarize::extract(&c.inference, &c.model, &source).await else {
+                continue;
+            };
+            let mut card = wk_summarize::card(
+                extract,
+                hash,
+                policy["policy_revision"].as_u64().ok_or("invalid_policy")?,
+                vec![c.service.clone()],
+                true,
+            )?;
+            let files = turn
+                .files_read
+                .iter()
+                .chain(&turn.files_changed)
+                .collect::<std::collections::BTreeSet<_>>();
+            for file in files {
+                card.evidence.push(wk_contracts::Evidence {
+                    kind: wk_contracts::EvidenceKind::FileObservation,
+                    reference: file.clone(),
+                });
+            }
+            card.validate()?;
+            if wk_summarize::sensitive(&serde_json::to_string(&card).map_err(|_| "invalid_card")?) {
+                continue;
+            }
+            let draft = json!({"card":card,"source_id":id,"source_digest":turn.digest,"native_turn_index":turn.index,"source_boundary":"Cursor 3.23.23 local visible text","policy_hash":b.policy_hash,"model":c.model,"prompt_version":1,"privacy_policy_version":1});
+            // Inference is slow. Reconcile under current permission before retaining its result.
+            if crate::cursor_capture::reconcile_one(dir, &id)
+                .await
+                .is_err()
+            {
+                continue;
+            }
+            let current = crate::cursor_capture::read(&store, &id, daemon::now()?)?
+                .ok_or("source_expired")?;
+            let latest = state::binding(c)?;
+            let token = state::token(dir, "server-token")?;
+            let p = network::policy(c, &latest, &token).await?;
+            if !native_matches(
+                &draft,
+                &current.turns,
+                current.held.is_some(),
+                &latest.policy_hash,
+                p["policy_revision"].as_u64().ok_or("invalid_policy")?,
+                current.expires_at,
+                daemon::now()?,
+            ) {
+                continue;
+            }
+            let ttl = (current.expires_at - daemon::now()?).min(3600);
+            if ttl <= 0 {
+                continue;
+            }
+            let encoded = serde_json::to_vec(&draft).map_err(|_| "invalid_draft")?;
+            store.update(&key, daemon::now()?, ttl, |old| {
+                Ok(old.map_or(encoded.clone(), |b| b.to_vec()))
+            })?;
+            created += 1;
+            if created >= 10 {
+                return Ok(created);
+            }
+        }
+    }
+    Ok(created)
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    use wk_adapters::cursor_session::{CursorTurn, MessageState, ScopeState};
+    fn turn() -> CursorTurn {
+        CursorTurn {
+            index: 0,
+            prompt: "Retries".into(),
+            response: "Use idempotency".into(),
+            files_read: vec![],
+            files_changed: vec![],
+            messages: MessageState::Complete,
+            scope: ScopeState::Verified,
+            digest: "digest".into(),
+        }
+    }
+    #[test]
+    fn native_completeness_requires_verified_scope_and_no_hold() {
+        let mut t = turn();
+        assert!(native_eligible(&t, false));
+        assert!(!native_eligible(&t, true));
+        for scope in [ScopeState::Unknown, ScopeState::Violated] {
+            t.scope = scope;
+            assert!(!native_eligible(&t, false));
+        }
+        t.scope = ScopeState::Verified;
+        t.messages = MessageState::Partial;
+        assert!(!native_eligible(&t, false));
+    }
+    #[test]
+    fn native_review_rejects_mutation_expiry_revocation_and_accepts_later_safe_turns() {
+        let t = turn();
+        let draft = json!({"native_turn_index":0,"source_digest":"digest","policy_hash":"p","card":{"policy_revision":1}});
+        assert!(native_matches(
+            &draft,
+            &[t.clone()],
+            false,
+            "p",
+            1,
+            200,
+            100
+        ));
+        let mut later = t.clone();
+        later.index = 1;
+        assert!(native_matches(
+            &draft,
+            &[t.clone(), later],
+            false,
+            "p",
+            1,
+            200,
+            100
+        ));
+        let mut changed = t.clone();
+        changed.digest = "edited".into();
+        assert!(!native_matches(&draft, &[changed], false, "p", 1, 200, 100));
+        assert!(!native_matches(
+            &draft,
+            &[t.clone()],
+            false,
+            "p",
+            1,
+            100,
+            100
+        ));
+        assert!(!native_matches(
+            &draft,
+            &[t.clone()],
+            false,
+            "p",
+            2,
+            200,
+            100
+        ));
+        assert!(!native_matches(&draft, &[t], true, "p", 1, 200, 100));
+    }
 }
