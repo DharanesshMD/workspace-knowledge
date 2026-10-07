@@ -36,6 +36,7 @@ fn visible_user(text: &str) -> Result<String, ()> {
     // Only known injected wrappers are discarded. Unknown wrappers/attachments are held.
     let mut rest = text.to_string();
     for tag in [
+        "timestamp",
         "system_reminder",
         "environment_details",
         "user_info",

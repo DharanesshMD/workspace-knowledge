@@ -44,6 +44,7 @@ pub struct Notice {
     pub summary: String,
     pub matched_files: Vec<String>,
     pub card_id: Option<uuid::Uuid>,
+    pub revision: Option<i64>,
     pub lifecycle: Option<String>,
     pub open_questions: Vec<String>,
     pub when_ms: i64,
@@ -295,6 +296,7 @@ impl Knowledge {
                     summary: clip(&intent, 200),
                     matched_files: matched,
                     card_id: None,
+                    revision: None,
                     lifecycle: None,
                     open_questions: vec![],
                     when_ms: seen,
@@ -312,7 +314,7 @@ impl Knowledge {
                 .map(|d| format!("{}/%", d.replace('%', "\\%").replace('_', "\\_")))
                 .collect();
             let rows = sqlx::query(
-                "SELECT c.id,c.author,c.body,(extract(epoch from c.created_at)*1000)::bigint AS at FROM cards c
+                "SELECT c.id,c.revision,c.author,c.body,(extract(epoch from c.created_at)*1000)::bigint AS at FROM cards c
                  JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$3
                  WHERE c.org=$1 AND c.product=$2 AND c.author<>$3 AND c.published AND NOT c.withdrawn AND m.services @> c.services
                  AND EXISTS(SELECT 1 FROM jsonb_array_elements(c.body->'evidence') e WHERE e->>'kind'='file_observation'
@@ -341,6 +343,7 @@ impl Knowledge {
                     by,
                     r.try_get("author").map_err(db)?,
                     id,
+                    r.try_get("revision").map_err(db)?,
                     &body,
                     matched,
                     r.try_get("at").map_err(db)?,
@@ -367,6 +370,7 @@ impl Knowledge {
             match same {
                 Some(active) => {
                     active.card_id = card.card_id;
+                    active.revision = card.revision;
                     if !card.open_questions.is_empty() {
                         active
                             .text
@@ -381,7 +385,7 @@ impl Knowledge {
         // 3. Similar intent elsewhere (text match), e.g. someone tried the same thing.
         if let Some(tsq) = query.and_then(or_query) {
             let rows = sqlx::query(
-                "SELECT c.id,c.author,c.body,(extract(epoch from c.created_at)*1000)::bigint AS at FROM cards c
+                "SELECT c.id,c.revision,c.author,c.body,(extract(epoch from c.created_at)*1000)::bigint AS at FROM cards c
                  JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$3
                  WHERE c.org=$1 AND c.product=$2 AND c.author<>$3 AND c.published AND NOT c.withdrawn AND m.services @> c.services
                  AND to_tsvector('simple',(c.body->>'title')||' '||(c.body->>'intent')||' '||(c.body->>'rationale')) @@ to_tsquery('simple',$4)
@@ -401,6 +405,7 @@ impl Knowledge {
                     "text",
                     r.try_get("author").map_err(db)?,
                     id,
+                    r.try_get("revision").map_err(db)?,
                     &body,
                     vec![],
                     r.try_get("at").map_err(db)?,
@@ -419,6 +424,7 @@ fn card_notice(
     by: &'static str,
     developer: String,
     id: uuid::Uuid,
+    revision: i64,
     body: &Value,
     matched: Vec<String>,
     at: i64,
@@ -491,6 +497,7 @@ fn card_notice(
         summary: title,
         matched_files: matched,
         card_id: Some(id),
+        revision: Some(revision),
         lifecycle: Some(lifecycle),
         open_questions: open,
         when_ms: at,
@@ -507,7 +514,10 @@ pub fn render(notices: &[Notice]) -> String {
     for (i, n) in notices.iter().enumerate() {
         out.push_str(&format!("{}. {}", i + 1, n.text));
         if let Some(id) = n.card_id {
-            out.push_str(&format!(" [card {id}]"));
+            match n.revision {
+                Some(revision) => out.push_str(&format!(" [card {id}, revision {revision}]")),
+                None => out.push_str(&format!(" [card {id}]")),
+            };
         }
         out.push('\n');
     }
@@ -573,6 +583,7 @@ mod tests {
             "file",
             "developer-a".into(),
             uuid::Uuid::nil(),
+            1,
             &serde_json::json!({"title":"Chapter graphics","intent":"Redesign motion","lifecycle":"superseded","decisions":["Rotate gradient only"],"open_questions":["Mobile breakpoints"]}),
             vec!["components/x.tsx".into()],
             0,
@@ -584,5 +595,6 @@ mod tests {
         ));
         assert!(text.contains("1. developer-a changed `components/x.tsx` 3 days ago: Chapter graphics. This was an earlier attempt, now superseded."));
         assert!(text.contains("Still open: Mobile breakpoints."));
+        assert!(text.contains("revision 1"));
     }
 }

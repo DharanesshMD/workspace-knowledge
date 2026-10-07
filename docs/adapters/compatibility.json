@@ -1,1 +1,60 @@
-{"schema_version":1,"certified_clients":[],"adapters":[{"client":"Cursor","surface":"IDE","status":"partial","method":"native hook fields","live_tested":false},{"client":"Claude Code","surface":"CLI/Code mode","status":"partial","method":"native hook fields","live_tested":false},{"client":"Gemini CLI","status":"partial","method":"native hook fields","live_tested":false},{"client":"Codex","surface":"CLI/Desktop","status":"unsupported-native-capture","retrieval":"stdio MCP","alternative":"instrumented local chat"},{"client":"Antigravity","status":"unsupported-native-capture","retrieval":"stdio MCP","alternative":"instrumented local chat"},{"client":"Claude Desktop","surface":"general chat","status":"partial","method":"explicit bound Enterprise Compliance chat pull","requires":"Enterprise read entitlement and isolated broker","live_tested":false},{"client":"Workspace Knowledge managed chat","status":"implemented-unverified","method":"controlled visible prompt/response capture","provider":"loopback OpenAI-compatible chat endpoint"}]}
+{
+  "schema_version": 1,
+  "certified_clients": [],
+  "adapters": [
+    {
+      "client": "Cursor",
+      "surface": "macOS Agents window / This Mac",
+      "version": "3.23.23",
+      "status": "implemented-opt-in-certification-pending",
+      "method": "authenticated hooks plus securely bound transcript recovery",
+      "live_tested": "partial; see native capture results",
+      "limitations": [
+        "initial missed sessions undetectable",
+        "unsupported context holds",
+        "24-hour fixed collector retention",
+        "review required"
+      ]
+    },
+    {
+      "client": "Claude Code",
+      "surface": "CLI/Code mode",
+      "status": "partial",
+      "method": "native hook fields",
+      "live_tested": false
+    },
+    {
+      "client": "Gemini CLI",
+      "status": "partial",
+      "method": "native hook fields",
+      "live_tested": false
+    },
+    {
+      "client": "Codex",
+      "surface": "CLI/Desktop",
+      "status": "adapter-not-implemented",
+      "retrieval": "stdio MCP",
+      "alternative": "instrumented local chat"
+    },
+    {
+      "client": "Antigravity",
+      "status": "adapter-not-implemented",
+      "retrieval": "stdio MCP",
+      "alternative": "instrumented local chat"
+    },
+    {
+      "client": "Claude Desktop",
+      "surface": "general chat",
+      "status": "partial",
+      "method": "explicit bound Enterprise Compliance chat pull",
+      "requires": "Enterprise read entitlement and isolated broker",
+      "live_tested": false
+    },
+    {
+      "client": "Workspace Knowledge managed chat",
+      "status": "implemented-unverified",
+      "method": "controlled visible prompt/response capture",
+      "provider": "loopback OpenAI-compatible chat endpoint"
+    }
+  ]
+}

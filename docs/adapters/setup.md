@@ -8,7 +8,7 @@ Build the workspace. Commands below are operator instructions, not actions perfo
 4. Generate hook config with `wk-agent --state-dir /private/collector config --client cursor` (also `claude-code`, `gemini`). Inspect the fragment, then use `install --client CLIENT --file ABS_CONFIG --yes`. Installation merges strict JSON, backs up the prior object privately, and records owned entries. JSONC is refused unchanged. Uninstall removes exact owned entries and preserves user-modified entries. Do not install into real profiles until synthetic client certification is complete.
 5. `doctor` separately reports local approval, current membership, key availability, event counters and client capability labels. It does not turn untested fields green. Refresh an expired server token with `WK_ACCESS_TOKEN=... wk-agent --state-dir ... auth` through your normal secret-entry mechanism.
 
-A hook failure returns normally to the developer's agent and records a content-free capture gap locally. Knowledge generation/submission stops until `reset-capture --yes` closes pending sessions and discards private drafts. Then start a genuinely new client session. Restarts alone must not change client session identity. Hooks do not extract thinking/reasoning or read transcript paths supplied by clients. Product cwd is attribution metadata, not proof that all model context was in scope. Unknown external context therefore prevents automatic publication.
+A hook failure returns normally to the developer's agent and records a content-free capture gap locally. Knowledge generation/submission stops until `reset-capture --yes` closes pending sessions and discards private drafts. Then start a genuinely new client session. Restarts alone must not change client session identity. Hooks do not extract thinking/reasoning. The opt-in Cursor recovery described below validates callback-supplied transcript paths before a background reader may open them; other hooks do not read transcript paths. Product cwd is attribution metadata, not proof that all model context was in scope. Unknown external context therefore prevents automatic publication.
 
 ## Private summaries and review
 
@@ -43,3 +43,29 @@ Use `--cursor-dir` for a non-standard install. Masking is pattern-based and not 
 Installed hooks also deliver "who else is working on this" notices (see [overlap notices](../architecture/overlap-notices.md)): Claude Code at prompt submit (locally extracted keywords only) and before file edits; Cursor after edit tools (`postToolUse`; Cursor cannot inject before a prompt or edit). Edits send activity heartbeats with workspace-relative paths only. Use `wk-agent --state-dir DIR activity pause` to stop sharing your activity (and clear it on the server), `activity resume` to restart, and `activity status` to check. MCP clients can call `knowledge.overlaps` directly; add a project rule asking the agent to call it before editing shared code.
 
 To build cards from your own Cursor history for evaluation: `wk cursor-history cards --workspace /work/product --latest 10 --service SERVICE --out /private/dir/cards.jsonl` (local Ollama `gemma4:e2b-mlx` by default; `--endpoint`/`--model` to change). Then `python3 scripts/history-eval.py cards.jsonl --repo /work/product --report /private/dir/report.json` with `WK_TEST_DATABASE_URL` pointing at a disposable `wk_test` database.
+
+
+## Cursor native recovery (opt-in)
+
+Target: Cursor **3.23.23**, macOS, Agents window, **This Mac** execution. Standard installation does not enable transcript reads. After the existing folder approval, membership and collector init steps:
+
+```sh
+wk-agent --state-dir /private/collector cursor-enroll --yes
+wk-agent --state-dir /private/collector config --client cursor
+wk-agent --state-dir /private/collector install --client cursor --file /work/product/.cursor/hooks.json --yes
+wk-agent --state-dir /private/collector serve
+```
+
+Enrollment checks the installed `/Applications/Cursor.app` version and records private consent for the current product/service. A differently located installation or version is unsupported. Keep the collector running in the signed-in user's session. On macOS, rebuilding or replacing a binary can trigger Keychain prompts for its existing credentials; allow only the expected Workspace Knowledge items. This has been observed during live testing; stable signed release packaging remains required.
+
+`doctor` reports `native_cursor`: waiting for binding, watching, stale or held counts, fixed-label hold reasons, recovered complete turns and last-check time. Counts are capped at 100 sessions. A callback must identify the one approved workspace and a session-specific transcript. A missing initial callback is undetectable; the collector never searches global Cursor history. A received callback without a source is **waiting_for_binding**, not complete capture.
+
+Once bound, the 15-second worker reads at most ten sources per pass. Source limits are 4 MiB, 256 KiB per record, 100 turns and 768 KiB retained session data. Raw records expire 24 hours after first receipt; subsequent callbacks cannot extend the deadline. Independent cleanup runs even when the server or inference is unavailable. Cursor's own transcript retention is outside this collector's control.
+
+Only supported visible text, supported terminal success and verified in-service file operations can produce complete candidates. Incomplete/error turns stay partial. Unknown transcript structures, compaction, child agents, attachments, shell/MCP tools and outside-service context hold the session. Conservative text screening can also hold benign discussions containing sensitive keywords. Held, reset and expired sessions cannot resume; start a genuinely new Cursor chat. This is intentionally narrower than arbitrary mixed-context development.
+
+Use `drafts` to review locally, then `submit --id DRAFT_ID --reviewed`. Submission checks the source again under current consent and membership. A separate authorized reviewer publishes the submitted card. Local raw text and transcript paths are never added to shared card metadata. Native captures do not automatically publish or prove implementation/test success. Relative file observations support authorized overlap notices with card revisions.
+
+For rollback: uninstall only the owned project hooks with `uninstall --client cursor --file /work/product/.cursor/hooks.json`; run `reset-capture --yes` to close pending records; remove the private state's `cursor-consent.json` and stop the collector. Keep reviewed shared cards unless their owners separately withdraw them. Re-enrollment is required to enable source reads again.
+
+Verification evidence and remaining gates: [native capture results](../reviews/2026-10-06-cursor-native-capture-results.md). The executable harness uses only an explicitly disposable `/wk_test` database, owned synthetic transcripts, real OS keyring and an explicit local model; it never imports existing developer history.

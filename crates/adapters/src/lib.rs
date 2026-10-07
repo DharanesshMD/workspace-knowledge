@@ -136,7 +136,7 @@ pub fn normalize(client: &str, v: &Value) -> Result<Option<Observation>, String>
     }))
 }
 pub fn capabilities() -> Value {
-    json!({"cursor":{"status":"partial","prompt":true,"response":true,"live_certified":false},"claude-code":{"status":"partial","prompt":true,"response":true,"live_certified":false},"gemini":{"status":"partial","prompt":true,"response":true,"live_certified":false},"codex":{"status":"unsupported-native","alternative":"managed-chat"},"antigravity":{"status":"unsupported-native","alternative":"managed-chat"},"claude-desktop":{"status":"enterprise-bound-chat-or-managed-chat","mcp_is_capture":false}})
+    json!({"cursor":{"status":"opt-in-native-recovery","native_version":"3.23.23","native_surface":"macOS Agents local","prompt":true,"response":true,"live_certified":false},"claude-code":{"status":"partial","prompt":true,"response":true,"live_certified":false},"gemini":{"status":"partial","prompt":true,"response":true,"live_certified":false},"codex":{"status":"adapter-not-implemented","alternative":"managed-chat"},"antigravity":{"status":"adapter-not-implemented","alternative":"managed-chat"},"claude-desktop":{"status":"enterprise-bound-chat-or-managed-chat","mcp_is_capture":false}})
 }
 /// Generate a merge fragment only; caller must explicitly choose a config file.
 pub fn config(client: &str, executable: &Path, state: &Path) -> Result<Value, String> {

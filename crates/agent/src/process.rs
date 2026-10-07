@@ -377,7 +377,7 @@ mod native_tests {
         let draft = json!({"native_turn_index":0,"source_digest":"digest","policy_hash":"p","card":{"policy_revision":1}});
         assert!(native_matches(
             &draft,
-            &[t.clone()],
+            std::slice::from_ref(&t),
             false,
             "p",
             1,
@@ -400,7 +400,7 @@ mod native_tests {
         assert!(!native_matches(&draft, &[changed], false, "p", 1, 200, 100));
         assert!(!native_matches(
             &draft,
-            &[t.clone()],
+            std::slice::from_ref(&t),
             false,
             "p",
             1,
@@ -409,7 +409,7 @@ mod native_tests {
         ));
         assert!(!native_matches(
             &draft,
-            &[t.clone()],
+            std::slice::from_ref(&t),
             false,
             "p",
             2,

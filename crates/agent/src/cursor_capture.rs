@@ -136,7 +136,7 @@ pub async fn receive(dir: &Path, p: &Value) -> Result<Value, String> {
     if network::policy(&c, &b, &token).await.is_err() {
         store.update(&key, now, 86400, |old| {
             let mut s = old
-                .map(|v| serde_json::from_slice::<NativeSession>(v))
+                .map(serde_json::from_slice::<NativeSession>)
                 .transpose()
                 .map_err(|_| "invalid_native_session")?
                 .unwrap_or_else(|| NativeSession::new(b.policy_hash.clone(), now));
@@ -166,7 +166,7 @@ pub async fn receive(dir: &Path, p: &Value) -> Result<Value, String> {
     );
     store.update(&key, now, 86400, |old| {
         let mut s = old
-            .map(|v| serde_json::from_slice::<NativeSession>(v))
+            .map(serde_json::from_slice::<NativeSession>)
             .transpose()
             .map_err(|_| "invalid_native_session")?
             .unwrap_or_else(|| NativeSession::new(b.policy_hash.clone(), now));
@@ -314,10 +314,14 @@ pub fn status(dir: &Path) -> Result<Value, String> {
     store.purge_expired(now)?;
     let ids = store.pending_ids("native:", "", now, 100)?;
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut reasons = std::collections::BTreeMap::<String, usize>::new();
     let mut turns = 0;
     let mut last = 0;
     for key in &ids {
         if let Some(s) = read(&store, key, now)? {
+            if let Some(reason) = &s.held {
+                *reasons.entry(reason.clone()).or_default() += 1;
+            }
             let label = if s.held.is_some() {
                 "held"
             } else if s.source.is_none() {
@@ -337,7 +341,7 @@ pub fn status(dir: &Path) -> Result<Value, String> {
         }
     }
     Ok(
-        json!({"enrolled":dir.join("cursor-consent.json").exists(),"version":cursor_source::VERSION,"surface":"agents-local","sessions":counts,"counts_capped":ids.len()==100,"recovered_complete_turns":turns,"last_checked":last,"missed_initial_sessions":"undetectable","automatic_publication":false}),
+        json!({"enrolled":dir.join("cursor-consent.json").exists(),"version":cursor_source::VERSION,"surface":"agents-local","sessions":counts,"hold_reasons":reasons,"counts_capped":ids.len()==100,"recovered_complete_turns":turns,"last_checked":last,"missed_initial_sessions":"undetectable","automatic_publication":false}),
     )
 }
 

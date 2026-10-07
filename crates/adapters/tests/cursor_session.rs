@@ -170,3 +170,12 @@ fn observed_record_layout_preserves_visible_decision_and_file_evidence() {
     assert_eq!(s.turns[0].files_read, vec!["frontend/a.ts"]);
     assert_eq!(s.turns[0].messages, MessageState::Complete);
 }
+
+#[test]
+fn observed_cursor_timestamp_wrapper_is_metadata_and_error_terminal_stays_partial() {
+    let (_d, b) = setup();
+    let s=parse_transcript(&bytes(vec![text("user","<timestamp>Wednesday, Oct 7, 2026, 10:03 AM (UTC+5:30)</timestamp>\n<user_query>Bound retries</user_query>"),text("assistant","Reading the file"),json!({"type":"turn_ended","status":"error"})]),&b,"frontend").unwrap();
+    assert!(s.held_reason.is_none());
+    assert_eq!(s.turns[0].prompt, "Bound retries");
+    assert_eq!(s.turns[0].messages, MessageState::Partial);
+}
