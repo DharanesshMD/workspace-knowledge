@@ -124,6 +124,76 @@ pub fn read(
         .map(|v| serde_json::from_slice(&v).map_err(|_| "invalid_native_session".into()))
         .transpose()
 }
+fn hook_scope(p: &Value, b: &wk_scope::enrollment::Binding, service: &str) -> ScopeState {
+    let event = p["hook_event_name"].as_str().unwrap_or("");
+    let input = match event {
+        "beforeReadFile" | "afterFileEdit" => p,
+        "postToolUse" => {
+            if !matches!(
+                p["tool_name"].as_str(),
+                Some("Read" | "ReadFile" | "StrReplace" | "Write" | "Edit" | "Delete")
+            ) {
+                return ScopeState::Unknown;
+            }
+            &p["tool_input"]
+        }
+        "sessionStart" | "beforeSubmitPrompt" | "afterAgentResponse" | "stop" => {
+            return ScopeState::Verified
+        }
+        _ => return ScopeState::Unknown,
+    };
+    let mut found = false;
+    for field in ["path", "file_path"] {
+        if let Some(raw) = input.get(field) {
+            let Some(raw) = raw.as_str() else {
+                return ScopeState::Unknown;
+            };
+            found = true;
+            let path = Path::new(raw);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                b.root.join(path)
+            };
+            if !b.eligible(&path)
+                || !path
+                    .canonicalize()
+                    .is_ok_and(|p| p.starts_with(b.root.join(service)))
+            {
+                return ScopeState::Violated;
+            }
+        }
+    }
+    if found {
+        ScopeState::Verified
+    } else {
+        ScopeState::Unknown
+    }
+}
+fn merge_checkpoint(
+    original: &NativeSession,
+    mut proposed: NativeSession,
+    mut latest: NativeSession,
+) -> NativeSession {
+    if latest.held.is_some() {
+        return latest;
+    }
+    if proposed.held.is_some() {
+        proposed.observations.clear();
+        return proposed;
+    }
+    if latest.source != proposed.source {
+        latest.hold("concurrent_source_change");
+        return latest;
+    }
+    // Compare the checkpoint read before I/O, not merely the source inode.
+    // Another reconciliation won: retain its complete checkpoint, including suffix digest.
+    if latest.consumed != original.consumed || latest.prefix_digest != original.prefix_digest {
+        return latest;
+    }
+    proposed.observations = latest.observations;
+    proposed
+}
 pub async fn receive(dir: &Path, p: &Value) -> Result<Value, String> {
     let c = state::load(dir)?;
     let b = state::binding(&c)?;
@@ -150,7 +220,12 @@ pub async fn receive(dir: &Path, p: &Value) -> Result<Value, String> {
         return Ok(json!({"held":true}));
     }
     // Binding is metadata-only and only follows successful scope/permission checks.
-    let source = cursor_source::bind(&c, &consent, p, now);
+    let scope = hook_scope(p, &b, &c.service);
+    let source = if scope == ScopeState::Verified {
+        cursor_source::bind(&c, &consent, p, now)
+    } else {
+        Ok(None)
+    };
     let event = p["hook_event_name"].as_str().unwrap_or("");
     let observation = format!(
         "{:x}",
@@ -175,6 +250,10 @@ pub async fn receive(dir: &Path, p: &Value) -> Result<Value, String> {
         }
         if s.policy_hash != b.policy_hash {
             s.hold("policy_changed");
+            return s.encode();
+        }
+        if scope != ScopeState::Verified {
+            s.hold("callback_scope_unverified");
             return s.encode();
         }
         match source {
@@ -225,6 +304,7 @@ pub async fn reconcile_one(dir: &Path, key: &str) -> Result<(), String> {
     if session.held.is_some() {
         return Err("source_held".into());
     }
+    let original = session.clone();
     let result = async {
         if dir.join("capture-gap.json").exists() {
             return Err("capture_gap".to_string());
@@ -275,21 +355,9 @@ pub async fn reconcile_one(dir: &Path, key: &str) -> Result<(), String> {
     }
     session.last_checked = daemon::now()?;
     store.update(key, daemon::now()?, 86400, |old| {
-        let mut latest: NativeSession = serde_json::from_slice(old.ok_or("source_expired")?)
+        let latest: NativeSession = serde_json::from_slice(old.ok_or("source_expired")?)
             .map_err(|_| "invalid_native_session")?;
-        if latest.held.is_some() {
-            return latest.encode();
-        }
-        if latest.source != session.source && session.held.is_none() {
-            latest.hold("concurrent_source_change");
-            return latest.encode();
-        }
-        // Concurrent receipts may add observations; preserve them with the checkpoint.
-        session.observations = latest.observations;
-        if session.held.is_some() {
-            session.observations.clear();
-        }
-        session.encode()
+        merge_checkpoint(&original, session, latest).encode()
     })?;
     result
 }
@@ -363,6 +431,46 @@ mod tests {
     }
     fn transcript() -> Vec<u8> {
         [json!({"role":"user","message":{"content":[{"type":"text","text":"Bound retries"}]}}),json!({"role":"assistant","message":{"content":[{"type":"text","text":"Use idempotency"}]}}),json!({"type":"turn_ended","status":"success"})].iter().map(|v|v.to_string()+"\n").collect::<String>().into_bytes()
+    }
+    #[test]
+    fn callback_scope_is_monotonic_even_without_transcript_tools() {
+        let (d, b, mut s) = setup();
+        let file = d.path().join("frontend/a.rs");
+        std::fs::write(&file, "ok").unwrap();
+        assert_eq!(
+            hook_scope(
+                &json!({"hook_event_name":"beforeReadFile","file_path":file}),
+                &b,
+                "frontend"
+            ),
+            ScopeState::Verified
+        );
+        for payload in [
+            json!({"hook_event_name":"beforeReadFile","file_path":"/outside/secret"}),
+            json!({"hook_event_name":"postToolUse","tool_name":"Shell","tool_input":{"command":"pwd"}}),
+            json!({"hook_event_name":"postToolUse"}),
+            json!({"hook_event_name":"afterFileEdit"}),
+        ] {
+            assert_ne!(hook_scope(&payload, &b, "frontend"), ScopeState::Verified);
+            s.hold("callback_scope_unverified");
+            s.ingest(&transcript(), &b, "frontend", 101).unwrap();
+            assert!(s.turns.is_empty());
+        }
+    }
+    #[test]
+    fn stale_checkpoint_commit_never_rolls_back_or_loses_a_hold() {
+        let (_d, b, mut original) = setup();
+        original.ingest(&transcript(), &b, "frontend", 101).unwrap();
+        let mut newer = original.clone();
+        newer
+            .ingest(&[transcript(), transcript()].concat(), &b, "frontend", 102)
+            .unwrap();
+        let merged = merge_checkpoint(&original, original.clone(), newer.clone());
+        assert_eq!(merged.consumed, newer.consumed);
+        assert_eq!(merged.turns.len(), 2);
+        let mut held = original.clone();
+        held.hold("source_prefix_changed");
+        assert!(merge_checkpoint(&original, held, newer).held.is_some());
     }
     #[test]
     fn duplicate_reconciliation_and_restart_are_atomic() {

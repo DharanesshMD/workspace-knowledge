@@ -890,3 +890,33 @@ async fn activity_scope_cannot_change_or_leak_accumulated_paths() {
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].matched_files, vec!["backend/new.rs"]);
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn shared_search_finds_decisions_constraints_and_open_questions() {
+    let (k, a, b, p) = setup().await;
+    let mut body = card("structured-search", vec!["backend"]);
+    body.decisions = vec!["Require idempotency keys".into()];
+    body.constraints = vec!["Bound concurrency".into()];
+    body.open_questions = vec!["Review backoff".into()];
+    let c = k.submit(&a, &p, body).await.unwrap();
+    assert!(k
+        .search(&b, &p, "idempotency", 10)
+        .await
+        .unwrap()
+        .is_empty());
+    k.publish(&a, &p, c.id).await.unwrap();
+    for query in ["idempotency", "concurrency", "backoff"] {
+        assert_eq!(
+            k.search(&b, &p, query, 10).await.unwrap().len(),
+            1,
+            "{query}"
+        );
+    }
+    k.revoke(&b, &p).await.unwrap();
+    assert!(k
+        .search(&b, &p, "idempotency", 10)
+        .await
+        .unwrap()
+        .is_empty());
+}

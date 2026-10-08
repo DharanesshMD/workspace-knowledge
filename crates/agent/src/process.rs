@@ -236,6 +236,25 @@ fn native_matches(
                 && draft["source_digest"] == t.digest
         })
 }
+struct InferenceBudget {
+    remaining: usize,
+    deadline: tokio::time::Instant,
+}
+impl InferenceBudget {
+    fn new(attempts: usize, duration: std::time::Duration) -> Self {
+        Self {
+            remaining: attempts,
+            deadline: tokio::time::Instant::now() + duration,
+        }
+    }
+    async fn attempt<F: std::future::Future>(&mut self, work: F) -> Option<F::Output> {
+        if self.remaining == 0 || tokio::time::Instant::now() >= self.deadline {
+            return None;
+        }
+        self.remaining -= 1;
+        tokio::time::timeout_at(self.deadline, work).await.ok()
+    }
+}
 async fn native_run(
     dir: &Path,
     c: &state::Config,
@@ -245,6 +264,7 @@ async fn native_run(
     let mut store = state::store(dir)?;
     let ids = store.next_ids("native-inference", "native:", daemon::now()?, 10)?;
     let mut created = 0;
+    let mut budget = InferenceBudget::new(10, std::time::Duration::from_secs(120));
     for id in ids {
         let Some(session) = crate::cursor_capture::read(&store, &id, daemon::now()?)? else {
             continue;
@@ -275,8 +295,33 @@ async fn native_run(
             if store.seen(&key)? {
                 continue;
             }
+            // Revalidate before EVERY attempt, including after failed inference.
+            if crate::cursor_capture::reconcile_one(dir, &id)
+                .await
+                .is_err()
+            {
+                break;
+            }
+            let Some(current) = crate::cursor_capture::read(&store, &id, daemon::now()?)? else {
+                break;
+            };
+            if current.held.is_some()
+                || current.policy_hash != b.policy_hash
+                || current.source.is_none()
+                || !current.turns.iter().any(|t| {
+                    native_eligible(t, false) && t.index == turn.index && t.digest == turn.digest
+                })
+            {
+                break;
+            }
             let source = format!("user: {}\nassistant: {}", turn.prompt, turn.response);
-            let Ok(extract) = wk_summarize::extract(&c.inference, &c.model, &source).await else {
+            let Some(result) = budget
+                .attempt(wk_summarize::extract(&c.inference, &c.model, &source))
+                .await
+            else {
+                return Ok(created);
+            };
+            let Ok(extract) = result else {
                 continue;
             };
             let mut card = wk_summarize::card(
@@ -307,7 +352,7 @@ async fn native_run(
                 .await
                 .is_err()
             {
-                continue;
+                break;
             }
             let current = crate::cursor_capture::read(&store, &id, daemon::now()?)?
                 .ok_or("source_expired")?;
@@ -346,6 +391,24 @@ async fn native_run(
 mod native_tests {
     use super::*;
     use wk_adapters::cursor_session::{CursorTurn, MessageState, ScopeState};
+    #[tokio::test]
+    async fn failed_inference_exhausts_attempts_and_stalled_work_times_out() {
+        let mut budget = InferenceBudget::new(2, std::time::Duration::from_millis(20));
+        assert!(budget
+            .attempt(async { Err::<(), _>("failed") })
+            .await
+            .unwrap()
+            .is_err());
+        assert!(budget
+            .attempt(async { Err::<(), _>("failed") })
+            .await
+            .unwrap()
+            .is_err());
+        assert!(budget.attempt(async { Ok::<_, &str>(()) }).await.is_none());
+        let mut budget = InferenceBudget::new(10, std::time::Duration::from_millis(20));
+        assert!(budget.attempt(std::future::pending::<()>()).await.is_none());
+        assert!(budget.attempt(async {}).await.is_none());
+    }
     fn turn() -> CursorTurn {
         CursorTurn {
             index: 0,

@@ -64,6 +64,9 @@ def main():
         request(base+'/v1/cards/'+cid+'/publish',token,{'product':'demo'})
         found=request(base+'/v1/search',token_b,{'product':'demo','query':'idempotency','limit':20})
         assert cid in [c['id'] for c in found['cards']]
+        rpc = urllib.request.Request(base+'/mcp/demo', data=json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'knowledge.search','arguments':{'query':'idempotency','limit':20}}}).encode(), headers={'Authorization':'Bearer '+token_b,'Content-Type':'application/json','Accept':'application/json, text/event-stream','MCP-Protocol-Version':'2025-03-26'})
+        with urllib.request.urlopen(rpc,timeout=10) as response:
+            assert cid in json.dumps(json.load(response)), 'teammate MCP retrieval lost native card'
         notices=request(base+'/v1/products/demo/overlaps',token_b,{'files':['backend/retry.ts'],'limit':20})['notices']
         assert any(n['card_id']==cid and n['revision']==1 for n in notices)
         # A later safe turn is recovered without any new callback.
@@ -78,7 +81,7 @@ def main():
         assert rejected.returncode!=0 and 'OWNER-RAW-CANARY' not in rejected.stderr
         try:request(base+'/v1/search','invalid',{'product':'demo','query':'idempotency','limit':5});raise AssertionError('unauthorized access')
         except urllib.error.HTTPError as e:assert e.code==401
-        print(json.dumps({'passed':True,'model':args.model,'real_keyring':True,'capture':'synthetic callback and transcript','reviewed_card':str(args.output),'replay_deduplicated':True,'sensitive_source_held':True,'team_retrieval':True}))
+        print(json.dumps({'passed':True,'model':args.model,'real_keyring':True,'capture':'synthetic callback and transcript','reviewed_card':str(args.output),'replay_deduplicated':True,'sensitive_source_held':True,'team_retrieval':True,'teammate_mcp_retrieval':True}))
     finally:
         if daemon is not None:daemon.terminate();daemon.wait(timeout=10)
         server.terminate();server.wait(timeout=10)
