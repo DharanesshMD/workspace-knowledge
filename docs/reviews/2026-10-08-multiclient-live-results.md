@@ -26,3 +26,13 @@ This test does not establish native capture for Codex/Antigravity, complete Clau
 ## Cleanup
 
 Temporary Antigravity global/local MCP entries were removed, existing global entries preserved, and synthetic Claude hooks disabled. Owned API/collector processes and the disposable database container were stopped. Synthetic Keychain items, private collector state and temporary credentials were removed. Synthetic project folders/chat and the stopped database's synthetic records remain for traceability. No real project hooks or conversation histories were modified.
+
+## Subscription retry and native-hook probes
+
+After the user completed subscription sign-in, Claude Code reported OAuth authentication. The first subscription request failed because the process inherited `ANTHROPIC_MODEL=claude-opus-4.6`. Clearing the proxy/auth/model overrides only for the test subprocess and selecting the supported `sonnet` alias resolved to `claude-sonnet-5-5`. Actual search/get calls returned the newly seeded marker `AMBER-3D0189`, required idempotency keys and maximum three retries, while preserving proposed lifecycle. Collector totals were eight events, two prompts (including the failed-model attempt), one response and zero gaps. This supersedes the earlier billing blocker for this authenticated test; complete lifecycle capture and publication remain unverified for Claude Code. Global proxy/model environment defaults were not changed.
+
+A separate, throwaway Codex hook probe on CLI 0.162.0-alpha.2 received matching session/turn IDs for UserPromptSubmit and Stop, with the correct synthetic prompt and final response. The ephemeral session supplied a null transcript path. Only independently vetted diagnostic hooks were supplied for this run; `--dangerously-bypass-hook-trust` was used for this invocation, with read-only shell sandboxing retained. Normal hook installation/trust acceptance remains untested. No production Codex adapter was added.
+
+Antigravity desktop 2.19.1 delivered PostInvocation/Stop on the first synthetic no-tool turn and PreInvocation/PostInvocation/Stop on the continuation. The exact hook-bound transcript had two USER_INPUT/PLANNER_RESPONSE pairs and both response markers matched the UI. Invocation and execution counters reset to zero across turns, so they cannot identify turns uniquely. The first PreInvocation was not recorded. No production Antigravity parser or collector adapter was added.
+
+Additional content-limited evidence: `claude-subscription-success.json`, `claude-subscription-doctor.json`, `native-hook-probe-events.json`, and `antigravity-transcript-structure.json`. The implementation proposal is [Codex and Antigravity capture design](../superpowers/specs/2026-10-08-codex-antigravity-capture-design.md).

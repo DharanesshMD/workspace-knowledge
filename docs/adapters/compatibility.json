@@ -21,7 +21,7 @@
       "surface": "CLI/Code mode",
       "status": "partial",
       "method": "native hook fields",
-      "live_tested": "bounded 2.1.293 prompt-hook success only; model execution blocked by proxy/billing; response capture unverified; see docs/reviews/2026-10-08-multiclient-live-results.md"
+      "live_tested": "2.1.293 with subscription/Sonnet 5.5: actual search/get and prompt/response callbacks passed; coverage remains partial; see docs/reviews/2026-10-08-multiclient-live-results.md"
     },
     {
       "client": "Gemini CLI",
