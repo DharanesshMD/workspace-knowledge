@@ -1,5 +1,7 @@
 # Cursor native capture results
 
+Follow-up: [2026-10-08 live acceptance](2026-10-08-cursor-live-acceptance.md) adds successful bounded live handoff, restart/continuation and in-flight revocation evidence. The historical pending gates below describe the earlier run.
+
 Updated 2026-10-08. Branch: `codex/cursor-native-capture`. This is the first explicitly enrolled Cursor slice, not production deployment or universal-client certification. Code and automated verification are complete for this slice; live acceptance is partial.
 
 ## Implemented

@@ -8,7 +8,7 @@
       "version": "3.23.23",
       "status": "implemented-opt-in-certification-pending",
       "method": "authenticated hooks plus securely bound transcript recovery",
-      "live_tested": "partial; see native capture results",
+      "live_tested": "bounded macOS 3.23.23 acceptance: see docs/reviews/2026-10-08-cursor-live-acceptance.md; production certification pending",
       "limitations": [
         "initial missed sessions undetectable",
         "unsupported context holds",

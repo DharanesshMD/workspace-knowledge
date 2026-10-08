@@ -21,4 +21,4 @@ This ledger distinguishes implemented code from external certification. No unche
 
 Native Codex and Antigravity capture adapters are not implemented in this build. Their vendor hook availability is distinct from our adapter implementation and certification. They can consume the standard MCP interface; this alone does not collect their chats. These are external integration gaps, not completed features hidden behind success labels.
 
-Cursor native slice evidence: [results](../reviews/2026-10-06-cursor-native-capture-results.md). Fixture/keyring/local-model handoff has passed; full live-client acceptance and independent review must be tracked separately.
+Cursor native slice evidence: [results](../reviews/2026-10-06-cursor-native-capture-results.md). Fixture/keyring/local-model handoff and independent review passed. [Bounded live acceptance](../reviews/2026-10-08-cursor-live-acceptance.md) now demonstrates reviewed publication, teammate MCP/overlap, restart continuity and in-flight revocation; production certification remains pending.
