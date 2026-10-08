@@ -1,6 +1,6 @@
 # Codex and Antigravity native capture
 
-Status: proposed design for review; production adapters are not implemented.
+Status: design approved by the user on 2026-10-08; implementation plan pending review; production adapters are not implemented.
 
 ## Outcome and boundaries
 
