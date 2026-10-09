@@ -42,6 +42,18 @@ enum Command {
         yes: bool,
     },
     Serve,
+    /// Opt into version-pinned native capture in the enrolled service.
+    NativeEnroll {
+        #[arg(long)]
+        client: String,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Disable native capture before removing hook configuration.
+    NativeDisable {
+        #[arg(long)]
+        client: String,
+    },
     /// Opt in to private Cursor 3.23.23 local session recovery (24 hours, reviewed sharing).
     CursorEnroll {
         #[arg(long)]
@@ -231,10 +243,45 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 json!({"native_cursor_enrolled":true,"version":cursor_source::VERSION,"surface":"agents-local","raw_ttl_hours":24,"automatic_publication":false,"missed_initial_sessions":"undetectable"}),
             )
         }
+        Command::NativeEnroll { client, yes } => {
+            if !yes {
+                return Err("review native capture boundaries, then pass --yes".into());
+            }
+            let client = native_enrollment::parse_client(&client)?;
+            let c = state::load(&state)?;
+            let b = state::binding(&c)?;
+            let token = state::token(&state, "server-token")?;
+            network::policy(&c, &b, &token).await?;
+            native_enrollment::enroll(&state, client)?;
+            Ok(json!({"enrolled":true,"automatic_publication":false,"raw_ttl_hours":24}))
+        }
+        Command::NativeDisable { client } => {
+            let client = native_enrollment::parse_client(&client)?;
+            let _guard = native_capture::lock(&state).await?;
+            native_enrollment::disable(&state, client)?;
+            native_capture::clear(&state, Some(client))?;
+            Ok(json!({"disabled":true}))
+        }
         Command::Serve => daemon::serve(state).await,
         Command::Hook { client, event } => {
-            let input: Value =
+            let mut input: Value =
                 serde_json::from_str(&stdin_limited()?).map_err(|_| "invalid hook")?;
+            if client == "antigravity" && input.get("hook_event_name").is_none() {
+                input
+                    .as_object_mut()
+                    .ok_or("invalid hook")?
+                    .insert("hook_event_name".into(), json!(event));
+            }
+            if let Ok(native) = native_enrollment::parse_client(&client) {
+                if native_enrollment::disabled(&state, native)? {
+                    return Ok(wk_adapters::success(&client, &event));
+                }
+                native_enrollment::verify_emitter(&state, native)?;
+                input
+                    .as_object_mut()
+                    .ok_or("invalid hook")?
+                    .insert("_wk_emitter_verified".into(), json!(true));
+            }
             if input["hook_event_name"] != event {
                 return Err("hook event mismatch".into());
             }
@@ -285,6 +332,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
             if !yes {
                 return Err("--yes closes all pending capture sessions and discards their private drafts; start a genuinely new client session afterward".into());
             }
+            let _guard = native_capture::lock(&state).await?;
             let mut store = state::store(&state)?;
             loop {
                 let rows = store.pending(daemon::now()?)?;
@@ -316,7 +364,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 .await
                 .unwrap_or(json!({"available":false}));
             Ok(
-                json!({"native_cursor":cursor_capture::status(&state).unwrap_or(json!({"unavailable":true})),"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
+                json!({"native_clients":native_capture::status(&state).unwrap_or(json!({"unavailable":true})),"native_cursor":cursor_capture::status(&state).unwrap_or(json!({"unavailable":true})),"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
             )
         }
         Command::Config { client } => wk_adapters::config(
@@ -362,6 +410,11 @@ async fn run(cli: Cli) -> Result<Value, String> {
             Ok(json!({"installed":true,"live_verified":false}))
         }
         Command::Uninstall { client, file } => {
+            if let Ok(native) = native_enrollment::parse_client(&client) {
+                let _guard = native_capture::lock(&state).await?;
+                native_enrollment::disable(&state, native)?;
+                native_capture::clear(&state, Some(native))?;
+            }
             if !wk_contracts::valid_id(&client) {
                 return Err("invalid client".into());
             }
@@ -392,3 +445,11 @@ async fn run(cli: Cli) -> Result<Value, String> {
         Command::Compliance { binding } => compliance::poll(&state, &binding).await,
     }
 }
+
+mod native_enrollment;
+
+mod antigravity_source;
+
+mod native_capture;
+
+mod native_process;

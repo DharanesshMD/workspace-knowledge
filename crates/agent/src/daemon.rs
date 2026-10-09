@@ -94,6 +94,10 @@ pub async fn capture(dir: &Path, client: &str, payload: &Value) -> Result<Option
         crate::cursor_capture::receive(dir, payload).await?;
         return Ok(Some("native_observation".into()));
     }
+    if let Ok(native) = crate::native_enrollment::parse_client(client) {
+        crate::native_capture::receive(dir, native, payload).await?;
+        return Ok(Some("native_observation".into()));
+    }
     let Some(o) = wk_adapters::normalize(client, payload)? else {
         return Ok(None);
     };

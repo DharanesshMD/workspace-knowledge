@@ -31,18 +31,32 @@
     },
     {
       "client": "Codex",
-      "surface": "CLI/Desktop",
-      "status": "adapter-not-implemented",
+      "surface": "macOS CLI",
+      "status": "experimental-no-tool-capture",
       "retrieval": "stdio MCP",
       "alternative": "instrumented local chat",
-      "retrieval_live_tested": "CLI 0.162.0-alpha.2: search/get passed; Desktop not separately tested; see docs/reviews/2026-10-08-multiclient-live-results.md"
+      "retrieval_live_tested": "CLI 0.162.0-alpha.2: search/get passed; Desktop not separately tested; see docs/reviews/2026-10-08-multiclient-live-results.md",
+      "version": "0.162.0-alpha.2",
+      "limitations": [
+        "Tool use, subagents, compaction and unknown context hold the session",
+        "Actual emitter must match pinned installed binary",
+        "Fixed 24-hour retention; explicit enrollment and review required"
+      ],
+      "live_tested": "2026-10-09 actual no-tool hooks -> local Qwen3.5:2b draft -> reviewer correction revision 2 -> publication -> second identity MCP search/get; full certification pending"
     },
     {
       "client": "Antigravity",
-      "status": "adapter-not-implemented",
+      "status": "experimental-private-capture-held",
       "retrieval": "stdio MCP",
       "alternative": "instrumented local chat",
-      "retrieval_live_tested": "desktop 2.19.1: search/get passed; native capture remains unsupported; see docs/reviews/2026-10-08-multiclient-live-results.md"
+      "retrieval_live_tested": "desktop 2.19.1 search/get passed previously; native parser implemented but all native publication held pending terminal attribution",
+      "surface": "macOS desktop",
+      "version": "2.19.1",
+      "limitations": [
+        "Terminal attribution unverified: all native publication blocked",
+        "Only exact callback-bound transcript is read",
+        "Actual emitter ancestry verification and full collector acceptance pending"
+      ]
     },
     {
       "client": "Claude Desktop",

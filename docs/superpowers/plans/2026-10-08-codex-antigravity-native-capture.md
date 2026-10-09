@@ -304,4 +304,4 @@ Spec mapping: enrollment/config â†’ Task 2; Codex identity/scope/cancellation â†
 
 Shared interfaces are declared here; implementation may refine internal helpers without widening the approved scope. Any vendor field needed for completion must first be demonstrated by Task 1 and represented in an actual fixture. Missing evidence results in a documented held/partial implementation, not invented attribution.
 
-This plan is ready for user review. Implementation is not yet started. Recommend native execution in this session because the tasks share evidence and lifecycle interfaces, followed by one independent whole-branch review. A successful build alone does not satisfy live acceptance.
+The user approved native execution. Experimental implementation and independent review are recorded in [bounded acceptance](../../reviews/2026-10-09-native-capture-acceptance.md). Codex no-tool capture-to-reviewed-sharing passed; Antigravity terminal attribution and the remaining live matrix are open. This plan is not fully certified or complete. A successful build alone does not satisfy live acceptance.

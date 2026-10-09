@@ -5,6 +5,7 @@ use std::path::Path;
 pub async fn run(dir: &Path) -> Result<Value, String> {
     state::store(dir)?.purge_expired(daemon::now()?)?;
     crate::cursor_capture::reconcile(dir).await?;
+    crate::native_capture::reconcile(dir).await?;
     if dir.join("capture-gap.json").exists() {
         return Err("capture gap requires reset into a clean session".into());
     }
@@ -14,7 +15,8 @@ pub async fn run(dir: &Path) -> Result<Value, String> {
     let policy = network::policy(&c, &b, &token).await?;
     let mut store = state::store(dir)?;
     let ids = store.next_session_ids(daemon::now()?)?;
-    let mut drafts = native_run(dir, &c, &b, &policy).await?;
+    let mut drafts =
+        native_run(dir, &c, &b, &policy).await? + crate::native_process::run(dir).await?;
     let mut held = 0;
     for id in ids {
         let Some(bytes) = store.read_record(&id, daemon::now()?)? else {
@@ -136,6 +138,21 @@ pub async fn submit(dir: &Path, id: &str) -> Result<Value, String> {
         .read_record(id, daemon::now()?)?
         .ok_or("draft expired or unavailable")?;
     let v: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid private draft")?;
+    if v.get("native_adapter").is_some() {
+        let _guard = crate::native_process::validate_draft(dir, &v).await?;
+        if wk_summarize::sensitive(&v["card"].to_string()) {
+            return Err("sensitive_summary".into());
+        }
+        let result = network::post(
+            &c,
+            &t,
+            "/v1/cards",
+            &json!({"product":b.product,"card":v["card"]}),
+        )
+        .await?;
+        s.ack(id)?;
+        return Ok(result);
+    }
     if v.get("native_turn_index").is_some() {
         let key = v["source_id"].as_str().ok_or("missing_source")?;
         crate::cursor_capture::reconcile_one(dir, key).await?;
@@ -236,18 +253,18 @@ fn native_matches(
                 && draft["source_digest"] == t.digest
         })
 }
-struct InferenceBudget {
+pub(crate) struct InferenceBudget {
     remaining: usize,
     deadline: tokio::time::Instant,
 }
 impl InferenceBudget {
-    fn new(attempts: usize, duration: std::time::Duration) -> Self {
+    pub(crate) fn new(attempts: usize, duration: std::time::Duration) -> Self {
         Self {
             remaining: attempts,
             deadline: tokio::time::Instant::now() + duration,
         }
     }
-    async fn attempt<F: std::future::Future>(&mut self, work: F) -> Option<F::Output> {
+    pub(crate) async fn attempt<F: std::future::Future>(&mut self, work: F) -> Option<F::Output> {
         if self.remaining == 0 || tokio::time::Instant::now() >= self.deadline {
             return None;
         }

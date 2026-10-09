@@ -1,6 +1,6 @@
 # Codex and Antigravity native capture
 
-Status: design approved by the user on 2026-10-08; implementation plan pending review; production adapters are not implemented.
+Status: design and implementation plan approved; experimental implementation added on 2026-10-09. Codex no-tool handoff passed; Antigravity publication remains held. See the native capture acceptance report.
 
 ## Outcome and boundaries
 

@@ -147,7 +147,7 @@ fn owned(uid: u32, current: u32) -> bool {
     uid == current
 }
 #[cfg(unix)]
-fn identity(f: &std::fs::File) -> Result<(u64, u64, u64), String> {
+pub(crate) fn identity(f: &std::fs::File) -> Result<(u64, u64, u64), String> {
     use std::os::unix::fs::MetadataExt;
     let m = f.metadata().map_err(|_| "source_unavailable")?;
     if !m.is_file() || !owned(m.uid(), unsafe { libc::geteuid() }) {
@@ -156,11 +156,11 @@ fn identity(f: &std::fs::File) -> Result<(u64, u64, u64), String> {
     Ok((m.dev(), m.ino(), m.len()))
 }
 #[cfg(not(unix))]
-fn identity(_: &std::fs::File) -> Result<(u64, u64, u64), String> {
+pub(crate) fn identity(_: &std::fs::File) -> Result<(u64, u64, u64), String> {
     Err("native_platform_unsupported".into())
 }
 #[cfg(unix)]
-fn open_owned(path: &Path, directory: bool) -> Result<std::fs::File, String> {
+pub(crate) fn open_owned(path: &Path, directory: bool) -> Result<std::fs::File, String> {
     use std::os::{
         fd::{AsRawFd, FromRawFd},
         unix::{ffi::OsStrExt, fs::MetadataExt},
@@ -209,7 +209,7 @@ fn open_owned(path: &Path, directory: bool) -> Result<std::fs::File, String> {
     Ok(current)
 }
 #[cfg(not(unix))]
-fn open_owned(_: &Path, _: bool) -> Result<std::fs::File, String> {
+pub(crate) fn open_owned(_: &Path, _: bool) -> Result<std::fs::File, String> {
     Err("native_platform_unsupported".into())
 }
 pub fn read_bound(source: &SourceBinding, now: i64) -> Result<Vec<u8>, String> {
