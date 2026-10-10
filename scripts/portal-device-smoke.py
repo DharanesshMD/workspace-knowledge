@@ -34,7 +34,7 @@ class NativeProvider(identity.Provider):
         if self.headers.get('Authorization') is not None or q.get('client_id')!=['collector-test'] or q.get('redirect_uri')!=grant['redirect_uri'] or q.get('grant_type')!=['authorization_code'] or identity.b64(hashlib.sha256(q.get('code_verifier',[''])[0].encode()).digest())!=grant['code_challenge'][0]:return self.send(400,{})
         now=int(time.time())
         def token(aud,**extra):
-            claims=dict(iss=cfg['issuer'],aud=aud,sub=subject,iat=now,exp=now+300,**extra)
+            claims=dict(iss=cfg['issuer'],aud=aud,sub=subject,iat=now,exp=now+300,jti=secrets.token_urlsafe(24),**extra)
             value=identity.b64(json.dumps({'alg':'RS256','kid':'synthetic-portal'}).encode())+'.'+identity.b64(json.dumps(claims).encode());signature=subprocess.check_output([OPENSSL,'dgst','-sha256','-sign',cfg['pem']],input=value.encode(),stderr=subprocess.DEVNULL)
             return value+'.'+identity.b64(signature)
         access=token('wk-collector');cfg.setdefault('issued',{})[subject]=access
@@ -64,7 +64,7 @@ def acceptance(origin,owner,mutation,command,provider,start):
                 run=subprocess.run([str(agent),'--state-dir',str(native),*args],capture_output=True,text=True,timeout=180)
                 if allowed:assert run.returncode==0,run.stderr[:300];return json.loads(run.stdout)
                 assert run.returncode!=0;return run
-            cli('device','poll');current=devices()[0];assert current['id']==native_id and current['report']['config_revision']==1 and current['report']['local_owner_sync'] is False
+            assert cli('device','check-native-policy')['native_policy_authorized'];cli('device','poll');current=devices()[0];assert current['id']==native_id and current['report']['config_revision']==1 and current['report']['local_owner_sync'] is False
             # Upstream token is returned by this disposable provider only. No keyring extraction.
             alice_token=provider.cfg['issued']['alice']
             def browser(mode):subprocess.run(['node',str(identity.REPO/'web/scripts/device-live.mjs'),origin,native_id,mode],check=True)
@@ -79,9 +79,9 @@ def acceptance(origin,owner,mutation,command,provider,start):
             proc=subprocess.Popen([str(agent),'--state-dir',str(native),'device','login','--no-browser'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True);authorize(json.loads(proc.stderr.readline())['authorization_url']);stdout,stderr=proc.communicate(timeout=180);assert proc.returncode==0,stderr[:300];assert json.loads(stdout)['authenticated'];assert json.loads((native/'device-auth.json').read_text())['expires_at']>int(time.time())
             cli('owner-sync','enable','--yes');cli('device','poll');assert devices()[0]['report']['local_owner_sync']
             # Separate synthetic proof key exercises raw protocol failure paths without exposing native key.
-            def fixture(subject,service):
-                folder=scratch/subject;folder.mkdir(mode=0o700);pem=folder/'key.pem';subprocess.run([OPENSSL,'genpkey','-algorithm','ED25519','-out',str(pem)],check=True,stderr=subprocess.DEVNULL);pem.chmod(0o600);public=subprocess.check_output([OPENSSL,'pkey','-in',str(pem),'-pubout','-outform','DER'],stderr=subprocess.DEVNULL)[-32:].hex();installation=str(uuid.uuid4());hash_value=secrets.token_hex(32)
-                if subject=='alice':token=alice_token
+            def fixture(subject,service,token_override=None,expected_status=200):
+                folder=scratch/(subject+"-"+secrets.token_hex(4));folder.mkdir(mode=0o700);pem=folder/'key.pem';subprocess.run([OPENSSL,'genpkey','-algorithm','ED25519','-out',str(pem)],check=True,stderr=subprocess.DEVNULL);pem.chmod(0o600);public=subprocess.check_output([OPENSSL,'pkey','-in',str(pem),'-pubout','-outform','DER'],stderr=subprocess.DEVNULL)[-32:].hex();installation=str(uuid.uuid4());hash_value=secrets.token_hex(32)
+                if token_override is not None:token=token_override
                 else:
                     provider.cfg['subject']=subject
                     # Real upstream token exchange uses a fresh public-client PKCE grant.
@@ -97,9 +97,9 @@ def acceptance(origin,owner,mutation,command,provider,start):
                         except urllib.error.HTTPError as e:r=e
                         return r.code,json.loads(r.read())
                     return execute
-                assert proof('register',register=True)()[0]==200
+                assert proof('register',register=True)()[0]==expected_status
                 return installation,proof,token
-            aid,alice_proof,_=fixture('alice','backend');bid,bob_proof,bob_token=fixture('bob','frontend');assert all(d['id']!=bid for d in devices());assert all(d['id'] not in (aid,native_id) for d in devices(bob))
+            aid,alice_proof,alice_fixture_token=fixture('alice','backend');bid,bob_proof,bob_token=fixture('bob','frontend');assert all(d['id']!=bid for d in devices());assert all(d['id'] not in (aid,native_id) for d in devices(bob))
             for token in [alice_token,bob_token]:
                 assert identity.Browser().request(origin+'/v1/me',headers={'Authorization':'Bearer '+token})[0]==401
                 assert identity.Browser().request(origin+'/mcp/alpha',headers={'Authorization':'Bearer '+token})[0]==401
@@ -115,6 +115,8 @@ def acceptance(origin,owner,mutation,command,provider,start):
             d=next(d for d in devices() if d['id']==aid);assert owner.request(root+'/devices/'+aid+'/revoke',{'expected_revision':d['revision']},mutation)[0]==200
             assert alice_proof('personal',dict(personal,body=dict(body,idempotency_key='after-revoke')))()[0]==401
             assert alice_proof('register',register=True)()[0]==403
+            fixture('alice','backend',token_override=alice_fixture_token,expected_status=403)
+            fixture('alice','backend')
             print('Real native sign-in, signed controls and two-identity browser acceptance passed.',flush=True)
         finally:
             if proc is not None and proc.poll() is None:proc.terminate();proc.wait(timeout=10)
@@ -122,5 +124,5 @@ def acceptance(origin,owner,mutation,command,provider,start):
             if os.uname().sysname=='Darwin':
                 account=hashlib.sha256(str(native).encode()).hexdigest()
                 for purpose in ['capture-key','ipc-key','device-key','server-token']:subprocess.run(['/usr/bin/security','delete-generic-password','-s','workspace-knowledge','-a',account+':'+purpose],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-    return {'native_pkce_and_os_keyring':True,'native_reauthentication_after_expiry':True,'remote_resume_preserves_local_pause':True,'requested_applied_pause_resume':True,'owner_opt_in_and_scope':True,'two_identity_device_privacy':True,'revocation_non_resurrection':True,'replay_and_api_mcp_role_escape':True,'real_browser_devices':True,'system_browser_launch_verified':False}
+    return {'native_pkce_and_os_keyring':True,'native_reauthentication_after_expiry':True,'remote_resume_preserves_local_pause':True,'requested_applied_pause_resume':True,'owner_opt_in_and_scope':True,'two_identity_device_privacy':True,'revocation_non_resurrection':True,'revoked_credential_replacement_denied':True,'renewed_credential_replacement_allowed':True,'signed_native_policy':True,'replay_and_api_mcp_role_escape':True,'real_browser_devices':True,'system_browser_launch_verified':False}
 if __name__=='__main__':identity.main(acceptance,NativeProvider,collector=True)

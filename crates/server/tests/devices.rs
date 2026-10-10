@@ -70,6 +70,8 @@ async fn collector_signature_replay_revocation_and_api_separation() {
     k.grant(&a, "demo", &["backend".into()], false)
         .await
         .unwrap();
+    let collector_token = uuid::Uuid::new_v4().to_string();
+    let renewed_token = uuid::Uuid::new_v4().to_string();
     let app = wk_server::portal_router_with_collector(
         k.clone(),
         vec![("browser-token".into(), a.clone())],
@@ -79,7 +81,10 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         Some(wk_server::device_routes::CollectorAuth {
             origin: "http://127.0.0.1:4318".into(),
             oidc: None,
-            tokens: vec![("collector-token".into(), a.clone())],
+            tokens: vec![
+                (collector_token.clone(), a.clone()),
+                (renewed_token.clone(), a.clone()),
+            ],
             client_id: None,
         }),
     )
@@ -107,7 +112,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         call(
             &app,
             "/collector/register",
-            "collector-token",
+            &collector_token,
             &key,
             id,
             nonce,
@@ -122,7 +127,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         call(
             &app,
             "/collector/register",
-            "collector-token",
+            &collector_token,
             &key,
             id,
             nonce,
@@ -138,7 +143,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         call(
             &app,
             "/collector/policy",
-            "collector-token",
+            &collector_token,
             &key,
             id,
             uuid::Uuid::new_v4(),
@@ -153,7 +158,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         call(
             &app,
             "/collector/policy",
-            "collector-token",
+            &collector_token,
             &SigningKey::from_bytes(&[43; 32]),
             id,
             uuid::Uuid::new_v4(),
@@ -168,7 +173,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         call(
             &app,
             "/collector/policy",
-            "collector-token",
+            &collector_token,
             &key,
             id,
             uuid::Uuid::new_v4(),
@@ -183,7 +188,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
     let bad = call(
         &app,
         "/collector/policy",
-        "collector-token",
+        &collector_token,
         &key,
         id,
         uuid::Uuid::new_v4(),
@@ -199,7 +204,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
             .oneshot(
                 Request::builder()
                     .uri(path)
-                    .header("authorization", "Bearer collector-token")
+                    .header("authorization", format!("Bearer {collector_token}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -213,7 +218,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         call(
             &app,
             "/collector/cards",
-            "collector-token",
+            &collector_token,
             &key,
             id,
             uuid::Uuid::new_v4(),
@@ -229,7 +234,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         call(
             &app,
             "/collector/personal",
-            "collector-token",
+            &collector_token,
             &key,
             id,
             uuid::Uuid::new_v4(),
@@ -256,7 +261,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         call(
             &app,
             "/collector/personal",
-            "collector-token",
+            &collector_token,
             &key,
             id,
             uuid::Uuid::new_v4(),
@@ -287,7 +292,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
             now,
             nonce,
             id,
-            "collector-token",
+            &collector_token,
             &raw,
         ));
         let mut sent = raw;
@@ -298,7 +303,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
                 Request::builder()
                     .method("POST")
                     .uri(sent_path)
-                    .header("authorization", "Bearer collector-token")
+                    .header("authorization", format!("Bearer {collector_token}"))
                     .header("x-wk-device", id.to_string())
                     .header("x-wk-time", now.to_string())
                     .header("x-wk-nonce", nonce.to_string())
@@ -315,7 +320,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         call(
             &app,
             "/collector/cards",
-            "collector-token",
+            &collector_token,
             &key,
             id,
             uuid::Uuid::new_v4(),
@@ -330,7 +335,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         call(
             &app,
             "/collector/policy",
-            "collector-token",
+            &collector_token,
             &key,
             id,
             uuid::Uuid::new_v4(),
@@ -345,7 +350,7 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         call(
             &app,
             "/collector/register",
-            "collector-token",
+            &collector_token,
             &key,
             id,
             uuid::Uuid::new_v4(),
@@ -355,5 +360,40 @@ async fn collector_signature_replay_revocation_and_api_separation() {
         .await
         .0,
         StatusCode::FORBIDDEN
+    );
+    let replacement = SigningKey::from_bytes(&[43; 32]);
+    let replacement_id = uuid::Uuid::new_v4();
+    let new_registration = json!({"id":replacement_id,"public_key":hex::encode(replacement.verifying_key().to_bytes()),"product":"demo","services":["backend"],"approval_hash":"22".repeat(32)});
+    assert_eq!(
+        call(
+            &app,
+            "/collector/register",
+            &collector_token,
+            &replacement,
+            replacement_id,
+            uuid::Uuid::new_v4(),
+            new_registration.clone(),
+            false
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN,
+        "revoked collector credential cannot establish a new key binding"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "/collector/register",
+            &renewed_token,
+            &replacement,
+            replacement_id,
+            uuid::Uuid::new_v4(),
+            new_registration,
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK,
+        "fresh upstream credential can enroll a replacement"
     );
 }

@@ -206,9 +206,12 @@ pub async fn send_with_key(
         .send()
         .await
         .map_err(|_| "collector service unavailable")?;
+    if matches!(response.status().as_u16(), 401 | 403) {
+        return Err(network::AUTH_DENIED.into());
+    }
     wk_summarize::bounded_json(response, 1024 * 1024).await
 }
-async fn apply_remote(
+pub(crate) async fn apply_remote(
     c: &state::Config,
     b: &wk_scope::enrollment::Binding,
     r: Remote,
@@ -375,6 +378,8 @@ pub enum Action {
         no_browser: bool,
     },
     Status,
+    /// Diagnose native capture policy authorization without claiming capture coverage.
+    CheckNativePolicy,
     Poll,
 }
 #[derive(Serialize, Deserialize)]
@@ -525,6 +530,10 @@ pub async fn run(dir: &std::path::Path, action: Action) -> Result<Value, String>
             status(dir)
         }
         Action::Status => status(dir),
+        Action::CheckNativePolicy => {
+            crate::native_capture::policy(dir).await?;
+            Ok(json!({"native_policy_authorized":true,"capture_coverage":"unknown"}))
+        }
         Action::Login { no_browser } => {
             let c = state::load(dir)?;
             let b = state::base_binding(&c)?;

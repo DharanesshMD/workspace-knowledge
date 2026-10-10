@@ -71,6 +71,7 @@ pub async fn run(dir: &Path) -> Result<usize, String> {
         return Ok(0);
     }
     let c = state::load(dir)?;
+    let binding = state::binding(&c)?;
     let mut store = state::store(dir)?;
     let ids = store.next_ids("native2-inference", "native2:", daemon::now()?, 10)?;
     let mut created = 0;
@@ -80,6 +81,9 @@ pub async fn run(dir: &Path) -> Result<usize, String> {
             continue;
         };
         for turn in r.turns.iter().filter(|t| eligible(t)) {
+            if crate::process::processing_current(dir, &c, &binding).is_err() {
+                return Ok(created);
+            }
             let policy = native_capture::policy(dir).await?;
             let revision = policy["policy_revision"].as_u64().ok_or("invalid_policy")?;
             let hash = format!(
@@ -113,6 +117,9 @@ pub async fn run(dir: &Path) -> Result<usize, String> {
             let Ok(extract) = result else {
                 continue;
             };
+            if crate::process::processing_current(dir, &c, &binding).is_err() {
+                return Ok(created);
+            }
             let card = wk_summarize::card(extract, hash, revision, vec![c.service.clone()], true)?;
             card.validate()?;
             if wk_summarize::sensitive(&serde_json::to_string(&card).map_err(|_| "invalid_card")?) {

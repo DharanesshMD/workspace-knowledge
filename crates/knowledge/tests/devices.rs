@@ -287,7 +287,15 @@ async fn restricted_runtime_role_cannot_read_peer_devices_or_hidden_reports() {
         .await
         .unwrap();
     let runtime = Knowledge::from_pool(pool.clone());
-    let d = runtime.device_register(&a, registration()).await.unwrap();
+    let credential = "8b".repeat(32);
+    let d = runtime
+        .device_register_credential(&a, registration(), &credential, 32503680000)
+        .await
+        .unwrap();
+    runtime
+        .device_bind_credential(&a, &d, &"8c".repeat(32), 32503680000)
+        .await
+        .unwrap();
     runtime.device_report(&a, &d, report(1)).await.unwrap();
     assert!(runtime.device_list(&b, "demo").await.unwrap().is_empty());
     assert!(matches!(
@@ -296,7 +304,12 @@ async fn restricted_runtime_role_cannot_read_peer_devices_or_hidden_reports() {
             .await,
         Err(Error::NotFound)
     ));
-    for table in ["registered_devices", "device_reports", "device_nonces"] {
+    for table in [
+        "registered_devices",
+        "device_reports",
+        "device_nonces",
+        "collector_credentials",
+    ] {
         let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&pool)
             .await
@@ -307,6 +320,19 @@ async fn restricted_runtime_role_cannot_read_peer_devices_or_hidden_reports() {
         .await
         .unwrap();
     assert!(runtime.device_list(&a, "demo").await.unwrap().is_empty());
+    let mut replacement = registration();
+    replacement.services = vec!["frontend".into()];
+    replacement.public_key = "33".repeat(32);
+    assert!(matches!(
+        runtime
+            .device_register_credential(&a, replacement.clone(), &credential, 32503680000)
+            .await,
+        Err(Error::Denied)
+    ));
+    runtime
+        .device_register_credential(&a, replacement, &"8d".repeat(32), 32503680000)
+        .await
+        .unwrap();
     pool.close().await;
     sqlx::raw_sql(&format!("DROP OWNED BY {role}; DROP ROLE {role};"))
         .execute(&owner)
@@ -386,4 +412,20 @@ async fn collector_policy_bursts_fit_a_bounded_replay_window() {
         k.device_nonce(&a, &d, uuid::Uuid::new_v4()).await,
         Err(Error::Denied)
     ));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn concurrent_credential_registration_binds_one_installation() {
+    let (k, a, _, _) = setup().await;
+    let hash = "9a".repeat(32);
+    let first = registration();
+    let mut second = registration();
+    second.public_key = "44".repeat(32);
+    let (left, right) = tokio::join!(
+        k.device_register_credential(&a, first, &hash, 32503680000),
+        k.device_register_credential(&a, second, &hash, 32503680000),
+    );
+    assert_eq!(left.is_ok() as u8 + right.is_ok() as u8, 1);
+    assert!(matches!(left, Err(Error::Denied)) || matches!(right, Err(Error::Denied)));
 }

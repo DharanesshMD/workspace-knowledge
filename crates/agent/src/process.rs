@@ -36,69 +36,11 @@ pub async fn run(dir: &Path) -> Result<Value, String> {
         }
         // Hook coverage remains partial. A managed chat writes a turn_end under
         // a fresh explicit turn identity and supplies both visible messages.
-        let mut turns = std::collections::BTreeMap::<String, Vec<&Value>>::new();
-        for event in events {
-            let key = format!("{}:{}", event["agent_id"], event["turn_id"]);
-            turns.entry(key).or_default().push(event);
-        }
-        for (turn_key, events) in &turns {
-            if !events.iter().any(|e| e["kind"] == "assistant_response") {
-                continue;
-            }
-            let source = events
-                .iter()
-                .filter(|e| e["kind"] == "user_prompt" || e["kind"] == "assistant_response")
-                .map(|e| {
-                    format!(
-                        "{}: {}",
-                        e["kind"].as_str().unwrap_or("message"),
-                        e["text"].as_str().unwrap_or("")
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            let hash = format!(
-                "{:x}",
-                Sha256::digest(
-                    serde_json::to_vec(&(
-                        id.as_str(),
-                        events,
-                        &b.policy_hash,
-                        &policy["policy_revision"],
-                        c.model.as_str(),
-                        1
-                    ))
-                    .map_err(|_| "invalid private events")?
-                )
-            );
-            let key = format!("draft:{hash}");
-            if store.seen(&key)? {
-                continue;
-            }
-            match wk_summarize::extract(&c.inference, &c.model, &source).await {
-                Ok(extract) => {
-                    let complete = events.iter().any(|e| e["kind"] == "turn_end")
-                        && events.iter().all(|e| e["agent_id"] == "managed-chat");
-                    let card = wk_summarize::card(
-                        extract,
-                        hash,
-                        policy["policy_revision"].as_u64().ok_or("invalid policy")?,
-                        vec![c.service.clone()],
-                        complete,
-                    )?;
-                    let draft = json!({"card":card,"source_id":id,"source_digest":format!("{:x}",Sha256::digest(serde_json::to_vec(events).map_err(|_|"invalid private events")?)),"turn_key":turn_key,"policy_hash":b.policy_hash,"model":c.model,"prompt_version":1,"privacy_policy_version":1});
-                    let encoded = serde_json::to_vec(&draft).map_err(|_| "invalid draft")?;
-                    store.update(&key, daemon::now()?, 3600, |old| {
-                        Ok(old.map_or(encoded.clone(), |bytes| bytes.to_vec()))
-                    })?;
-                    drafts += 1;
-                }
-                Err(_) => {
-                    held += 1;
-                }
-            }
-        }
+        let (made, failed) = journal_turns(dir, &c, &b, &policy, &mut store, &id, &session).await?;
+        drafts += made;
+        held += failed;
     }
+
     let owner_sync = crate::personal_sync::run(dir)
         .await
         .unwrap_or_else(|_| json!({"enabled":false,"uploaded":0,"held":0,"status":"unavailable"}));
@@ -106,6 +48,103 @@ pub async fn run(dir: &Path) -> Result<Value, String> {
         json!({"private_drafts_created":drafts,"held":held,"published":false,"owner_sync":owner_sync}),
     )
 }
+// Re-read local permission and destination around every slow inference attempt.
+// An acknowledged pause stops subsequent requests and discards an in-flight result.
+pub(crate) fn processing_current(
+    dir: &Path,
+    c: &state::Config,
+    b: &wk_scope::enrollment::Binding,
+) -> Result<(), String> {
+    if state::load(dir)? != *c || state::binding(c)?.policy_hash != b.policy_hash {
+        return Err("processing approval or configuration changed".into());
+    }
+    Ok(())
+}
+async fn journal_turns(
+    dir: &Path,
+    c: &state::Config,
+    b: &wk_scope::enrollment::Binding,
+    policy: &Value,
+    store: &mut wk_local::LocalStore,
+    id: &str,
+    session: &Value,
+) -> Result<(usize, usize), String> {
+    let events = session["events"]
+        .as_array()
+        .ok_or("invalid private events")?;
+    let mut drafts = 0;
+    let mut held = 0;
+    let mut turns = std::collections::BTreeMap::<String, Vec<&Value>>::new();
+    for event in events {
+        let key = format!("{}:{}", event["agent_id"], event["turn_id"]);
+        turns.entry(key).or_default().push(event);
+    }
+    for (turn_key, events) in &turns {
+        if processing_current(dir, c, b).is_err() {
+            break;
+        }
+        if !events.iter().any(|e| e["kind"] == "assistant_response") {
+            continue;
+        }
+        let source = events
+            .iter()
+            .filter(|e| e["kind"] == "user_prompt" || e["kind"] == "assistant_response")
+            .map(|e| {
+                format!(
+                    "{}: {}",
+                    e["kind"].as_str().unwrap_or("message"),
+                    e["text"].as_str().unwrap_or("")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let hash = format!(
+            "{:x}",
+            Sha256::digest(
+                serde_json::to_vec(&(
+                    id,
+                    events,
+                    &b.policy_hash,
+                    &policy["policy_revision"],
+                    c.model.as_str(),
+                    1
+                ))
+                .map_err(|_| "invalid private events")?
+            )
+        );
+        let key = format!("draft:{hash}");
+        if store.seen(&key)? {
+            continue;
+        }
+        match wk_summarize::extract(&c.inference, &c.model, &source).await {
+            Ok(extract) => {
+                if processing_current(dir, c, b).is_err() {
+                    break;
+                }
+                let complete = events.iter().any(|e| e["kind"] == "turn_end")
+                    && events.iter().all(|e| e["agent_id"] == "managed-chat");
+                let card = wk_summarize::card(
+                    extract,
+                    hash,
+                    policy["policy_revision"].as_u64().ok_or("invalid policy")?,
+                    vec![c.service.clone()],
+                    complete,
+                )?;
+                let draft = json!({"card":card,"source_id":id,"source_digest":format!("{:x}",Sha256::digest(serde_json::to_vec(events).map_err(|_|"invalid private events")?)),"turn_key":turn_key,"policy_hash":b.policy_hash,"model":c.model,"prompt_version":1,"privacy_policy_version":1});
+                let encoded = serde_json::to_vec(&draft).map_err(|_| "invalid draft")?;
+                store.update(&key, daemon::now()?, 3600, |old| {
+                    Ok(old.map_or(encoded.clone(), |bytes| bytes.to_vec()))
+                })?;
+                drafts += 1;
+            }
+            Err(_) => {
+                held += 1;
+            }
+        }
+    }
+    Ok((drafts, held))
+}
+
 pub fn list(dir: &Path, after: &str) -> Result<Value, String> {
     if !after.is_empty() && (!after.starts_with("draft:") || after.len() != 70) {
         return Err("invalid draft cursor".into());
@@ -317,6 +356,9 @@ async fn native_run(
             continue;
         }
         for turn in &session.turns {
+            if processing_current(dir, c, b).is_err() {
+                return Ok(created);
+            }
             if !native_eligible(turn, session.held.is_some()) {
                 continue;
             }
@@ -368,6 +410,9 @@ async fn native_run(
             let Ok(extract) = result else {
                 continue;
             };
+            if processing_current(dir, c, b).is_err() {
+                return Ok(created);
+            }
             let mut card = wk_summarize::card(
                 extract,
                 hash,
@@ -524,5 +569,114 @@ mod native_tests {
             100
         ));
         assert!(!native_matches(&draft, &[t], true, "p", 1, 200, 100));
+    }
+}
+
+#[cfg(test)]
+mod pause_regression {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    #[tokio::test]
+    async fn acknowledged_pause_stops_second_turn_and_discards_inflight_result() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        std::fs::create_dir_all(root.join("backend")).unwrap();
+        let dir = state::private_dir(&temp.path().join("state"), true).unwrap();
+        let b =
+            wk_scope::enrollment::Binding::approve(&root, "demo", vec!["backend".into()]).unwrap();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app=axum::Router::new().route("/inference",axum::routing::post({let entered=entered.clone();let release=release.clone();let calls=calls.clone();move ||{let entered=entered.clone();let release=release.clone();let calls=calls.clone();async move {if calls.fetch_add(1,Ordering::SeqCst)==0 {entered.notify_one();release.notified().await;}let content=json!({"title":"Limiter","intent":"Bound request work","rationale":"Middleware","decisions":[],"constraints":[],"open_questions":[],"sensitive":false});axum::Json(json!({"choices":[{"message":{"content":content.to_string()}}]}))}}}));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let c = state::Config {
+            root: b.root.clone(),
+            binding_file: dir.join("binding.json"),
+            service: "backend".into(),
+            server: "http://127.0.0.1:4318".into(),
+            model: "synthetic-local".into(),
+            inference: format!("http://{address}/inference"),
+            port: 4319,
+            account: "workspace".into(),
+            device_id: uuid::Uuid::new_v4().to_string(),
+            device: Some(crate::device::Connection {
+                state_dir: dir.clone(),
+            }),
+        };
+        state::save(&c.binding_file, &b).unwrap();
+        state::save(&dir.join("agent.json"), &c).unwrap();
+        crate::device::save_receipt(&c, &b).unwrap();
+        crate::device::apply_remote(
+            &c,
+            &b,
+            crate::device::Remote {
+                revision: 1,
+                settings: Default::default(),
+            },
+        )
+        .await
+        .unwrap();
+        let session = json!({"events":[{"kind":"user_prompt","agent_id":"managed-chat","turn_id":"one","text":"Bound request work"},{"kind":"assistant_response","agent_id":"managed-chat","turn_id":"one","text":"Use middleware"},{"kind":"turn_end","agent_id":"managed-chat","turn_id":"one"},{"kind":"user_prompt","agent_id":"managed-chat","turn_id":"two","text":"Bound more work"},{"kind":"assistant_response","agent_id":"managed-chat","turn_id":"two","text":"Review middleware"},{"kind":"turn_end","agent_id":"managed-chat","turn_id":"two"}]});
+        let work = tokio::spawn({
+            let dir = dir.clone();
+            let c = c.clone();
+            async move {
+                let b = state::base_binding(&c).unwrap();
+                let mut store =
+                    wk_local::LocalStore::open(&dir.join("journal.db"), [7; 32], 1000000).unwrap();
+                journal_turns(
+                    &dir,
+                    &c,
+                    &b,
+                    &json!({"policy_revision":1}),
+                    &mut store,
+                    "managed-test",
+                    &session,
+                )
+                .await
+                .unwrap()
+            }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
+            .await
+            .unwrap();
+        crate::device::apply_remote(
+            &c,
+            &b,
+            crate::device::Remote {
+                revision: 2,
+                settings: wk_contracts::device::DeviceSettings {
+                    paused: true,
+                    ..Default::default()
+                },
+            },
+        )
+        .await
+        .unwrap();
+        assert!(crate::device::remote(&c).unwrap().settings.paused);
+        release.notify_one();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), work)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "no raw source from the second turn reaches inference after pause acknowledgment"
+        );
+        assert_eq!(result.0, 0, "inflight inference result is not retained");
+        let store = wk_local::LocalStore::open(&dir.join("journal.db"), [7; 32], 1000000).unwrap();
+        assert!(store
+            .pending_ids("draft:", "", daemon::now().unwrap(), 100)
+            .unwrap()
+            .is_empty());
+        server.abort();
     }
 }

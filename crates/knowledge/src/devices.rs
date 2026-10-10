@@ -106,15 +106,97 @@ impl Knowledge {
         if sqlx::query("SELECT 1 FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3 AND services @> $4::text[] FOR SHARE").bind(&a.org).bind(&g.product).bind(&a.user).bind(&g.services).fetch_optional(&mut **tx).await.map_err(db)?.is_none(){return Err(Error::Denied)}
         Ok(())
     }
-    pub async fn device_register(
+    pub async fn device_register(&self, a: &Actor, r: DeviceRegistration) -> Result<Device, Error> {
+        self.device_register_inner(a, r, None).await
+    }
+    pub async fn device_register_credential(
+        &self,
+        a: &Actor,
+        r: DeviceRegistration,
+        hash: &str,
+        expiry: i64,
+    ) -> Result<Device, Error> {
+        self.device_register_inner(a, r, Some((hash, expiry))).await
+    }
+    async fn credential_lock(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        a: &Actor,
+        id: uuid::Uuid,
+        hash: &str,
+    ) -> Result<(), Error> {
+        if hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Err(Error::Invalid);
+        }
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array($1::text,$2::text,'collector-credentials')::text,0))").bind(&a.org).bind(&a.user).execute(&mut **tx).await.map_err(db)?;
+        sqlx::query(
+            "DELETE FROM collector_credentials WHERE org=$1 AND owner=$2 AND expires_at<now()",
+        )
+        .bind(&a.org)
+        .bind(&a.user)
+        .execute(&mut **tx)
+        .await
+        .map_err(db)?;
+        let existing:Option<uuid::Uuid>=sqlx::query_scalar("SELECT device_id FROM collector_credentials WHERE org=$1 AND owner=$2 AND token_hash=$3").bind(&a.org).bind(&a.user).bind(hash).fetch_optional(&mut **tx).await.map_err(db)?;
+        if existing.is_some_and(|d| d != id) {
+            return Err(Error::Denied);
+        }
+        if existing.is_none()
+            && sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM collector_credentials WHERE org=$1 AND owner=$2",
+            )
+            .bind(&a.org)
+            .bind(&a.user)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?
+                >= 1000
+        {
+            return Err(Error::Conflict);
+        }
+        Ok(())
+    }
+    async fn credential_save(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        a: &Actor,
+        id: uuid::Uuid,
+        hash: &str,
+        expiry: i64,
+    ) -> Result<(), Error> {
+        sqlx::query("INSERT INTO collector_credentials(org,owner,token_hash,device_id,expires_at) VALUES($1,$2,$3,$4,to_timestamp($5)) ON CONFLICT(org,owner,token_hash) DO NOTHING").bind(&a.org).bind(&a.user).bind(hash).bind(id).bind(expiry as f64).execute(&mut **tx).await.map_err(db)?;
+        Ok(())
+    }
+    pub async fn device_bind_credential(
+        &self,
+        a: &Actor,
+        d: &Device,
+        hash: &str,
+        expiry: i64,
+    ) -> Result<(), Error> {
+        let mut tx = self.actor_tx(a).await?;
+        Self::credential_lock(&mut tx, a, d.id, hash).await?;
+        self.device_bound(d, DevicePermission::Read)
+            .lock_device(&mut tx, a)
+            .await?;
+        Self::credential_save(&mut tx, a, d.id, hash, expiry).await?;
+        tx.commit().await.map_err(db)
+    }
+    async fn device_register_inner(
         &self,
         a: &Actor,
         mut r: DeviceRegistration,
+        credential: Option<(&str, i64)>,
     ) -> Result<Device, Error> {
         r.validate().map_err(|_| Error::Invalid)?;
         r.services.sort();
         r.services.dedup();
         let mut tx = self.actor_tx(a).await?;
+        if let Some((hash, _)) = credential {
+            Self::credential_lock(&mut tx, a, r.id, hash).await?;
+        }
         let capacity: bool = sqlx::query_scalar("SELECT public.wk_device_has_capacity($1,$2)")
             .bind(&a.org)
             .bind(&a.user)
@@ -142,6 +224,9 @@ impl Knowledge {
             }
             sqlx::query("INSERT INTO registered_devices(id,org,product,owner,public_key,approval_hash,services) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(r.id).bind(&a.org).bind(&r.product).bind(&a.user).bind(&r.public_key).bind(&r.approval_hash).bind(&r.services).execute(&mut *tx).await.map_err(|e|if e.as_database_error().is_some_and(|e|e.code().as_deref()==Some("23505")){Error::Denied}else{db(e)})?;
             Self::device_audit(&mut tx, a, &r.product, r.id, "device_register").await?;
+        }
+        if let Some((hash, expiry)) = credential {
+            Self::credential_save(&mut tx, a, r.id, hash, expiry).await?;
         }
         tx.commit().await.map_err(db)?;
         self.device_get(a, &r.product, r.id).await

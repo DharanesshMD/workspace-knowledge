@@ -1,5 +1,6 @@
 use crate::state::Config;
 use serde_json::Value;
+pub const AUTH_DENIED: &str = "collector_authorization_denied";
 pub fn client(seconds: u64) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .no_proxy()
@@ -37,7 +38,7 @@ pub async fn policy(
             .as_array()
             .is_some_and(|v| v.iter().any(|s| s == &c.service))
         {
-            return Err("device service membership denied".into());
+            return Err(AUTH_DENIED.into());
         }
         return Ok(value["policy"].clone());
     }
@@ -48,12 +49,15 @@ pub async fn policy(
         .send()
         .await
         .map_err(|_| "membership service unavailable")?;
+    if matches!(r.status().as_u16(), 401 | 403) {
+        return Err(AUTH_DENIED.into());
+    }
     let v = wk_summarize::bounded_json(r, 65536).await?;
     if !v["policy"]["services"]
         .as_array()
         .is_some_and(|s| s.iter().any(|s| s == &c.service))
     {
-        return Err("service membership denied".into());
+        return Err(AUTH_DENIED.into());
     }
     Ok(v["policy"].clone())
 }

@@ -133,7 +133,20 @@ async fn collect(
             .map(|(t, a)| (Sha256::digest(t.as_bytes()).into(), a.clone()))
             .collect(),
     );
-    let who = bearer_actor(&authenticated, &h).await?;
+    let (who, expires) = if let Some(oidc) = &cfg.oidc {
+        let (issuer, subject, expiry) =
+            oidc.verify_credential(token).map_err(|_| unauthorized())?;
+        (
+            api.knowledge
+                .identity(issuer, &subject)
+                .await
+                .map_err(|_| unauthorized())?,
+            Some(expiry),
+        )
+    } else {
+        (bearer_actor(&authenticated, &h).await?, None)
+    };
+    let token_hash = format!("{:x}", Sha256::digest(token.as_bytes()));
     let id: uuid::Uuid = header(&h, "x-wk-device")?
         .parse()
         .map_err(|_| unauthorized())?;
@@ -147,6 +160,13 @@ async fn collect(
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| unauthorized())?
         .as_secs() as i64;
+    let expiry = match expires {
+        Some(exp) if exp <= now as u64 + 43200 => {
+            i64::try_from(exp).map_err(|_| unauthorized())? + 120
+        }
+        Some(_) => return Err(unauthorized()),
+        None => 32503680000,
+    };
     if time.abs_diff(now) > 60 || id.is_nil() || nonce.is_nil() {
         return Err(unauthorized());
     }
@@ -196,7 +216,10 @@ async fn collect(
         return Err(unauthorized());
     }
     if let Some(r) = registration {
-        let d = api.knowledge.device_register(&who, r).await?;
+        let d = api
+            .knowledge
+            .device_register_credential(&who, r, &token_hash, expiry)
+            .await?;
         api.knowledge
             .device_nonce(&who, &d, nonce)
             .await
@@ -212,6 +235,10 @@ async fn collect(
     if d.approval_hash != e.approval_hash {
         return Err(unauthorized());
     }
+    api.knowledge
+        .device_bind_credential(&who, &d, &token_hash, expiry)
+        .await
+        .map_err(|_| unauthorized())?;
     api.knowledge
         .device_nonce(&who, &d, nonce)
         .await

@@ -94,28 +94,15 @@ pub async fn policy(dir: &Path) -> Result<Value, String> {
     let c = state::load(dir)?;
     let b = state::binding(&c)?;
     let token = state::token(dir, "server-token")?;
-    let response = network::client(1)?
-        .get(format!("{}/v1/policy", network::server_url(&c.server)?))
-        .query(&[("product", &b.product)])
-        .bearer_auth(&*token)
-        .send()
-        .await
-        .map_err(|_| "membership_service_unavailable")?;
-    if matches!(response.status().as_u16(), 401 | 403) {
-        let _guard = lock(dir).await?;
-        clear(dir, None)?;
-        return Err("native_membership_revoked".into());
+    match network::policy(&c, &b, &token).await {
+        Ok(policy) => Ok(policy),
+        Err(error) if error == network::AUTH_DENIED => {
+            let _guard = lock(dir).await?;
+            clear(dir, None)?;
+            Err("native_membership_revoked".into())
+        }
+        Err(error) => Err(error),
     }
-    let v = wk_summarize::bounded_json(response, 65536).await?;
-    if !v["policy"]["services"]
-        .as_array()
-        .is_some_and(|s| s.iter().any(|s| s == &c.service))
-    {
-        let _guard = lock(dir).await?;
-        clear(dir, None)?;
-        return Err("native_membership_revoked".into());
-    }
-    Ok(v["policy"].clone())
 }
 pub async fn lock(dir: &Path) -> Result<std::fs::File, String> {
     let mut options = std::fs::OpenOptions::new();

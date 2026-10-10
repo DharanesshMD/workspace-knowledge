@@ -130,6 +130,7 @@ impl Knowledge {
             (6, include_str!("../../../migrations/server/0006.sql")),
             (7, include_str!("../../../migrations/server/0007.sql")),
             (8, include_str!("../../../migrations/server/0008.sql")),
+            (9, include_str!("../../../migrations/server/0009.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
