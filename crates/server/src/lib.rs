@@ -1,6 +1,7 @@
 //! Authenticated shared knowledge HTTP API.
 pub mod auth;
 pub mod browser_auth;
+mod browser_routes;
 pub mod decisions;
 pub mod environments;
 pub mod remote_mcp;
@@ -23,6 +24,7 @@ struct Api {
     tokens: Arc<HashMap<[u8; 32], Actor>>,
     oidc: Option<auth::Oidc>,
     origin: Option<String>,
+    browser: Option<browser_auth::BrowserAuth>,
 }
 struct Failure(StatusCode, &'static str);
 impl IntoResponse for Failure {
@@ -41,7 +43,7 @@ impl From<Error> for Failure {
         }
     }
 }
-async fn actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
+async fn bearer_actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
     if headers
         .get("origin")
         .is_some_and(|v| v.to_str().ok() != api.origin.as_deref())
@@ -68,6 +70,31 @@ async fn actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
         .get(&key)
         .cloned()
         .ok_or(Failure(StatusCode::UNAUTHORIZED, "unauthenticated"))
+}
+async fn actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
+    let cookie = browser_routes::session_cookie(api, headers)?;
+    if let Some(secret) = cookie {
+        if headers.contains_key("authorization") {
+            return Err(Failure(StatusCode::UNAUTHORIZED, "ambiguous_identity"));
+        }
+        if api.browser.is_none() {
+            return Err(Failure(StatusCode::UNAUTHORIZED, "unauthenticated"));
+        }
+        let session = api
+            .knowledge
+            .browser_session(&browser_auth::hash(&secret))
+            .await
+            .map_err(|_| Failure(StatusCode::UNAUTHORIZED, "unauthenticated"))?;
+        if session.csrf_hash != browser_auth::hash(&browser_routes::csrf(&secret)) {
+            return Err(Failure(StatusCode::UNAUTHORIZED, "unauthenticated"));
+        }
+        return api
+            .knowledge
+            .identity(&session.issuer, &session.subject)
+            .await
+            .map_err(|_| Failure(StatusCode::UNAUTHORIZED, "unauthenticated"));
+    }
+    bearer_actor(api, headers).await
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -412,6 +439,15 @@ pub fn configured_router(
     oidc: Option<auth::Oidc>,
     origin: Option<String>,
 ) -> Router {
+    portal_router(knowledge, tokens, oidc, origin, None)
+}
+pub fn portal_router(
+    knowledge: Knowledge,
+    tokens: Vec<(String, Actor)>,
+    oidc: Option<auth::Oidc>,
+    origin: Option<String>,
+    browser: Option<browser_auth::BrowserAuth>,
+) -> Router {
     let mode = if oidc.is_some() {
         "production"
     } else {
@@ -421,7 +457,16 @@ pub fn configured_router(
         .into_iter()
         .map(|(token, actor)| (Sha256::digest(token.as_bytes()).into(), actor))
         .collect();
+    let api = Api {
+        decisions: Arc::new(std::sync::OnceLock::new()),
+        knowledge,
+        tokens: Arc::new(tokens),
+        oidc,
+        origin,
+        browser,
+    };
     Router::new()
+        .merge(browser_routes::routes())
         .route(
             "/health",
             get(move || async move { Json(json!({"status":"ok","mode":mode})) }),
@@ -458,11 +503,9 @@ pub fn configured_router(
         )
         .route("/v1/products/{product}/overlaps", post(overlaps))
         .layer(DefaultBodyLimit::max(65536))
-        .with_state(Api {
-            decisions: Arc::new(std::sync::OnceLock::new()),
-            knowledge,
-            tokens: Arc::new(tokens),
-            oidc,
-            origin,
-        })
+        .layer(axum::middleware::from_fn_with_state(
+            api.clone(),
+            browser_routes::protect,
+        ))
+        .with_state(api)
 }

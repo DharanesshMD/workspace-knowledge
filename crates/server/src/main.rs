@@ -142,6 +142,29 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => return Err("unknown mode".into()),
     };
+    let browser = if let Ok(client_id) = std::env::var("WK_BROWSER_CLIENT_ID") {
+        let browser_origin = origin
+            .clone()
+            .ok_or("WK_CONSOLE_ORIGIN required for browser login")?;
+        let issuer = if mode == "--dev" {
+            required("WK_BROWSER_TEST_ISSUER")?
+        } else {
+            required("WK_OIDC_ISSUER")?
+        };
+        Some(
+            wk_server::browser_auth::BrowserConfig::load(
+                browser_origin,
+                issuer,
+                client_id,
+                std::env::var("WK_BROWSER_CLIENT_SECRET").ok(),
+                mode == "--dev",
+            )
+            .await
+            .map_err(|e| format!("Browser identity initialization failed: {e}"))?,
+        )
+    } else {
+        None
+    };
     let listener = tokio::net::TcpListener::bind(&address).await?;
     eprintln!(
         "{mode} API listening at http://{} (authenticated)",
@@ -160,7 +183,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
     });
-    let mut router = wk_server::configured_router(knowledge, tokens, oidc, origin);
+    let mut router = wk_server::portal_router(knowledge, tokens, oidc, origin, browser);
     if let Ok(dir) = std::env::var("WK_WEB_DIR") {
         router = router.fallback_service(
             tower_http::services::ServeDir::new(&dir).append_index_html_on_directories(true),

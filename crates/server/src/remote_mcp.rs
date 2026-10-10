@@ -355,7 +355,7 @@ pub(crate) async fn transport(
         )
         .into_response();
     }
-    let actor = match crate::actor(&api, request.headers()).await {
+    let actor = match crate::bearer_actor(&api, request.headers()).await {
         Ok(a) => a,
         Err(error) => {
             let mut response = error.into_response();
