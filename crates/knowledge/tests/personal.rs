@@ -203,6 +203,18 @@ async fn personal_expiry_screening_and_restricted_role_are_enforced() {
         .personal_delete(&a, "demo", note.id, 1)
         .await
         .unwrap();
+    let mut hidden = input("hidden-collision");
+    hidden.body.service_ids = vec!["frontend".into()];
+    runtime.personal_put(&a, "demo", hidden).await.unwrap();
+    k.grant(&a, "demo", &["backend".into()], false)
+        .await
+        .unwrap();
+    let mut retry = input("hidden-collision");
+    retry.body.policy_revision = 2;
+    assert_eq!(
+        runtime.personal_put(&a, "demo", retry).await.unwrap_err(),
+        Error::Conflict
+    );
     pool.close().await;
     sqlx::raw_sql(&format!("DROP OWNED BY {role}; DROP ROLE {role};"))
         .execute(&owner)

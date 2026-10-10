@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use wk_scope::enrollment::Binding;
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub root: PathBuf,

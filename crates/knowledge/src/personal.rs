@@ -110,7 +110,9 @@ impl Knowledge {
             PersonalProvenance::Manual => "manual",
             PersonalProvenance::Captured => "captured",
         };
-        let row=sqlx::query(&format!("INSERT INTO personal_summaries AS s(id,org,product,owner,idempotency_key,services,body,provenance) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING {FIELDS}")).bind(uuid::Uuid::new_v4()).bind(&a.org).bind(p).bind(&a.user).bind(&input.body.idempotency_key).bind(&input.body.service_ids).bind(value).bind(provenance).fetch_one(&mut *tx).await.map_err(db)?;
+        let row=sqlx::query(&format!("INSERT INTO personal_summaries AS s(id,org,product,owner,idempotency_key,services,body,provenance) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING {FIELDS}")).bind(uuid::Uuid::new_v4()).bind(&a.org).bind(p).bind(&a.user).bind(&input.body.idempotency_key).bind(&input.body.service_ids).bind(value).bind(provenance).fetch_one(&mut *tx).await.map_err(|error| {
+            if error.as_database_error().is_some_and(|e| e.code().as_deref()==Some("23505")) {Error::Conflict} else {db(error)}
+        })?;
         let note = decode_personal(row)?;
         tx.commit().await.map_err(db)?;
         Ok(note)

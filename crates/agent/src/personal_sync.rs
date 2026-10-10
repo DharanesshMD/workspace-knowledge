@@ -15,6 +15,8 @@ struct Choice {
     model: String,
     inference: String,
     policy_revision: u64,
+    #[serde(default)]
+    account: String,
 }
 fn read(dir: &Path) -> Result<Choice, String> {
     let path = dir.join("owner-sync.json");
@@ -33,6 +35,7 @@ fn matches(choice: &Choice, c: &state::Config, b: &wk_scope::enrollment::Binding
         && choice.device_id == c.device_id
         && choice.model == c.model
         && choice.inference == c.inference
+        && choice.account == c.account
 }
 pub fn status(dir: &Path) -> Result<Value, String> {
     let choice = read(dir)?;
@@ -67,6 +70,7 @@ pub async fn configure(dir: &Path, action: &str, yes: bool) -> Result<Value, Str
                     product: b.product,
                     service: c.service,
                     device_id: c.device_id,
+                    account: c.account,
                     model: c.model,
                     inference: c.inference,
                     policy_revision: policy["policy_revision"]
@@ -79,15 +83,20 @@ pub async fn configure(dir: &Path, action: &str, yes: bool) -> Result<Value, Str
         _ => Err("owner-sync action must be status, enable or disable".into()),
     }
 }
-pub fn permits(dir: &Path, hash: &str, revision: u64) -> Result<bool, String> {
+pub fn permits(
+    dir: &Path,
+    snapshot: &state::Config,
+    approved: &wk_scope::enrollment::Binding,
+    revision: u64,
+) -> Result<bool, String> {
     let choice = read(dir)?;
     let c = state::load(dir)?;
     let b = state::binding(&c)?;
-    Ok(
-        matches(&choice, &c, &b)
-            && choice.policy_hash == hash
-            && choice.policy_revision == revision,
-    )
+    Ok(c == *snapshot
+        && matches(&choice, snapshot, approved)
+        && matches(&choice, &c, &b)
+        && choice.policy_hash == approved.policy_hash
+        && choice.policy_revision == revision)
 }
 pub fn payload(card: &Value) -> Result<Value, String> {
     let typed: wk_contracts::CardSubmission =
@@ -227,12 +236,16 @@ mod tests {
             model: c.model.clone(),
             inference: c.inference.clone(),
             policy_revision: 1,
+            account: c.account.clone(),
         };
         state::save(&temp.path().join("owner-sync.json"), &choice).unwrap();
         assert_eq!(status(temp.path()).unwrap()["enabled"], true);
-        assert!(permits(temp.path(), &b.policy_hash, 1).unwrap());
-        assert!(!permits(temp.path(), &b.policy_hash, 2).unwrap());
-        assert!(!permits(temp.path(), "changed-hash", 1).unwrap());
+        assert!(permits(temp.path(), &c, &b, 1).unwrap());
+        assert!(!permits(temp.path(), &c, &b, 2).unwrap());
+        let mut changed_binding: wk_scope::enrollment::Binding =
+            serde_json::from_value(serde_json::to_value(&b).unwrap()).unwrap();
+        changed_binding.policy_hash = "changed-hash".into();
+        assert!(!permits(temp.path(), &c, &changed_binding, 1).unwrap());
         c.server = "https://another.example".into();
         state::save(&temp.path().join("agent.json"), &c).unwrap();
         assert_eq!(status(temp.path()).unwrap()["enabled"], false);
@@ -240,6 +253,63 @@ mod tests {
         c.model = "changed-model".into();
         state::save(&temp.path().join("agent.json"), &c).unwrap();
         assert_eq!(status(temp.path()).unwrap()["enabled"], false);
+    }
+    #[tokio::test]
+    async fn newly_approved_destination_cannot_authorize_an_old_delivery_snapshot() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        let count = Arc::new(AtomicUsize::new(0));
+        let seen = count.clone();
+        let app = axum::Router::new().route(
+            "/v1/products/demo/personal",
+            axum::routing::post(move || {
+                let seen = seen.clone();
+                async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    axum::Json(json!({"summary":{"id":"synthetic"}}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (temp, old, b) = fixture(&origin);
+        let mut changed = old.clone();
+        changed.server = "https://newly-approved.example".into();
+        state::save(&temp.path().join("agent.json"), &changed).unwrap();
+        state::save(
+            &temp.path().join("owner-sync.json"),
+            &Choice {
+                enabled: true,
+                policy_hash: b.policy_hash.clone(),
+                server: changed.server.clone(),
+                product: b.product.clone(),
+                service: changed.service.clone(),
+                device_id: changed.device_id.clone(),
+                model: changed.model.clone(),
+                inference: changed.inference.clone(),
+                policy_revision: 1,
+                account: changed.account.clone(),
+            },
+        )
+        .unwrap();
+        let result = process::post_draft(
+            temp.path(),
+            &old,
+            &b,
+            "synthetic-token",
+            &json!({"card":card()}),
+            true,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "new consent must not authorize old destination"
+        );
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        task.abort();
     }
     #[test]
     fn successful_sync_marker_survives_restart_without_extending_draft_retention() {

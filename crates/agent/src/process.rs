@@ -133,7 +133,7 @@ pub async fn submit(dir: &Path, id: &str) -> Result<Value, String> {
 pub(crate) async fn sync_owner(dir: &Path, id: &str) -> Result<Value, String> {
     deliver(dir, id, true).await
 }
-async fn post_draft(
+pub(crate) async fn post_draft(
     dir: &Path,
     c: &state::Config,
     b: &wk_scope::enrollment::Binding,
@@ -145,7 +145,7 @@ async fn post_draft(
         let revision = v["card"]["policy_revision"]
             .as_u64()
             .ok_or("invalid policy")?;
-        if !crate::personal_sync::permits(dir, &b.policy_hash, revision)? {
+        if !crate::personal_sync::permits(dir, c, b, revision)? {
             return Err("owner synchronization disabled or approval changed".into());
         }
         return crate::personal_sync::send(c, &b.product, t, &v["card"]).await;
