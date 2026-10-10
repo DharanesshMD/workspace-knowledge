@@ -10,6 +10,7 @@ pub mod graph;
 pub mod lifecycle;
 pub mod personal;
 pub mod signed_evidence;
+pub mod team;
 #[derive(Clone)]
 pub struct Actor {
     pub org: String,

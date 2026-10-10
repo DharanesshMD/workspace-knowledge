@@ -6,6 +6,7 @@ pub mod decisions;
 pub mod environments;
 mod personal_routes;
 pub mod remote_mcp;
+mod team_routes;
 use axum::{
     extract::{rejection::JsonRejection, DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -469,6 +470,7 @@ pub fn portal_router(
     Router::new()
         .merge(browser_routes::routes())
         .merge(personal_routes::routes())
+        .merge(team_routes::routes())
         .route(
             "/health",
             get(move || async move { Json(json!({"status":"ok","mode":mode})) }),
@@ -501,7 +503,9 @@ pub fn portal_router(
         .route("/v1/products/{product}/relationships", post(relate))
         .route(
             "/v1/products/{product}/activity",
-            post(activity).delete(clear_activity),
+            post(activity)
+                .get(team_routes::activity)
+                .delete(clear_activity),
         )
         .route("/v1/products/{product}/overlaps", post(overlaps))
         .layer(DefaultBodyLimit::max(65536))
