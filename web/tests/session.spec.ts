@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+test.beforeEach(async({page})=>{await page.route('**/personal',r=>r.fulfill({json:{summaries:[],next_cursor:null}}));});
 test('hosted anonymous portal offers organization sign-in without token input',async({page})=>{
  await page.route('**/auth/config',r=>r.fulfill({json:{browser_login:true,development:false}}));
  await page.route('**/v1/me',r=>r.fulfill({status:401,json:{error:'unauthenticated'}}));
@@ -9,7 +10,7 @@ test('permitted products switch context and logout uses session CSRF',async({pag
  await page.route('**/v1/me',r=>r.fulfill({json:{user:'alice',org:'team',csrf_token:'csrf-test',products:[{product:'alpha',services:['backend'],can_review:false,policy_revision:1},{product:'beta',services:['frontend'],can_review:true,policy_revision:1}]}}));
  await page.route('**/v1/search',r=>r.fulfill({json:{cards:[]}}));
  let loggedOut=false;await page.route('**/auth/logout',r=>{expect(r.request().method()).toBe('POST');expect(r.request().headers()['x-csrf-token']).toBe('csrf-test');loggedOut=true;return r.fulfill({json:{logged_out:true}});});
- await page.goto('/');await expect(page.getByLabel('Current product')).toHaveValue('alpha');await page.getByLabel('Search product knowledge').fill('something');await page.getByRole('button',{name:'Search',exact:true}).click();await expect(page.getByText('No matching knowledge is visible')).toBeVisible();await page.getByLabel('Current product').selectOption('beta');await expect(page.getByLabel('Search product knowledge')).toHaveValue('');await page.getByRole('button',{name:'Sign out',exact:true}).click();await expect(page.getByRole('link',{name:'Sign in with your organization'})).toBeVisible();expect(loggedOut).toBe(true);
+ await page.goto('/');await expect(page.getByLabel('Current product')).toHaveValue('alpha');await page.getByRole('button',{name:'Knowledge',exact:true}).click();await page.getByLabel('Search product knowledge').fill('something');await page.getByRole('button',{name:'Search',exact:true}).click();await expect(page.getByText('No matching knowledge is visible')).toBeVisible();await page.getByLabel('Current product').selectOption('beta');await expect(page.getByLabel('Search product knowledge')).toHaveValue('');await page.getByRole('button',{name:'Sign out',exact:true}).click();await expect(page.getByRole('link',{name:'Sign in with your organization'})).toBeVisible();expect(loggedOut).toBe(true);
 });
 test('desktop session controls fit the initial viewport',async({page})=>{
  await page.setViewportSize({width:1040,height:853});

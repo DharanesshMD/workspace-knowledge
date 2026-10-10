@@ -2,14 +2,15 @@ import {useEffect, useRef, useState, type FormEvent} from 'react';
 import {Relationships} from './Relationships';
 import {TrustedEvidence} from './TrustedEvidence';
 import {ApiError, productPath, request} from './api';
-import {Session} from './Session';
+import {Session,type Membership} from './Session';
+import {MyContext} from './MyContext';
 import type {Card, Status, Profile, Edge} from './types';
 
-type View = 'Knowledge'|'Review queue'|'Relationships'|'Workspace'|'Environments';
+type View = 'My context'|'Knowledge'|'Review queue'|'Relationships'|'Workspace'|'Environments';
 const views:View[] = ['Knowledge','Review queue','Relationships','Workspace','Environments'];
 const readable = (value:string) => value.replaceAll('_',' ');
 
-export default function App() { return <Session development={<DevelopmentApp/>} render={(user,product,onLogout)=> <HostedWorkbench user={user} product={product} onLogout={onLogout}/>}/>; }
+export default function App() { return <Session development={<DevelopmentApp/>} render={(user,product,onLogout,policy)=> <HostedWorkbench user={user} product={product} onLogout={onLogout} policy={policy}/>}/>; }
 function DevelopmentApp() {
   const [token,setToken] = useState('');
   const [product,setProduct] = useState('');
@@ -21,9 +22,10 @@ function DevelopmentApp() {
     {!connection?<section className="connect"><h2>Connect to a product</h2><p>Use an access token issued by your on-premises service. Your token stays in this tab’s memory and is cleared when you disconnect or reload.</p><form onSubmit={e=>{e.preventDefault();setConnection({token,product});setToken('');}}><label>Product ID<input value={product} onChange={e=>setProduct(e.target.value)} required pattern="[A-Za-z0-9_-]+" maxLength={128} autoComplete="off" placeholder="your-product"/></label><label>Access token<input type="password" value={token} onChange={e=>setToken(e.target.value)} required autoComplete="off" spellCheck={false}/></label><button className="primary" type="submit">Connect</button></form><p className="muted">Access is checked by the server on every request. No conversation transcripts or environment values are available here.</p></section>:<Workspace key={`${connection.product}-${view}`} {...connection} view={view}/>}
     </main></div></>;
 }
-function HostedWorkbench({user,product,onLogout}:{user:string;product:string;onLogout:()=>void}) {
- const [view,setView]=useState<View>('Knowledge');
- return <><a className="skip" href="#main">Skip to content</a><div className="shell"><aside className="sidebar"><a className="brand" href="#main"><span className="mark" aria-hidden="true">W</span><span>Workspace Knowledge</span></a><p className="sidebar-copy">Shared decisions.<br/>Private conversations.</p><nav aria-label="Main navigation">{views.map(item=><button key={item} aria-current={view===item?'page':undefined} onClick={()=>setView(item)}>{item}</button>)}</nav><div className="connection-note"><span>Signed in as</span><strong>{user}</strong><span>Product</span><strong>{product}</strong><button onClick={onLogout}>Sign out</button></div></aside><main id="main" tabIndex={-1}><header className="page-header"><div><p className="context">Developer workbench</p><h1>{view}</h1></div><span className="privacy-label">Summaries only</span></header><Workspace key={product+view} view={view} product={product} token=""/></main></div></>;
+function HostedWorkbench({user,product,onLogout,policy}:{user:string;product:string;onLogout:()=>void;policy:Membership}) {
+ const [view,setView]=useState<View>('My context');
+ const hostedViews:View[]=['My context',...views.filter(v=>v!=='Review queue'||policy.can_review)];
+ return <><a className="skip" href="#main">Skip to content</a><div className="shell"><aside className="sidebar"><a className="brand" href="#main"><span className="mark" aria-hidden="true">W</span><span>Workspace Knowledge</span></a><p className="sidebar-copy">Shared decisions.<br/>Private conversations.</p><nav aria-label="Main navigation">{hostedViews.map(item=><button key={item} aria-current={view===item?'page':undefined} onClick={()=>setView(item)}>{item}</button>)}</nav><div className="connection-note"><span>Signed in as</span><strong>{user}</strong><span>Product</span><strong>{product}</strong><button onClick={onLogout}>Sign out</button></div></aside><main id="main" tabIndex={-1}><header className="page-header"><div><p className="context">Developer workbench</p><h1>{view}</h1></div><span className="privacy-label">{view==='My context'?'Owner-only':'Summaries only'}</span></header>{view==='My context'?<MyContext key={product} product={product} policy={policy}/>:<Workspace key={product+view} view={view} product={product} token=""/>}</main></div></>;
 }
 function Workspace({token,product,view}:{token:string;product:string;view:View}) {
   const [query,setQuery]=useState(''); const [cards,setCards]=useState<Card[]>([]); const [selected,setSelected]=useState<Card|null>(null);

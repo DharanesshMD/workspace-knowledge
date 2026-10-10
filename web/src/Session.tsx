@@ -1,8 +1,8 @@
 import {useEffect,useState,type ReactNode} from 'react';
 import {ApiError,request,setSessionCsrf} from './api';
-type Membership={product:string;services:string[];can_review:boolean;policy_revision:number};
+export type Membership={product:string;services:string[];can_review:boolean;policy_revision:number};
 type Me={user:string;org:string;products:Membership[];csrf_token?:string};
-export function Session({development,render}:{development:ReactNode;render:(user:string,product:string,logout:()=>void)=>ReactNode}) {
+export function Session({development,render}:{development:ReactNode;render:(user:string,product:string,logout:()=>void,policy:Membership)=>ReactNode}) {
  const [mode,setMode]=useState<'loading'|'development'|'hosted'|'unconfigured'>('loading');const [me,setMe]=useState<Me|null>(null);const [product,setProduct]=useState('');const [error,setError]=useState('');const [busy,setBusy]=useState(false);
  useEffect(()=>{
   const controller=new AbortController();const expired=()=>{setMe(null);setProduct('');setSessionCsrf('');};window.addEventListener('wk-session-expired',expired);
@@ -13,5 +13,5 @@ export function Session({development,render}:{development:ReactNode;render:(user
  if(mode==='development')return <>{development}</>;
  if(mode==='loading')return <main className="session-page"><p role="status">Connecting to your knowledge service…</p></main>;
  if(!me)return <main className="session-page"><section className="connect"><p className="context">Workspace Knowledge</p><h1>Your team's engineering context</h1><p>Read shared decisions, keep your own context organized, and manage your developer setup. Conversations stay private.</p>{error&&<p role="alert" className="error">{error}</p>}{mode==='hosted'?<a className="primary sign-in" href="/auth/login">Sign in with your organization</a>:<p>Organization sign-in has not been configured. Contact your administrator.</p>}</section></main>;
- return <div className="hosted-session">{error&&<p role="alert" className="error">{error}</p>}<div className="session-bar"><span>{me.org}</span>{me.products.length>0&&<label>Current product<select aria-label="Current product" value={product} onChange={e=>setProduct(e.target.value)} disabled={busy}>{me.products.map(p=><option key={p.product} value={p.product}>{p.product}</option>)}</select></label>}</div>{me.products.some(p=>p.product===product)?render(me.user,product,()=>void logout()):<main className="session-page"><h1>Welcome, {me.user}</h1><p>No products are assigned to your account.</p><p>Ask your administrator to grant access to the product and services you work on.</p><button disabled={busy} onClick={()=>void logout()}>Sign out</button></main>}</div>;
+ return <div className="hosted-session">{error&&<p role="alert" className="error">{error}</p>}<div className="session-bar"><span>{me.org}</span>{me.products.length>0&&<label>Current product<select aria-label="Current product" value={product} onChange={e=>setProduct(e.target.value)} disabled={busy}>{me.products.map(p=><option key={p.product} value={p.product}>{p.product}</option>)}</select></label>}</div>{me.products.some(p=>p.product===product)?render(me.user,product,()=>void logout(),me.products.find(p=>p.product===product)!):<main className="session-page"><h1>Welcome, {me.user}</h1><p>No products are assigned to your account.</p><p>Ask your administrator to grant access to the product and services you work on.</p><button disabled={busy} onClick={()=>void logout()}>Sign out</button></main>}</div>;
 }

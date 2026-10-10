@@ -3,3 +3,5 @@ export type Card = {id:string; body:Body; revision:number; published:boolean; pu
 export type Status = {publication_mode?:string; inference_destination?:string; paused?:boolean; connectors?:{name:string; status:string; coverage?:string}[]; services?:string[]; policy_revision?:number};
 export type Profile = {id:string; name:string; service_ids:string[]; access:string; variables:{name:string; required:boolean; description?:string}[]};
 export type Edge = {source:string; target:string; relation:string};
+
+export type PersonalSummary={id:string;body:Body;revision:number;provenance:'manual'|'captured';created_at_ms:number;expires_at_ms:number;submitted_card:string|null};
