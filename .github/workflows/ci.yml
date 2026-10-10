@@ -25,6 +25,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked --no-fail-fast
       - run: cargo build --workspace --locked
+      - if: runner.os != 'Windows'
+        run: python3 -m unittest discover -s scripts/tests -v
 
   postgres:
     runs-on: ubuntu-latest
@@ -47,7 +49,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - run: rustup toolchain install 1.98.1 --profile minimal
-      - run: cargo test -p wk-knowledge --test access --locked -- --ignored
+      - run: cargo test --workspace --locked -- --include-ignored
       - run: cargo build --workspace --locked
       - run: python3 scripts/integration.py
       - run: python3 scripts/demo.py

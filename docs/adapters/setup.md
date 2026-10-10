@@ -1,12 +1,12 @@
 # Native collector and agent setup
 
-Build the workspace. Commands below are operator instructions, not actions performed on this machine. No real conversations were collected during development.
+Install the [user tools](../operations/install.md#install-the-tools), then follow the steps below. Live acceptance uses isolated synthetic conversations; these examples do not authorize collecting existing chats.
 
 1. Approve only intended service folders using `wk --state-dir /private/consent workspace approve /work/product --product PRODUCT --service backend --service frontend --yes`. The consent directory must be outside the product and private. Each separate collector state binds one chosen service. A multi-service capture must be explicitly attributed; unknown attribution remains partial.
-2. Provision server product membership, set a short-lived `WK_ACCESS_TOKEN`, then run `wk-agent --state-dir /private/collector init --binding /private/consent/HASH.json --service backend --server https://knowledge.example --model LOCAL_MODEL --yes`. `init` validates membership before creating OS keyring entries. It does not start capture or install hooks. The inference default is a literal loopback OpenAI-compatible endpoint. Tokens and capture keys go to native keyring storage, never a key file.
+2. Ask the operator to provision your product/service membership. Copy the `binding_file` returned by approval, then run `wk-agent --state-dir /private/collector device connect --binding /private/consent/APPROVAL.json --service backend --server https://knowledge.example --model LOCAL_MODEL --inference http://127.0.0.1:11434/v1/chat/completions --yes`. Complete the browser sign-in to the configured upstream provider. Connection validates membership and stores credentials in the native keyring; it does not start capture or install hooks. See [team connection](../operations/install.md#join-a-team-server). Legacy `init` and environment tokens are limited to loopback development.
 3. Run `wk-agent --state-dir /private/collector serve` in the user's session. Linux requires Secret Service/DBus. Missing secure storage disables persistence. Windows uses native Credential Store plus a private-directory ACL check. Platform certification remains required.
 4. Generate hook config with `wk-agent --state-dir /private/collector config --client cursor` (also `claude-code`, `gemini`). Inspect the fragment, then use `install --client CLIENT --file ABS_CONFIG --yes`. Installation merges strict JSON, backs up the prior object privately, and records owned entries. JSONC is refused unchanged. Uninstall removes exact owned entries and preserves user-modified entries. Do not install into real profiles until synthetic client certification is complete.
-5. `doctor` separately reports local approval, current membership, key availability, event counters and client capability labels. It does not turn untested fields green. Refresh an expired server token with `WK_ACCESS_TOKEN=... wk-agent --state-dir ... auth` through your normal secret-entry mechanism.
+5. `doctor` separately reports local approval, current membership, key availability, event counters and client capability labels. It does not turn untested fields green. Renew an expired hosted credential with `wk-agent --state-dir /private/collector device login` through upstream browser sign-in.
 
 A hook failure returns normally to the developer's agent and records a content-free capture gap locally. Knowledge generation/submission stops until `reset-capture --yes` closes pending sessions and discards private drafts. Then start a genuinely new client session. Restarts alone must not change client session identity. Hooks do not extract thinking/reasoning. The opt-in Cursor recovery described below validates callback-supplied transcript paths before a background reader may open them; other hooks do not read transcript paths. Product cwd is attribution metadata, not proof that all model context was in scope. Unknown external context therefore prevents automatic publication.
 
@@ -47,7 +47,7 @@ To build cards from your own Cursor history for evaluation: `wk cursor-history c
 
 ## Cursor native recovery (opt-in)
 
-Target: Cursor **3.23.23**, macOS, Agents window, **This Mac** execution. Standard installation does not enable transcript reads. After the existing folder approval, membership and collector init steps:
+Target: Cursor **3.23.23**, macOS, Agents window, **This Mac** execution. Standard installation does not enable transcript reads. After the existing folder approval, membership and collector connection steps:
 
 ```sh
 wk-agent --state-dir /private/collector cursor-enroll --yes
@@ -98,4 +98,4 @@ wk-agent --state-dir /absolute/private/state uninstall --client codex --file /ab
 
 Disable clears that client's private native evidence/drafts; its remaining hooks acknowledge without capture. Uninstall removes only owned unchanged entries. Raw evidence has a fixed 24-hour deadline; drafts expire within one hour and never outlive their source. Replays do not extend retention. Permission revocation blocks submission and clears native records; unavailable permission services block work. Missing initial callbacks remain undetectable. Ephemeral Codex history cannot be recovered. Collector outage can require an explicit clean-session reset after inspecting the gap.
 
-These adapters are experimental, not production-certified. Claude's partial adapter is unchanged. Five-developer load, native distribution, other operating systems and broad context coverage remain separate validation work.
+These adapters are experimental, not production-certified. Claude's partial adapter is unchanged. A synthetic five-developer API/database pilot passed [local operations acceptance](../reviews/2026-10-10-hosted-operations-acceptance.md). Native distribution, other operating systems, broad context coverage and workload-specific deployed-server capacity remain separate validation work.

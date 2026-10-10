@@ -12,3 +12,5 @@
 /web/playwright-report/
 *.pem
 *.key
+
+__pycache__/

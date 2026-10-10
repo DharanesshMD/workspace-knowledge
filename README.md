@@ -1,87 +1,117 @@
 # Workspace Knowledge
 
-Open-source, on-premises knowledge sharing for developers working in explicitly approved product folders. Raw conversations remain inside a private capture boundary; agents and teammates retrieve scoped summaries.
+**Development context your team can reuse.**
 
-**Status: development implementation, not a certified production release.** The implementation spans collector, summaries, shared API, MCP, console and environment tooling. The [completion matrix](docs/architecture/completion-matrix.md) records remaining implementation and live-certification gaps. In particular, universal native capture, policy-auto, live-client remote MCP OAuth, a configured Jev endpoint and signed releases are not claimed complete.
+Workspace Knowledge is an open-source, on-premises system for sharing the decisions, constraints and rationale behind development work. Developers keep their own context, review summaries, and make useful knowledge available to teammates and coding agents within approved product and service boundaries.
 
-## Components
+Git shares the code. Workspace Knowledge helps explain why it changed, what was tried, and what another developer should know before building on it.
 
-| Command | Purpose |
-|---|---|
-| `wk` | Local workspace approval, scope checks, pause/revoke, card validation, replay, search/context and companion commands |
-| `wk-agent` | Native-keyring collector, authenticated local receiver, hook setup, explicit imports, instrumented local chat, private summaries, doctor |
-| `wk-server` | PostgreSQL knowledge API, OIDC verification, provisioning, migrations, revisions, withdrawal, feedback, provenance graph and console hosting |
-| `wk-mcp` | Standard stdio tools: knowledge search/get/context/record/feedback, workspace status and environment schema |
-| `wk-env` | Separate OpenBao schema/import/run/export broker; no secret-value MCP tool |
+**Pre-release:** the hosted portal and local workflows have bounded acceptance evidence. Capture coverage depends on the client, version and surface. Production identity, native packaging and security gates remain open; see [current status](docs/architecture/completion-matrix.md).
 
-The native collector uses encrypted SQLite records, fixed raw retention, durable closed-session guards, duplicate detection and persistent mixed-context holds. Capture occurs only after local approval and a current server membership check. Missing keyring, consent, or membership fails closed. A hook failure does not block the developer's AI agent; it stops knowledge submission until a clean-session reset.
+[Quickstart](#quickstart) · [Team setup](#team-setup) · [Client coverage](#client-coverage) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md)
 
-Cursor has **opt-in, version-pinned native recovery** for macOS 3.23.23 Agents local sessions; see [setup and limits](docs/adapters/setup.md#cursor-native-recovery-opt-in). It recovers only explicitly bound session files and requires owner review before submission. Broad client certification remains incomplete. Claude Code and Gemini hook adapters retain partial coverage. Codex and Antigravity native capture adapters are not implemented; standard MCP retrieval and the managed chat alternative are separate capabilities. Claude Desktop general chat has an explicit Enterprise bound-chat text pull for an isolated broker, requiring entitlement and chat consent. MCP alone does not capture conversations.
+## What you get
 
-Summaries are generated through an explicitly configured loopback OpenAI-compatible model endpoint. Candidate summaries stay encrypted locally; `drafts` and `submit --reviewed` support owner review. Submitted summaries become server drafts before reviewer publication. No cloud fallback, hidden-reasoning collection, global transcript scan or automatic `.env` collection exists. Automatic policy publication requires further privacy evaluation and remains disabled.
+- **My context:** owner-only summaries and structured notes, with editing, deletion and explicit submission for review.
+- **Team context:** published summaries filtered by developer, service, date and file. Teammates see summaries, not conversation messages.
+- **Coding-agent retrieval:** scoped search, context, overlap notices and other knowledge tools through MCP.
+- **Device controls:** connection reports, requested permissions, pause and revocation, with pending and stale states shown explicitly.
+- **Review and provenance:** revision history, withdrawal, reviewed relationships and separately verified evidence. A proposed decision does not become an implemented fact.
+- **On-premises operations:** PostgreSQL storage, scoped administration, retention controls and encrypted backup/restore tooling. Environment secrets use a separately authorized OpenBao broker.
 
-## Build and development
+<img src="docs/reviews/team-context/live-desktop.png" alt="Hosted Team context showing a published synthetic summary, service and file filters, and revision details" width="760" />
 
-Install the pinned Rust toolchain through rustup, Node.js 22 and Python 3. Linux collector builds require `libdbus-1-dev` and `pkg-config`, and runtime Secret Service. Native keyring availability is required for persistent collector use.
+*Team context, shown with synthetic data from the local acceptance test.*
 
-```sh
-cargo build --workspace --locked
-cargo test --workspace --locked
-cd web
-npm ci
-npm run build
-```
+## Quickstart
 
-This checkout has an ignored local toolchain; `./scripts/cargo` uses it and otherwise falls back to system Cargo. On Windows binaries have `.exe` suffixes. CI describes Linux/macOS/Windows builds; configured CI is not proof that those platforms passed.
+Try the scope and consent workflow before installing a collector or hosting a server.
 
-The synthetic scope demo does not access real chats:
+You need **Rust** (the repository pins its version), a **C build toolchain**, and **Python 3**. Rustup uses `rust-toolchain.toml` to select the required toolchain. On macOS, install Xcode Command Line Tools; on Windows, install MSVC build tools; on Linux, install your distribution's C build tools.
 
 ```sh
+git clone --branch codex/cursor-native-capture https://github.com/DharanesshMD/workspace-knowledge.git
+cd workspace-knowledge
+./scripts/cargo build --locked -p wk-cli
 python3 scripts/demo.py
 ```
 
-Use a disposable PostgreSQL database named `wk_test` for integration checks:
+On Windows, use `cargo build --locked -p wk-cli` and `python scripts/demo.py` instead of the last two commands. These instructions target the current pre-release branch, `codex/cursor-native-capture`.
+
+The demo creates a temporary synthetic workspace, approves one service, rejects out-of-scope paths, replays a visible conversation fixture and checks that pause stops eligibility. It ends with `Synthetic consent, scope, replay, and pause checks passed.` and removes its temporary state. It does not publish anything or read real chats. **No database, Node.js, model, account or credential store is needed for this demo.**
+
+## Team setup
+
+Choose the path that matches your role:
+
+| I want to… | Start here |
+|---|---|
+| Join an existing team server | [Install the user tools and connect a device](docs/operations/install.md#join-a-team-server) |
+| Host the portal for my team | [Server setup](docs/operations/install.md#host-a-team-server), then [hosted operations](docs/operations/hosted-portal.md) |
+| Configure a supported coding client | [Collector and adapter setup](docs/adapters/setup.md) |
+| Develop or test this project | [Contributing](CONTRIBUTING.md) |
+
+On macOS/Linux, one command builds and installs all five user tools:
 
 ```sh
-export WK_TEST_DATABASE_URL='postgres://USER:PASSWORD@127.0.0.1:5432/wk_test'
-cargo test -p wk-knowledge --test access --locked -- --ignored
-python3 scripts/integration.py
+./deploy/scripts/install-source.sh
 ```
 
-The normal workspace test command skips the database tests; run them explicitly. The smoke script writes synthetic cards. Never use a valued database.
+The installer uses the pinned Rust toolchain, installs into `~/.local/bin` by default, and does not enable capture, modify client profiles or register startup services. Add that directory to your PATH if needed. Linux collector builds also need `pkg-config` and `libdbus-1-dev`; persistent capture requires a working native credential store. Node.js 22 is needed only when building the web console. See [platform prerequisites and Windows installation](docs/operations/install.md#install-the-tools).
 
-## Start a local development service
+The hosted portal uses the team's configured OIDC sign-in. Each developer approves local folders and connects their own collector; a browser setting cannot grant access to an unapproved local workspace. The developer and server operator setup steps are separate because their permissions and credentials are different.
 
-Create a dedicated PostgreSQL database named `wk_dev`. Development mode seeds one identity for product `demo` with `frontend`, `backend`, and `ai-engine` membership. Use synthetic data only.
+## How it works
 
-```sh
-export WK_DATABASE_URL='postgres://USER:PASSWORD@127.0.0.1:5432/wk_dev'
-export WK_DEV_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-export WK_PORT=4318
-export WK_WEB_DIR="$PWD/web/dist"
-export WK_CONSOLE_ORIGIN='http://127.0.0.1:4318'
-target/debug/wk-server --dev
-```
+1. **Approve a workspace.** Bind capture to explicit product/service folders; personal, sibling and unknown contexts stay outside that approval.
+2. **Capture supported visible content locally.** Enabled adapters feed an encrypted private journal. Unsupported or ambiguous sessions are held.
+3. **Generate a summary locally.** An explicitly configured loopback model creates screened, encrypted drafts. There is no cloud summarization fallback.
+4. **Choose what to share.** Optional owner synchronization creates private server summaries. Explicit submission creates a review copy; reviewer publication makes it available within authorized team scope.
+5. **Retrieve relevant context.** Teammates use the portal, CLI or MCP to find authorized shared summaries and inspect their status and evidence.
 
-Open the console at the local origin, connect to `demo` using the generated token, and use approved summary cards. Development identity can review its own drafts. Production identity provisioning and migration commands are described in [backend operations](docs/architecture/backend.md).
+Raw conversation messages are not uploaded to the knowledge service or exposed through the portal, shared search or MCP. Missing consent, membership or secure local storage blocks the relevant collector work. Publication is reviewed; automatic policy publication remains disabled. Summary screening has limits, so [privacy boundaries and retention](docs/architecture/private-capture-journal.md) are part of setup, not a claim of perfect redaction.
 
-Configure an MCP client with the absolute `wk-mcp` executable, `WK_SERVER_URL`, `WK_PRODUCT`, and `WK_ACCESS_TOKEN` (or `WK_DEV_TOKEN` for development). It supports HTTPS origins or literal loopback HTTP. No client profiles have been modified by development. Clients may send returned summaries to their model provider; deployment egress policy must account for that.
+## Client coverage
 
-## Setup and operations
+MCP retrieval and conversation capture are separate capabilities. Installing an MCP server does not capture a client's chats.
 
-- [Collector, hooks, managed chat and Desktop capture](docs/adapters/setup.md)
-- [Private journal and retention boundaries](docs/architecture/private-capture-journal.md)
-- [Shared service and identity configuration](docs/architecture/backend.md)
-- [Console](docs/architecture/console.md)
-- [Remote MCP](docs/architecture/remote-mcp.md)
-- [Signed evidence connectors](docs/architecture/evidence-connectors.md)
-- [Jev decision layer](docs/architecture/jev-decisions.md)
-- [Operations](docs/operations/install.md)
-- [Implementation ledger](docs/PROGRESS.md)
-- [Original full plan](docs/docs/superpowers/plans/2026-09-30-workspace-knowledge.md)
+| Client / surface | Current capture boundary |
+|---|---|
+| Cursor 3.23.23, macOS Agents, This Mac | Opt-in recovery of explicitly callback-bound sessions; bounded live acceptance, owner review required |
+| Claude Code | Partial visible hook coverage; unsupported context stays partial or held |
+| Gemini CLI | Partial hook coverage; broad live certification remains pending |
+| Codex CLI 0.162.0-alpha.2, macOS | Experimental opt-in capture of supported visible no-tool turns; tools, compaction, subagents and ambiguous context are held |
+| Antigravity desktop 2.19.1, macOS | Experimental hook delivery/private capture; **all native turns remain held and cannot be published** |
+| Claude Desktop Enterprise | Explicit consent-bound text pull on an isolated broker; entitlement and live deployment acceptance required |
 
-Keep the secret broker independently authorized. Capture keys, identity tokens and OpenBao values never belong in source control, shared knowledge cards, logs or MCP output. Source scanners, classifiers and operating-system isolation have limits; see [security reporting](SECURITY.md) and the documented certification gates.
+Other versions and surfaces are not implied supported. In particular, the installed Codex `0.162.0-alpha.17.2` was rejected by the pinned adapter. See [setup and limits](docs/adapters/setup.md), [native acceptance](docs/reviews/2026-10-09-native-capture-acceptance.md), and [latest follow-up](docs/reviews/2026-10-10-native-capture-follow-up.md). Managed local chat and explicit exports are separate alternatives.
+
+## Tools
+
+| Command | Purpose |
+|---|---|
+| `wk` | Workspace approval, scope checks, pause/revoke, replay and knowledge companion commands |
+| `wk-agent` | Private collector, client configuration, local summaries, device connection and diagnostics |
+| `wk-server` | Knowledge API, portal hosting, identity, migrations, administration and retention |
+| `wk-mcp` | Stdio MCP tools for authorized knowledge retrieval and related actions |
+| `wk-env` | Independently authorized OpenBao schema/import/run/export tooling |
+
+## Documentation
+
+- [Installation and deployment](docs/operations/install.md)
+- [Hosted portal and operations](docs/operations/hosted-portal.md) · [Console behavior](docs/architecture/console.md)
+- [Collector and client setup](docs/adapters/setup.md) · [Private capture journal](docs/architecture/private-capture-journal.md)
+- [API and identity](docs/architecture/backend.md) · [Remote MCP](docs/architecture/remote-mcp.md)
+- [Backup](docs/operations/backup.md) · [Restore](docs/operations/restore.md) · [Upgrade](docs/operations/upgrade.md) · [Uninstall](docs/operations/uninstall.md)
+- [Environment secrets](docs/operations/environments.md) · [Evidence connectors](docs/architecture/evidence-connectors.md)
+- [Implementation and release gates](docs/architecture/completion-matrix.md) · [Hosted acceptance evidence](docs/reviews/2026-10-10-hosted-operations-acceptance.md)
+
+The five-developer Linux-container pilot and encrypted restore drill are local acceptance evidence, not production capacity or recovery guarantees. The known runtime dependency advisory **RUSTSEC-2023-0071** remains a release gate. Production OIDC/TLS, version-specific client acceptance and native platform certification are still required. Report vulnerabilities through [SECURITY.md](SECURITY.md).
+
+## Contributing
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for build/test commands, synthetic-fixture requirements and commit sign-off. Keep credentials, real conversations and private captures out of issues, screenshots and pull requests.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE), and [contribution policy](CONTRIBUTING.md). No telemetry or hosted account is required for synthetic foundation checks. Deployment, account access, real conversation capture, signing and publication require explicit operator setup.
+[Apache-2.0](LICENSE). See [NOTICE](NOTICE) for attribution.

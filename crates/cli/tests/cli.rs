@@ -12,6 +12,38 @@ fn help_is_available() {
     assert!(String::from_utf8_lossy(&o.stdout).contains("workspace"));
 }
 #[test]
+fn approval_returns_the_private_binding_needed_for_device_connection() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("product");
+    let state = d.path().join("consent");
+    std::fs::create_dir_all(root.join("backend")).unwrap();
+    let output = run(&[
+        "--state-dir",
+        state.to_str().unwrap(),
+        "workspace",
+        "approve",
+        root.to_str().unwrap(),
+        "--product",
+        "demo",
+        "--service",
+        "backend",
+        "--yes",
+    ]);
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let binding = value["binding_file"]
+        .as_str()
+        .expect("approval must identify its saved binding");
+    let binding = std::path::Path::new(binding);
+    assert_eq!(binding.parent().unwrap(), state.canonicalize().unwrap());
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(binding).unwrap()).unwrap();
+    assert_eq!(saved["product"], "demo");
+    assert_eq!(saved["services"], serde_json::json!(["backend"]));
+    assert_eq!(value["team_authorized"], false);
+    assert_eq!(value["live_capture_enabled"], false);
+}
+#[test]
 fn approval_pause_and_scope_check() {
     let d = tempfile::tempdir().unwrap();
     let root = d.path().join("product");

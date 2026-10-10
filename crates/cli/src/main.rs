@@ -292,7 +292,7 @@ fn run(cli: Cli) -> Result<Value, String> {
                 let state = state_dir(cli.state_dir.as_deref(), &root, true)?;
                 save_binding(&state, &b)?;
                 Ok(
-                    json!({"local_approved":true,"root":b.root,"services":b.services,"team_authorized":false,"live_capture_enabled":false}),
+                    json!({"local_approved":true,"binding_file":binding_file(&state, &b.root)?,"root":b.root,"services":b.services,"team_authorized":false,"live_capture_enabled":false}),
                 )
             }
             Workspace::Status { root } => {
