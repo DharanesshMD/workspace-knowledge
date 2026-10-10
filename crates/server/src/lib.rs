@@ -4,6 +4,7 @@ pub mod browser_auth;
 mod browser_routes;
 pub mod decisions;
 pub mod environments;
+mod personal_routes;
 pub mod remote_mcp;
 use axum::{
     extract::{rejection::JsonRejection, DefaultBodyLimit, Path, Query, State},
@@ -467,6 +468,7 @@ pub fn portal_router(
     };
     Router::new()
         .merge(browser_routes::routes())
+        .merge(personal_routes::routes())
         .route(
             "/health",
             get(move || async move { Json(json!({"status":"ok","mode":mode})) }),

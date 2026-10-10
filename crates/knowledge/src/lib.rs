@@ -179,6 +179,17 @@ impl Knowledge {
         product: &str,
         body: CardSubmission,
     ) -> Result<Card, Error> {
+        let mut tx = self.actor_tx(actor).await?;
+        let result = Self::submit_in_transaction(&mut tx, actor, product, body).await?;
+        tx.commit().await.map_err(db)?;
+        Ok(result)
+    }
+    pub(crate) async fn submit_in_transaction(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        actor: &Actor,
+        product: &str,
+        body: CardSubmission,
+    ) -> Result<Card, Error> {
         body.validate().map_err(|_| Error::Invalid)?;
         if body.base_revision.is_some() {
             return Err(Error::Conflict);
@@ -186,17 +197,16 @@ impl Knowledge {
         let policy = i64::try_from(body.policy_revision).map_err(|_| Error::Invalid)?;
         let value = serde_json::to_value(&body).map_err(|_| Error::Invalid)?;
         validate_shared_body(&value)?;
-        let mut tx = self.actor_tx(actor).await?;
         // Lock the membership row through insertion so concurrent revocation has an order.
-        let allowed=sqlx::query("SELECT 1 FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3 AND services @> $4::text[] AND policy_revision=$5 FOR SHARE").bind(&actor.org).bind(product).bind(&actor.user).bind(&body.service_ids).bind(policy).fetch_optional(&mut *tx).await.map_err(db)?;
+        let allowed=sqlx::query("SELECT 1 FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3 AND services @> $4::text[] AND policy_revision=$5 FOR SHARE").bind(&actor.org).bind(product).bind(&actor.user).bind(&body.service_ids).bind(policy).fetch_optional(&mut **tx).await.map_err(db)?;
         if allowed.is_none() {
             return Err(Error::Denied);
         }
-        let row=sqlx::query("INSERT INTO cards(id,org,product,author,idempotency_key,services,body,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE(to_timestamp($8::bigint/1000.0),now())) ON CONFLICT(org,product,author,idempotency_key) DO NOTHING RETURNING id,body,revision,published").bind(uuid::Uuid::new_v4()).bind(&actor.org).bind(product).bind(&actor.user).bind(&body.idempotency_key).bind(&body.service_ids).bind(&value).bind(body.observed_at_ms).fetch_optional(&mut *tx).await.map_err(db)?;
+        let row=sqlx::query("INSERT INTO cards(id,org,product,author,idempotency_key,services,body,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE(to_timestamp($8::bigint/1000.0),now())) ON CONFLICT(org,product,author,idempotency_key) DO NOTHING RETURNING id,body,revision,published").bind(uuid::Uuid::new_v4()).bind(&actor.org).bind(product).bind(&actor.user).bind(&body.idempotency_key).bind(&body.service_ids).bind(&value).bind(body.observed_at_ms).fetch_optional(&mut **tx).await.map_err(db)?;
         let result = match row {
             Some(row) => decode(row)?,
             None => {
-                let row=sqlx::query("SELECT id,body,revision,published FROM cards WHERE org=$1 AND product=$2 AND author=$3 AND idempotency_key=$4 AND NOT withdrawn").bind(&actor.org).bind(product).bind(&actor.user).bind(&body.idempotency_key).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::Conflict)?;
+                let row=sqlx::query("SELECT id,body,revision,published FROM cards WHERE org=$1 AND product=$2 AND author=$3 AND idempotency_key=$4 AND NOT withdrawn").bind(&actor.org).bind(product).bind(&actor.user).bind(&body.idempotency_key).fetch_optional(&mut **tx).await.map_err(db)?.ok_or(Error::Conflict)?;
                 let existing = decode(row)?;
                 if serde_json::to_value(&existing.body).map_err(|_| Error::Storage)? != value {
                     return Err(Error::Conflict);
@@ -204,8 +214,7 @@ impl Knowledge {
                 existing
             }
         };
-        sqlx::query("INSERT INTO card_revisions(org,product,card_id,revision,body,changed_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING").bind(&actor.org).bind(product).bind(result.id).bind(result.revision).bind(&value).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
-        tx.commit().await.map_err(db)?;
+        sqlx::query("INSERT INTO card_revisions(org,product,card_id,revision,body,changed_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING").bind(&actor.org).bind(product).bind(result.id).bind(result.revision).bind(&value).bind(&actor.user).execute(&mut **tx).await.map_err(db)?;
         Ok(result)
     }
     pub async fn publish(&self, actor: &Actor, product: &str, id: uuid::Uuid) -> Result<(), Error> {

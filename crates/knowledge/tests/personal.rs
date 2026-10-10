@@ -190,6 +190,15 @@ async fn personal_expiry_screening_and_restricted_role_are_enforced() {
         .await
         .unwrap();
     assert_eq!(count, 0);
+    let shared = runtime
+        .personal_submit(&a, "demo", note.id, 1)
+        .await
+        .unwrap();
+    assert!(!shared.published);
+    assert_eq!(
+        runtime.get(&a, "demo", note.id).await.unwrap_err(),
+        Error::NotFound
+    );
     runtime
         .personal_delete(&a, "demo", note.id, 1)
         .await
@@ -266,4 +275,37 @@ async fn restricted(owner: &sqlx::PgPool) -> Knowledge {
         .await
         .unwrap();
     Knowledge::from_pool(pool)
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn private_review_copy_and_edit_have_a_consistent_revision_order() {
+    let (k, a, b, _) = setup().await;
+    let note = k.personal_put(&a, "demo", input("race")).await.unwrap();
+    let mut edited = note.body.clone();
+    edited.intent = "Revised bounded load".into();
+    let (edit, submit) = tokio::join!(
+        k.personal_edit(&a, "demo", note.id, 1, edited),
+        k.personal_submit(&a, "demo", note.id, 1)
+    );
+    assert!(edit.is_ok());
+    match submit {
+        Ok(card) => {
+            assert_eq!(card.body.intent, "Prevent overload");
+            assert!(!card.published);
+            assert_eq!(k.review_queue(&b, "demo").await.unwrap().len(), 1);
+        }
+        Err(error) => assert_eq!(error, Error::Conflict),
+    }
+    let current = k.personal_get(&a, "demo", note.id).await.unwrap();
+    assert_eq!(current.revision, 2);
+    assert!(current.submitted_card.is_none());
+    let shared = k.personal_submit(&a, "demo", note.id, 2).await.unwrap();
+    assert_eq!(shared.body.intent, "Revised bounded load");
+    k.grant(&a, "demo", &["backend".into()], false)
+        .await
+        .unwrap();
+    let new_policy = k.personal_submit(&a, "demo", note.id, 2).await.unwrap();
+    assert_ne!(shared.id, new_policy.id);
+    assert_eq!(new_policy.body.policy_revision, 2);
 }

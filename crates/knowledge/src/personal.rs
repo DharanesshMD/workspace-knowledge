@@ -183,4 +183,35 @@ impl Knowledge {
         .map_err(db)?;
         tx.commit().await.map_err(db)
     }
+    pub async fn personal_submit(
+        &self,
+        a: &Actor,
+        p: &str,
+        id: uuid::Uuid,
+        expected: i64,
+    ) -> Result<Card, Error> {
+        let mut tx = self.actor_tx(a).await?;
+        let row=sqlx::query(&format!("SELECT {FIELDS},m.policy_revision AS current_policy_revision FROM personal_summaries s JOIN memberships m ON m.org=s.org AND m.product=s.product AND m.user_id=s.owner WHERE s.id=$1 AND s.org=$2 AND s.product=$3 AND s.owner=$4 AND m.services @> s.services AND NOT s.deleted AND s.expires_at>now() FOR UPDATE OF s FOR SHARE OF m")).bind(id).bind(&a.org).bind(p).bind(&a.user).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
+        let policy: i64 = row.try_get("current_policy_revision").map_err(db)?;
+        let note = decode_personal(row)?;
+        if note.revision != expected {
+            return Err(Error::Conflict);
+        }
+        checked(&PersonalInput {
+            body: note.body.clone(),
+            provenance: note.provenance,
+        })?;
+        let mut body = note.body;
+        body.policy_revision = u64::try_from(policy).map_err(|_| Error::Storage)?;
+        body.idempotency_key = format!("owner-note:{id}:{}:{policy}", note.revision);
+        let card = Self::submit_in_transaction(&mut tx, a, p, body).await?;
+        sqlx::query("UPDATE personal_summaries SET submitted_card=$2 WHERE id=$1")
+            .bind(id)
+            .bind(card.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(card)
+    }
 }
