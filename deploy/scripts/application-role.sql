@@ -14,3 +14,6 @@ GRANT SELECT,INSERT,UPDATE,DELETE ON activity TO wk_app;
 -- Authentication resolves identity before an Actor exists. Only opaque session
 -- hashes are stored; these rows are accessible solely through the auth service.
 GRANT SELECT,INSERT,UPDATE,DELETE ON browser_sessions TO wk_app;
+
+GRANT SELECT,INSERT,UPDATE ON personal_summaries TO wk_app;
+GRANT EXECUTE ON FUNCTION wk_personal_has_capacity(TEXT,TEXT,TEXT) TO wk_app;

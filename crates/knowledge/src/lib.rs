@@ -8,6 +8,7 @@ pub mod browser;
 pub mod evidence;
 pub mod graph;
 pub mod lifecycle;
+pub mod personal;
 pub mod signed_evidence;
 #[derive(Clone)]
 pub struct Actor {
@@ -116,6 +117,7 @@ impl Knowledge {
             (4, include_str!("../../../migrations/server/0004.sql")),
             (5, include_str!("../../../migrations/server/0005.sql")),
             (6, include_str!("../../../migrations/server/0006.sql")),
+            (7, include_str!("../../../migrations/server/0007.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
