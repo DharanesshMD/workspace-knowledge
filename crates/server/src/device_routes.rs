@@ -87,6 +87,13 @@ async fn config(State(api): State<Api>) -> Json<Value> {
 fn unauthorized() -> Failure {
     Failure(StatusCode::UNAUTHORIZED, "unauthenticated")
 }
+fn collector_authorization_error(error: wk_knowledge::Error) -> Failure {
+    if error == wk_knowledge::Error::Storage {
+        error.into()
+    } else {
+        unauthorized()
+    }
+}
 fn invalid() -> Failure {
     Failure(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request")
 }
@@ -133,19 +140,25 @@ async fn collect(
             .map(|(t, a)| (Sha256::digest(t.as_bytes()).into(), a.clone()))
             .collect(),
     );
-    let (who, expires) = if let Some(oidc) = &cfg.oidc {
-        let (issuer, subject, expiry) =
+    let (who, expires, issued) = if let Some(oidc) = &cfg.oidc {
+        let (issuer, subject, expiry, issued_at) =
             oidc.verify_credential(token).map_err(|_| unauthorized())?;
         (
             api.knowledge
                 .identity(issuer, &subject)
                 .await
-                .map_err(|_| unauthorized())?,
+                .map_err(collector_authorization_error)?,
             Some(expiry),
+            issued_at,
         )
     } else {
-        (bearer_actor(&authenticated, &h).await?, None)
+        (bearer_actor(&authenticated, &h).await?, None, None)
     };
+    if !api.knowledge.collector_auth_allowed(issued).await?
+        || issued.zip(expires).is_some_and(|(at, exp)| at > exp)
+    {
+        return Err(unauthorized());
+    }
     let token_hash = format!("{:x}", Sha256::digest(token.as_bytes()));
     let id: uuid::Uuid = header(&h, "x-wk-device")?
         .parse()
@@ -188,7 +201,7 @@ async fn collect(
         api.knowledge
             .device_get(&who, &envelope.as_ref().ok_or_else(invalid)?.product, id)
             .await
-            .map_err(|_| unauthorized())?
+            .map_err(collector_authorization_error)?
             .public_key
     };
     let key_bytes: [u8; 32] = hex::decode(&public)
@@ -223,7 +236,7 @@ async fn collect(
         api.knowledge
             .device_nonce(&who, &d, nonce)
             .await
-            .map_err(|_| unauthorized())?;
+            .map_err(collector_authorization_error)?;
         return Ok(Json(json!({"device":d})));
     }
     let e = envelope.ok_or_else(invalid)?;
@@ -231,18 +244,18 @@ async fn collect(
         .knowledge
         .device_get(&who, &e.product, id)
         .await
-        .map_err(|_| unauthorized())?;
+        .map_err(collector_authorization_error)?;
     if d.approval_hash != e.approval_hash {
         return Err(unauthorized());
     }
     api.knowledge
         .device_bind_credential(&who, &d, &token_hash, expiry)
         .await
-        .map_err(|_| unauthorized())?;
+        .map_err(collector_authorization_error)?;
     api.knowledge
         .device_nonce(&who, &d, nonce)
         .await
-        .map_err(|_| unauthorized())?;
+        .map_err(collector_authorization_error)?;
     let permission = match operation.as_str() {
         "cards" => DevicePermission::SharedUpload,
         "personal" => DevicePermission::OwnerUpload,

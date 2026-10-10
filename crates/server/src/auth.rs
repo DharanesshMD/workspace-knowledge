@@ -23,6 +23,8 @@ pub struct Oidc {
 #[derive(Clone, Deserialize)]
 struct Claims {
     exp: u64,
+    #[serde(default)]
+    iat: Option<u64>,
     sub: String,
     aud: serde_json::Value,
 }
@@ -159,9 +161,12 @@ impl Oidc {
     }
     pub fn verify(&self, token: &str) -> Result<(&str, String), InvalidToken> {
         self.verify_credential(token)
-            .map(|(issuer, subject, _)| (issuer, subject))
+            .map(|(issuer, subject, _, _)| (issuer, subject))
     }
-    pub fn verify_credential(&self, token: &str) -> Result<(&str, String, u64), InvalidToken> {
+    pub fn verify_credential(
+        &self,
+        token: &str,
+    ) -> Result<(&str, String, u64, Option<u64>), InvalidToken> {
         if token.len() > 16384 {
             return Err(InvalidToken);
         }
@@ -213,7 +218,7 @@ impl Oidc {
         if !single_audience || c.sub.is_empty() || c.sub.len() > 512 {
             return Err(InvalidToken);
         }
-        Ok((&self.issuer, c.sub, c.exp))
+        Ok((&self.issuer, c.sub, c.exp, c.iat))
     }
 }
 

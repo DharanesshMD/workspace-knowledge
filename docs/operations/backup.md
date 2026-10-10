@@ -1,7 +1,16 @@
-# Encrypted backup
+# Encrypted hosted backup
 
-Stop writes or use a documented operational window. Install PostgreSQL client tools, `age` and `tar`. Configure an appropriately restricted `PGSERVICE` plus protected `.pgpass`; do not pass database passwords in process arguments. Run `deploy/scripts/backup.sh AGE_PUBLIC_RECIPIENT /private/backup.age`. The script uses custom-format `pg_dump`, private temporary files and age encryption, refuses overwrite, and excludes local raw stores. Keep the age identity offline separately. Temporary plaintext can remain on disk after a crash or be captured in filesystem snapshots; use an encrypted temporary filesystem for stronger protection.
+Install PostgreSQL client tools, `age` and `tar`. Configure protected `PGSERVICE` / `.pgpass`; never pass passwords as arguments. Run `deploy/scripts/backup.sh AGE_PUBLIC_RECIPIENT /private/backup.age`. Version2 snapshots require exactly schema migrations1–12 and include the hosted database: shared cards, **sanitized owner-private summaries**, and access metadata. Raw conversations and local encrypted vaults are never part of this database backup. `pg_dump` supplies its consistent snapshot; coordinate the snapshot and independently retained journal recovery point operationally.
 
-Maintain a current, separately encrypted tombstone ledger and permission-revocation record independently of historical full backups. A full backup's embedded tombstones only cover deletions before its snapshot. Export current `tombstones` through an administrator-controlled, scoped procedure after each withdrawal or at a documented recovery point; retain this ledger longer than the oldest restorable backup. There is no external durable deletion-ledger replication daemon in this release.
+Export the latest journals independently after deletions or at the documented recovery point:
 
-OpenBao is backed up separately using its storage-specific official procedures (for integrated storage use authenticated operator raft snapshots). Protect unseal/recovery keys separately and test recovery, token revocation and policies. The application backup script does not back up vault data, private local stores or OIDC state. Default operational recommendation is 30-day encrypted backup expiry; administrators must enforce it. RPO/RTO targets are unmeasured until a restore drill records them.
+```sh
+deploy/scripts/tombstones.sh export AGE_PUBLIC_RECIPIENT /private/shared-latest.age
+deploy/scripts/personal-deletions.sh export AGE_PUBLIC_RECIPIENT /private/personal-latest.age
+```
+
+All three scripts use private temporary files, age encryption and atomic no-overwrite publication. Keep the private age identity offline separately. Age public-key encryption protects confidentiality and detects ciphertext modification; it does not authenticate who created a snapshot. Restore only trusted operator archives. Use an encrypted temporary filesystem to protect crash remnants and filesystem snapshots.
+
+Keep both newest journals beyond the oldest retained snapshot. Journals contain scoped IDs/revisions/timestamps and, for personal deletions, hashed idempotency keys; no summary text or raw messages. Current implementation retains deletion and installation tombstones indefinitely. There is no external durable journal replication daemon. The deployment operator must enforce backup expiry (initial recommendation30days) and a recovery point that includes post-snapshot deletions. Physical SQL cleanup does not erase old WAL, pages or snapshots.
+
+OpenBao, its recovery/unseal keys, local vaults and OIDC state require separate storage-specific backup and recovery. This script does not back them up. Application recovery measurements are synthetic evidence, not a production RPO/RTO guarantee.

@@ -6,6 +6,7 @@ use wk_contracts::CardSubmission;
 pub mod activity;
 pub mod admin;
 pub mod browser;
+pub mod collector_epoch;
 pub mod devices;
 pub mod evidence;
 pub mod graph;
@@ -135,6 +136,7 @@ impl Knowledge {
             (9, include_str!("../../../migrations/server/0009.sql")),
             (10, include_str!("../../../migrations/server/0010.sql")),
             (11, include_str!("../../../migrations/server/0011.sql")),
+            (12, include_str!("../../../migrations/server/0012.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
