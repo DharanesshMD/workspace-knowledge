@@ -1,7 +1,7 @@
 # Hosted developer portal: architecture and delivery proposal
 
 Date: 2026-10-10
-Status: proposed architecture and phased roadmap; not implemented behavior.
+Status: user approved execution on 2026-10-10. Hosted identity is implemented and locally tested; the remaining increments below are proposed behavior until separately implemented and verified.
 
 ## 1. Intended outcome
 
@@ -159,7 +159,7 @@ Use paginated indexed queries and a 30–60-second visible-page status refresh i
 
 ## 11. Delivery sequence
 
-This is a roadmap for several reviewable increments. Each increment needs its own implementation tasks and tests; this document does not authorize product-code execution.
+This is a roadmap for several reviewable increments. Each increment needs its own implementation tasks and tests; the user authorized product-code execution after this proposal was presented.
 
 | Increment | Deliverable | Main existing boundaries | Acceptance |
 |---|---|---|---|

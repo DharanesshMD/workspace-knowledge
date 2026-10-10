@@ -35,7 +35,9 @@ pub fn validated_url(value: &str, development: bool) -> Result<reqwest::Url, Str
 }
 pub fn validated_origin(value: &str, development: bool) -> Result<String, String> {
     let u = validated_url(value, development)?;
-    if u.origin().ascii_serialization() != value {
+    if u.origin().ascii_serialization() != value
+        || (development && !matches!(u.host_str(), Some("127.0.0.1" | "[::1]" | "::1")))
+    {
         return Err("invalid_browser_origin".into());
     }
     Ok(value.into())
@@ -88,7 +90,7 @@ pub struct BrowserAuth {
     client_id: String,
     client_secret: Option<String>,
     development: bool,
-    metadata: Arc<Mutex<(CoreProviderMetadata, Instant)>>,
+    metadata: Arc<Mutex<(CoreProviderMetadata, Instant, Instant)>>,
     pending: Arc<Mutex<Pending>>,
 }
 pub struct LoginStart {
@@ -114,9 +116,9 @@ impl BrowserConfig {
             issuer,
             origin,
             client_id,
-            client_secret,
+            client_secret: client_secret.filter(|s| !s.is_empty()),
             development,
-            metadata: Arc::new(Mutex::new((metadata, Instant::now()))),
+            metadata: Arc::new(Mutex::new((metadata, Instant::now(), Instant::now()))),
             pending: Arc::new(Mutex::new(Pending::default())),
         })
     }
@@ -206,12 +208,16 @@ impl BrowserAuth {
     }
     async fn current(&self) -> Result<CoreProviderMetadata, String> {
         let mut m = self.metadata.lock().await;
-        if m.1.elapsed() > Duration::from_secs(60) {
+        if m.1.elapsed() > Duration::from_secs(60) && m.2.elapsed() > Duration::from_secs(60) {
+            m.2 = Instant::now();
             match metadata(&self.issuer, self.development).await {
-                Ok(next) => *m = (next, Instant::now()),
+                Ok(next) => *m = (next, Instant::now(), Instant::now()),
                 Err(_) if m.1.elapsed() < Duration::from_secs(300) => {}
                 Err(_) => return Err("provider_unavailable".into()),
             }
+        }
+        if m.1.elapsed() >= Duration::from_secs(300) {
+            return Err("provider_unavailable".into());
         }
         Ok(m.0.clone())
     }
@@ -311,6 +317,44 @@ mod tests {
             assert!(validated_url(url, false).is_err());
         }
         assert!(validated_origin("https://example.org/path", false).is_err());
+        assert!(validated_origin("https://portal.example", true).is_err());
+    }
+    #[tokio::test]
+    async fn concurrent_provider_outage_performs_only_one_refresh_attempt() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let requests = Arc::new(AtomicUsize::new(0));
+        let count = requests.clone();
+        let app = axum::Router::new().fallback(move || {
+            let count = count.clone();
+            async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                axum::http::StatusCode::SERVICE_UNAVAILABLE
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let issuer = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let metadata:CoreProviderMetadata=serde_json::from_value(serde_json::json!({"issuer":issuer,"authorization_endpoint":format!("{issuer}/authorize"),"token_endpoint":format!("{issuer}/token"),"jwks_uri":format!("{issuer}/keys"),"response_types_supported":["code"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["RS256"]})).unwrap();
+        let old = Instant::now() - Duration::from_secs(301);
+        let auth = BrowserAuth {
+            issuer,
+            origin: "http://127.0.0.1:4318".into(),
+            client_id: "test".into(),
+            client_secret: None,
+            development: true,
+            metadata: Arc::new(Mutex::new((metadata, old, old))),
+            pending: Arc::new(Mutex::new(Pending::default())),
+        };
+        let mut tasks = Vec::new();
+        for _ in 0..5 {
+            let auth = auth.clone();
+            tasks.push(tokio::spawn(async move { auth.current().await }));
+        }
+        for task in tasks {
+            assert!(task.await.unwrap().is_err());
+        }
+        server.abort();
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
     }
     #[test]
     fn transactions_are_browser_bound_expiring_and_single_use() {

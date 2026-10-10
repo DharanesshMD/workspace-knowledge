@@ -23,6 +23,8 @@ services:
       WK_OIDC_ISSUER: ${WK_OIDC_ISSUER:?Set HTTPS OIDC issuer}
       WK_OIDC_AUDIENCE: ${WK_OIDC_AUDIENCE:?Set OIDC audience}
       WK_OIDC_JWKS_URL: ${WK_OIDC_JWKS_URL:?Set HTTPS JWKS endpoint}
+      WK_BROWSER_CLIENT_ID: ${WK_BROWSER_CLIENT_ID:?Set registered browser OIDC client ID}
+      WK_BROWSER_CLIENT_SECRET: ${WK_BROWSER_CLIENT_SECRET:-}
       WK_BIND: 0.0.0.0:8080
       WK_CONSOLE_ORIGIN: ${WK_CONSOLE_ORIGIN:?Set exact HTTPS console origin}
     ports: ['127.0.0.1:8080:8080']

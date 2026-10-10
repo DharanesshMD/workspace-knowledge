@@ -23,13 +23,18 @@ impl Knowledge {
         }
         let mut tx = self.pool.begin().await.map_err(db)?;
         // Serialize per identity so concurrent callbacks cannot bypass the ten-session cap.
-        let identity =
-            sqlx::query("SELECT 1 FROM identities WHERE issuer=$1 AND subject=$2 FOR UPDATE")
-                .bind(issuer)
-                .bind(subject)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(db)?;
+        // An advisory lock avoids granting the runtime UPDATE access to identities.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+            .bind(format!("wk-browser:{}:{issuer}:{subject}", issuer.len()))
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        let identity = sqlx::query("SELECT 1 FROM identities WHERE issuer=$1 AND subject=$2")
+            .bind(issuer)
+            .bind(subject)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db)?;
         if identity.is_none() {
             return Err(Error::Denied);
         }

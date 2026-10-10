@@ -11,3 +11,6 @@ GRANT SELECT,UPDATE(stale) ON trusted_evidence TO wk_app;
 GRANT INSERT ON audit_events TO wk_app;
 GRANT USAGE ON SEQUENCE audit_events_id_seq TO wk_app;
 GRANT SELECT,INSERT,UPDATE,DELETE ON activity TO wk_app;
+-- Authentication resolves identity before an Actor exists. Only opaque session
+-- hashes are stored; these rows are accessible solely through the auth service.
+GRANT SELECT,INSERT,UPDATE,DELETE ON browser_sessions TO wk_app;
