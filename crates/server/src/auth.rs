@@ -23,6 +23,7 @@ pub struct Oidc {
 #[derive(Clone, Deserialize)]
 struct Claims {
     sub: String,
+    aud: serde_json::Value,
 }
 impl Oidc {
     pub fn issuer(&self) -> &str {
@@ -168,7 +169,11 @@ impl Oidc {
         let c = decode::<Claims>(token, &key, &v)
             .map_err(|_| InvalidToken)?
             .claims;
-        if c.sub.is_empty() || c.sub.len() > 512 {
+        let single_audience = c.aud.as_str() == Some(self.audience.as_str())
+            || c.aud
+                .as_array()
+                .is_some_and(|v| v.len() == 1 && v[0].as_str() == Some(self.audience.as_str()));
+        if !single_audience || c.sub.is_empty() || c.sub.len() > 512 {
             return Err(InvalidToken);
         }
         Ok((&self.issuer, c.sub))
@@ -248,6 +253,22 @@ mod tests {
         verifier.refresh().await.unwrap();
         assert!(sibling.verify(&new_token).is_ok());
         server.abort();
+    }
+    #[test]
+    fn tokens_with_another_audience_cannot_cross_api_roles() {
+        let (keys, _) = fixture("old");
+        let verifier =
+            Oidc::from_jwks("https://issuer.example".into(), "wk-api".into(), keys).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/synthetic-rsa-a.json")).unwrap();
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some("old".into());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let token=encode(&header,&json!({"iss":"https://issuer.example","aud":["wk-api","wk-collector"],"sub":"developer","exp":now+600}),&EncodingKey::from_rsa_pem(raw["private_pkcs8_pem"].as_str().unwrap().as_bytes()).unwrap()).unwrap();
+        assert!(verifier.verify(&token).is_err());
     }
     #[test]
     fn duplicate_ids_and_wrong_key_purpose_are_rejected() {

@@ -4248,6 +4248,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
@@ -4323,6 +4324,8 @@ name = "wk-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "ed25519-dalek",
+ "hex",
  "http-body-util",
  "jsonwebtoken",
  "openidconnect",

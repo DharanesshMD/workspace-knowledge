@@ -1,4 +1,5 @@
 //! Strict shared knowledge contracts. Raw conversation types never belong here.
+pub mod device;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

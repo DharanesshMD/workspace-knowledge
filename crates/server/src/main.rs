@@ -165,6 +165,43 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+    let collector = if let Ok(audience) = std::env::var("WK_COLLECTOR_AUDIENCE") {
+        if mode != "--production" {
+            return Err("collector audience configuration requires production identity; use separate synthetic collector tokens in development".into());
+        }
+        Some(wk_server::device_routes::CollectorAuth {
+            origin: origin
+                .clone()
+                .ok_or("WK_CONSOLE_ORIGIN required for collector binding")?,
+            oidc: Some(
+                wk_server::auth::Oidc::load(
+                    required("WK_OIDC_ISSUER")?,
+                    audience,
+                    required("WK_OIDC_JWKS_URL")?,
+                )
+                .await?,
+            ),
+            tokens: vec![],
+            client_id: Some(required("WK_COLLECTOR_CLIENT_ID")?),
+        })
+    } else if mode == "--dev" {
+        std::env::var("WK_COLLECTOR_TEST_TOKEN").ok().map(|token| {
+            wk_server::device_routes::CollectorAuth {
+                origin: origin.clone().unwrap_or_default(),
+                oidc: None,
+                tokens: vec![(
+                    token,
+                    Actor {
+                        org: "development".into(),
+                        user: "developer".into(),
+                    },
+                )],
+                client_id: None,
+            }
+        })
+    } else {
+        None
+    };
     let listener = tokio::net::TcpListener::bind(&address).await?;
     eprintln!(
         "{mode} API listening at http://{} (authenticated)",
@@ -183,7 +220,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
     });
-    let mut router = wk_server::portal_router(knowledge, tokens, oidc, origin, browser);
+    let collector_refresh = collector.as_ref().and_then(|c|c.oidc.clone()).map(|verifier| {
+        tokio::spawn(async move {let mut interval=tokio::time::interval(wk_server::auth::REFRESH_INTERVAL);interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);interval.tick().await;loop {interval.tick().await;if verifier.refresh().await.is_err(){eprintln!("Collector OIDC key refresh failed; cached keys expire after five minutes");}}})
+    });
+    let mut router = wk_server::portal_router_with_collector(
+        knowledge, tokens, oidc, origin, browser, collector,
+    )?;
     if let Ok(dir) = std::env::var("WK_WEB_DIR") {
         router = router.fallback_service(
             tower_http::services::ServeDir::new(&dir).append_index_html_on_directories(true),
@@ -202,6 +244,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await;
     if let Some(worker) = refresh_worker {
+        worker.abort();
+    }
+    if let Some(worker) = collector_refresh {
         worker.abort();
     }
     served?;

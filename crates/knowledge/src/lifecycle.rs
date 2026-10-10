@@ -9,11 +9,16 @@ pub struct Policy {
 }
 impl Knowledge {
     pub async fn policy(&self, a: &Actor, product: &str) -> Result<Policy, Error> {
+        self.device_scope(product, &[])?;
         let mut tx = self.actor_tx(a).await?;
         let r=sqlx::query("SELECT services,can_review,policy_revision FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3").bind(&a.org).bind(product).bind(&a.user).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
         Ok(Policy {
             product: product.into(),
-            services: r.try_get("services").map_err(db)?,
+            services: if let Some(g) = &self.device_guard {
+                g.services.clone()
+            } else {
+                r.try_get("services").map_err(db)?
+            },
             can_review: r.try_get("can_review").map_err(db)?,
             policy_revision: r.try_get("policy_revision").map_err(db)?,
         })

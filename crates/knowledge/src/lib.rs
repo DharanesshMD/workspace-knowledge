@@ -5,6 +5,7 @@ use sqlx::{PgPool, Row};
 use wk_contracts::CardSubmission;
 pub mod activity;
 pub mod browser;
+pub mod devices;
 pub mod evidence;
 pub mod graph;
 pub mod lifecycle;
@@ -39,6 +40,7 @@ pub struct Card {
 #[derive(Clone)]
 pub struct Knowledge {
     pool: PgPool,
+    device_guard: Option<devices::DeviceGuard>,
 }
 fn validate_shared_body(body: &serde_json::Value) -> Result<(), Error> {
     if wk_summarize::sensitive(&body.to_string()) {
@@ -71,10 +73,14 @@ impl Knowledge {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
+        self.lock_device(&mut tx, actor).await?;
         Ok(tx)
     }
     pub fn from_pool(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            device_guard: None,
+        }
     }
     pub async fn connect(url: &str) -> Result<Self, Error> {
         let pool = sqlx::postgres::PgPoolOptions::new()
@@ -83,13 +89,17 @@ impl Knowledge {
             .connect(url)
             .await
             .map_err(db)?;
-        let result = Self { pool };
+        let result = Self {
+            pool,
+            device_guard: None,
+        };
         result.migrate().await?;
         Ok(result)
     }
     /// Production application connection: never performs DDL.
     pub async fn open(url: &str) -> Result<Self, Error> {
         Ok(Self {
+            device_guard: None,
             pool: sqlx::postgres::PgPoolOptions::new()
                 .max_connections(10)
                 .acquire_timeout(std::time::Duration::from_secs(5))
@@ -119,6 +129,7 @@ impl Knowledge {
             (5, include_str!("../../../migrations/server/0005.sql")),
             (6, include_str!("../../../migrations/server/0006.sql")),
             (7, include_str!("../../../migrations/server/0007.sql")),
+            (8, include_str!("../../../migrations/server/0008.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
@@ -180,6 +191,7 @@ impl Knowledge {
         product: &str,
         body: CardSubmission,
     ) -> Result<Card, Error> {
+        self.device_scope(product, &body.service_ids)?;
         let mut tx = self.actor_tx(actor).await?;
         let result = Self::submit_in_transaction(&mut tx, actor, product, body).await?;
         tx.commit().await.map_err(db)?;

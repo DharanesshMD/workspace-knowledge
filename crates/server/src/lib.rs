@@ -3,6 +3,7 @@ pub mod auth;
 pub mod browser_auth;
 mod browser_routes;
 pub mod decisions;
+pub mod device_routes;
 pub mod environments;
 mod personal_routes;
 pub mod remote_mcp;
@@ -27,6 +28,7 @@ struct Api {
     oidc: Option<auth::Oidc>,
     origin: Option<String>,
     browser: Option<browser_auth::BrowserAuth>,
+    collector: Option<device_routes::CollectorAuth>,
 }
 struct Failure(StatusCode, &'static str);
 impl IntoResponse for Failure {
@@ -450,6 +452,20 @@ pub fn portal_router(
     origin: Option<String>,
     browser: Option<browser_auth::BrowserAuth>,
 ) -> Router {
+    portal_router_with_collector(knowledge, tokens, oidc, origin, browser, None)
+        .expect("no collector configuration")
+}
+pub fn portal_router_with_collector(
+    knowledge: Knowledge,
+    tokens: Vec<(String, Actor)>,
+    oidc: Option<auth::Oidc>,
+    origin: Option<String>,
+    browser: Option<browser_auth::BrowserAuth>,
+    collector: Option<device_routes::CollectorAuth>,
+) -> Result<Router, String> {
+    if let Some(c) = &collector {
+        c.validate(oidc.as_ref(), origin.as_deref(), &tokens)?;
+    }
     let mode = if oidc.is_some() {
         "production"
     } else {
@@ -466,11 +482,13 @@ pub fn portal_router(
         oidc,
         origin,
         browser,
+        collector,
     };
-    Router::new()
+    Ok(Router::new()
         .merge(browser_routes::routes())
         .merge(personal_routes::routes())
         .merge(team_routes::routes())
+        .merge(device_routes::routes())
         .route(
             "/health",
             get(move || async move { Json(json!({"status":"ok","mode":mode})) }),
@@ -513,5 +531,5 @@ pub fn portal_router(
             api.clone(),
             browser_routes::protect,
         ))
-        .with_state(api)
+        .with_state(api))
 }

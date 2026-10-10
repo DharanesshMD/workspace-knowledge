@@ -147,6 +147,7 @@ impl Knowledge {
         product: &str,
         mut u: ActivityUpdate,
     ) -> Result<(), Error> {
+        self.device_scope(product, &u.services)?;
         let session_ok = !u.session_id.is_empty()
             && u.session_id.len() <= 128
             && !u.session_id.chars().any(char::is_control);
@@ -214,6 +215,7 @@ impl Knowledge {
         product: &str,
         q: OverlapQuery,
     ) -> Result<Vec<Notice>, Error> {
+        self.device_scope(product, &[])?;
         let query = q.query.as_deref().map(str::trim).filter(|s| !s.is_empty());
         if q.files.len() > 100
             || q.files.iter().any(|f| !valid_path(f))
@@ -225,7 +227,7 @@ impl Knowledge {
             return Err(Error::Invalid);
         }
         let mut tx = self.actor_tx(a).await?;
-        let services: Vec<String> = sqlx::query_scalar(
+        let mut services: Vec<String> = sqlx::query_scalar(
             "SELECT services FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3",
         )
         .bind(&a.org)
@@ -235,6 +237,9 @@ impl Knowledge {
         .await
         .map_err(db)?
         .ok_or(Error::NotFound)?;
+        if let Some(g) = &self.device_guard {
+            services.retain(|s| g.services.contains(s));
+        }
         let now_ms: i64 = sqlx::query_scalar("SELECT (extract(epoch from now())*1000)::bigint")
             .fetch_one(&mut *tx)
             .await

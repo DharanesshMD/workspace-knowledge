@@ -77,6 +77,7 @@ impl Knowledge {
         p: &str,
         input: PersonalInput,
     ) -> Result<PersonalSummary, Error> {
+        self.device_scope(p, &input.body.service_ids)?;
         let value = checked(&input)?;
         let mut tx = self.actor_tx(a).await?;
         Self::personal_lock_membership(&mut tx, a, p, &input.body).await?;

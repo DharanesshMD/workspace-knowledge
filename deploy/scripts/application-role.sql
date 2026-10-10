@@ -17,3 +17,7 @@ GRANT SELECT,INSERT,UPDATE,DELETE ON browser_sessions TO wk_app;
 
 GRANT SELECT,INSERT,UPDATE ON personal_summaries TO wk_app;
 GRANT EXECUTE ON FUNCTION wk_personal_has_capacity(TEXT,TEXT,TEXT) TO wk_app;
+
+GRANT SELECT,INSERT,UPDATE ON registered_devices,device_reports TO wk_app;
+GRANT SELECT,INSERT,DELETE ON device_nonces TO wk_app;
+GRANT EXECUTE ON FUNCTION wk_device_has_capacity(TEXT,TEXT) TO wk_app;
