@@ -61,6 +61,26 @@ fn decode_personal(row: sqlx::postgres::PgRow) -> Result<PersonalSummary, Error>
 }
 const FIELDS:&str="s.id,s.body,s.revision,s.provenance,s.submitted_card,(extract(epoch FROM s.created_at)*1000)::bigint AS created_at_ms,(extract(epoch FROM s.expires_at)*1000)::bigint AS expires_at_ms";
 impl Knowledge {
+    async fn personal_lock_owner(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        a: &Actor,
+        p: &str,
+    ) -> Result<(), Error> {
+        if sqlx::query(
+            "SELECT 1 FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3 FOR SHARE",
+        )
+        .bind(&a.org)
+        .bind(p)
+        .bind(&a.user)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db)?
+        .is_none()
+        {
+            return Err(Error::NotFound);
+        }
+        Ok(())
+    }
     async fn personal_lock_membership(
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         a: &Actor,
@@ -159,6 +179,8 @@ impl Knowledge {
         body: CardSubmission,
     ) -> Result<PersonalSummary, Error> {
         let mut tx = self.actor_tx(a).await?;
+        // Policy changes take membership before summary locks as well.
+        Self::personal_lock_owner(&mut tx, a, p).await?;
         let row=sqlx::query(&format!("SELECT {FIELDS} FROM personal_summaries s JOIN memberships m ON m.org=s.org AND m.product=s.product AND m.user_id=s.owner WHERE s.id=$1 AND s.org=$2 AND s.product=$3 AND s.owner=$4 AND m.services @> s.services AND NOT s.deleted AND s.expires_at>now() FOR UPDATE OF s")).bind(id).bind(&a.org).bind(p).bind(&a.user).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
         let note = decode_personal(row)?;
         if note.revision != expected {
@@ -185,6 +207,7 @@ impl Knowledge {
         expected: i64,
     ) -> Result<(), Error> {
         let mut tx = self.actor_tx(a).await?;
+        Self::personal_lock_owner(&mut tx, a, p).await?;
         let row=sqlx::query("SELECT s.revision FROM personal_summaries s JOIN memberships m ON m.org=s.org AND m.product=s.product AND m.user_id=s.owner WHERE s.id=$1 AND s.org=$2 AND s.product=$3 AND s.owner=$4 AND m.services @> s.services AND NOT s.deleted AND s.expires_at>now() FOR UPDATE OF s FOR SHARE OF m").bind(id).bind(&a.org).bind(p).bind(&a.user).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
         if row.try_get::<i64, _>("revision").map_err(db)? != expected {
             return Err(Error::Conflict);
@@ -206,6 +229,7 @@ impl Knowledge {
         expected: i64,
     ) -> Result<Card, Error> {
         let mut tx = self.actor_tx(a).await?;
+        Self::personal_lock_owner(&mut tx, a, p).await?;
         let row=sqlx::query(&format!("SELECT {FIELDS},m.policy_revision AS current_policy_revision FROM personal_summaries s JOIN memberships m ON m.org=s.org AND m.product=s.product AND m.user_id=s.owner WHERE s.id=$1 AND s.org=$2 AND s.product=$3 AND s.owner=$4 AND m.services @> s.services AND NOT s.deleted AND s.expires_at>now() FOR UPDATE OF s FOR SHARE OF m")).bind(id).bind(&a.org).bind(p).bind(&a.user).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
         let policy: i64 = row.try_get("current_policy_revision").map_err(db)?;
         let note = decode_personal(row)?;

@@ -1,6 +1,6 @@
 # Hosted operations acceptance — 2026-10-10
 
-Status: implementation and local acceptance are complete through deployment bounds; final independent review is pending. **Production rollout is not certified.** The provider is deliberately a local test provider until the user selects a production issuer. Known RSA advisory and deployment-specific HTTPS/identity/native/capacity gates remain open.
+Status: approved implementation, local acceptance and the single independent review/fix pass are complete. Verified again on2026-10-11. **Production rollout is not certified.** The provider is deliberately a local test provider until the user selects a production issuer. Known RSA advisory and deployment-specific HTTPS/identity/native/capacity gates remain open.
 
 ## Implemented boundaries
 
@@ -8,46 +8,46 @@ Scoped product/service administration is separate from review permission and nev
 
 Retention is a separate bounded operator worker. Private summaries expire logically at creation-relative maximum30days, reports7days and audit90days; policy may shorten them. Physical cleanup clears current private bodies and preserves content-free deletion/idempotency/key markers. Metadata markers remain indefinitely until a backup/replay horizon is defined. Neither SQL cleanup nor logical withdrawal immediately erases historical WAL/pages/backups or previously delivered information.
 
-Encrypted version2 backups include sanitized private summaries and shared data, never local raw stores. Restore into an empty isolated schema12 database atomically removes browser sessions/admins/memberships, revokes devices/workspace bindings, denies PUBLIC helper execution and advances collector authentication epoch. Merge both separately retained newest journals before reprovisioning. Post-snapshot private deletion hashes prevent retry recreation even when the original note was absent. Old/missing-iat collector tokens cannot enroll unseen installations; require issuer iat support, wait past restore+61seconds, then fresh authentication/consent.
+Encrypted version2 backups include sanitized private summaries and shared data, never local raw stores. Restore into an empty isolated schema13 database atomically removes browser sessions/admins/memberships, revokes devices/workspace bindings, denies PUBLIC helper execution and advances collector authentication epoch. Merge both separately retained newest journals before reprovisioning. Post-snapshot private deletion hashes prevent retry recreation even when the original note was absent. Old/missing-iat collector tokens cannot enroll unseen installations; require issuer iat support, wait past restore+61seconds, then fresh authentication/consent.
 
-Runtime defaults: pool10/acquisition5seconds, SQL statement5seconds/lock3seconds, HTTP30seconds, at most64 in-flight API requests. Overload/deadline failures return opaque503. Slots cover bounded8MiB JSON body completion. Readiness checks exact migrations1–12 through a restricted role, one probe at a time under a1-second deadline. App container is UID10001, read-only, cap-drop/no-new-privileges; app/database ports remain private behind the intended same-origin HTTPS proxy.
+Runtime defaults: pool10/acquisition5seconds, SQL statement5seconds/lock3seconds, HTTP30seconds, at most64 in-flight API requests. Overload/deadline failures return opaque503. Slots cover bounded8MiB JSON body completion. Readiness checks exact migrations1–13 through a restricted role, one probe at a time under a1-second deadline. App container is UID10001, read-only, cap-drop/no-new-privileges; app/database ports remain private behind the intended same-origin HTTPS proxy.
 
 ## Verification evidence
 
-- Rust workspace PostgreSQL suites:230 passing,0 failed/ignored; latest separate bounds4/4 include exact-schema restricted-role readiness, future-schema refusal, opaque failures, invalid limits, overload, slot release and actual SQL statement/lock/pool deadlines. Final task-done suite remains to be recorded with the commit.
+- Rust workspace PostgreSQL suites:234 passing,0 failed/ignored; latest separate bounds4/4 include exact-schema restricted-role readiness, future-schema refusal, opaque failures, invalid limits, overload, slot release and actual SQL statement/lock/pool deadlines. The final post-fix suite passed234/234,0 failed/ignored; four new regression tests cover seven controlled concurrent interleavings.
 - Browser:30/30 plus TypeScript/Vite production build. Refreshed real desktop/mobile device screenshots were visually inspected; no horizontal overflow or invented capture success.
-- Real local upstream public PKCE/browser/OIDC admin CLI: explicit role, reviewer/product/service denial, private-summary isolation, policy/new-note TTL, revocation/logout and CSRF/origin/nonce/signature rejection passed.
-- Real macOS native public PKCE/OS Keychain: login, expiry reauthentication, requested/applied pause/resume, local pause precedence, opt-in synchronization, owner/device privacy, signed policy, replay/audience escape, revocation and fresh-credential replacement passed. One initial run timed out at the unchanged3-second transport deadline during simultaneous cold builds/full DB suite; isolated rerun passed. This is not system-browser dispatch, universal capture, Windows/Linux keyring or restored-native reconnection certification.
-- Actual age1.3.2/PostgreSQL17.11 encrypted restore:13 acceptance checks passed, including fresh migrations, quarantine, PUBLIC denial, both latest journals, orphan-key guard, repeat merge, unrelated-note preservation, nonempty refusal, invalid header/rows, tampered ciphertext, old-manifest refusal and rollback after injected pre-commit failure. Initial idle drill5.87seconds; cold-build contention drill93.98seconds demonstrates why neither is a production RTO.
+- Refreshed post-fix real local upstream public PKCE/browser/OIDC admin CLI: explicit role, reviewer/product/service denial, private-summary isolation, policy/new-note TTL, revocation/logout and CSRF/origin/nonce/signature rejection passed.
+- Refreshed post-fix real macOS native public PKCE/OS Keychain: login, expiry reauthentication, requested/applied pause/resume, local pause precedence, opt-in synchronization, owner/device privacy, signed policy, replay/audience escape, revocation and fresh-credential replacement passed. One initial run timed out at the unchanged3-second transport deadline during simultaneous cold builds/full DB suite; isolated rerun passed. This is not system-browser dispatch, universal capture, Windows/Linux keyring or restored-native reconnection certification.
+- Actual age1.3.2/PostgreSQL17.11 encrypted restore:13 acceptance checks passed, including fresh migrations, quarantine, PUBLIC denial, both latest journals, orphan-key guard, repeat merge, unrelated-note preservation, nonempty refusal, invalid header/rows, tampered ciphertext, old-manifest refusal and rollback after injected pre-commit failure. Final schema13 drill8.20seconds; earlier idle drill5.87seconds and cold-build contention drill93.98seconds demonstrate why none is a production RTO. [Final recovery dataset](hosted-operations/restore.json).
 - Rust fmt/clippy and Compose configuration pass. Linux aarch64 release image/console/server build passed. Dependency audit fails on the known `RUSTSEC-2023-0071`, `rsa0.9.10`, through normal-runtime `openidconnect` in server/agent. No audit exception or release clearance was added.
 
 ## Five-developer measurements
 
-[Complete metadata/count/timing dataset](hosted-operations/pilot.json). App image `sha256:ab55add8fd8452e69204bf8e88368b6cb4baa9523440ec2162e50f47a2d3ef28`; PostgreSQL17.11 aarch64 Alpine. Mac host8logical CPUs/16GiB RAM; Docker VM8CPUs/about11.67GiB. Linux app and database each capped2CPU; app1GiB, database2GiB. No central inference was included.
+[Final corrected-image dataset](hosted-operations/pilot.json), [preserved pre-review dataset](hosted-operations/pilot-before-review.json). Final app image `sha256:21fd2c39346615ec06727f9094537ed5f2343b1ab3f27a7b70979c4f5515c48f`; schema13/PostgreSQL17.11 aarch64 Alpine. Mac host8logical CPUs/16GiB RAM; Docker VM8CPUs/about11.67GiB. Linux app and database each capped2CPU; app1GiB, database2GiB. No central inference was included.
 
-Five distinct accounts/installation keys, a reviewer, scoped administrator and restricted backend/frontend services. Five client threads issue one HTTP request at a time each, with local OpenSSL signing and50ms cycle pauses. Each normal cycle has10 requests: signed policy, private write/retry, shared draft, review publication, owner/team/search/MCP reads and review queue. Warmup5.004seconds/50 cycles; measured steady30.894seconds/208 cycles;100 preassembled queued summaries then replayed/published in4.056seconds. Private JSON bodies10,240bytes, shared10,247bytes. Queued inputs model reconnect load; they do not prove native disk-queue replay. JWT verification is real, but issuance in this load fixture is synthetic and separate from upstream-PKCE acceptance.
+Five distinct accounts/installation keys, a reviewer, scoped administrator and restricted backend/frontend services. Five client threads issue one HTTP request at a time each, with local OpenSSL signing and50ms cycle pauses. Each normal cycle has10 requests: signed policy, private write/retry, shared draft, review publication, owner/team/search/MCP reads and review queue. Warmup5.005seconds/50 cycles; measured steady31.55seconds/508 cycles;100 preassembled queued summaries replayed/published in1.428seconds. Private JSON bodies10,240bytes, shared10,247bytes. Queued inputs model reconnect load; they do not prove native disk-queue replay. JWT verification is real, but issuance in this load fixture is synthetic and separate from upstream-PKCE acceptance.
 
-**2,380 measured requests,0 errors,68.1 requests/second** across steady+burst. Initial independent run2,560 requests/0errors at73.42requests/second; final run corrected CPU timestamp sampling. This is a short local pilot, not saturation, long-duration soak, real-content cardinality or remote-server acceptance.
+**5,380 measured requests,0 errors,163.14 requests/second** across steady+burst. The preserved pre-review run completed2,380 requests/0errors at68.1requests/second, search/MCP p95 about600ms. The difference is local run variability, not a controlled performance improvement attributable to security fixes. Both are short pilots, not saturation, long-duration soak, real-content cardinality or remote-server acceptance.
 
 | Operation | Requests | p50 ms | p95 ms | Maximum ms |
 |---|---:|---:|---:|---:|
-| collector policy | 208 | 30.53 | 181.97 | 1012.35 |
-| collector personal | 516 | 38.4 | 168.13 | 608.18 |
-| collector cards | 308 | 40.39 | 123.26 | 391.94 |
-| publish | 308 | 25.2 | 100.06 | 373.23 |
-| owner | 208 | 23.07 | 92.76 | 226.56 |
-| team | 208 | 37.27 | 109.42 | 853.63 |
-| search | 208 | 26.19 | 597.7 | 844.92 |
-| mcp | 208 | 24.76 | 599.66 | 921.71 |
-| review | 208 | 9.64 | 52.23 | 413.45 |
+| collector policy | 508 | 10.73 | 29.09 | 154.12 |
+| collector personal | 1116 | 11.11 | 27.95 | 284.88 |
+| collector cards | 608 | 12.19 | 30.99 | 150.67 |
+| publish | 608 | 10.11 | 19.75 | 205.25 |
+| owner | 508 | 11.4 | 26.48 | 107.67 |
+| team | 508 | 15.25 | 32.83 | 112.38 |
+| search | 508 | 13.45 | 68.74 | 1196.83 |
+| mcp | 508 | 12.62 | 86.45 | 1083.8 |
+| review | 508 | 3.21 | 10.42 | 151.72 |
 
-App mean CPU0.366cores/approximate sampled peak0.523cores; database mean1.165cores and sampled peak about its2-core cap. PostgreSQL recorded14,500,691microseconds of aggregated runnable-task throttling, consistent with CPU pressure and search/MCP p95 around600ms. Throttle time is not wall-clock outage. Peaks use per-container guest uptime beside cgroup counters; scheduling/quota windows make individual intervals approximate.
+App mean CPU0.363cores/approximate sampled peak0.553cores; database mean1.167cores and sampled peak about its2-core cap. PostgreSQL recorded17,883,544microseconds of aggregated runnable-task throttling. Search/MCP p95 were68.74/86.45ms but maxima1196.83/1083.80ms. Throttle time is not wall-clock outage. Peaks use per-container guest uptime beside cgroup counters; scheduling/quota windows make individual intervals approximate.
 
-Peak cgroup memory: app8.74MiB/database171.67MiB. PID1 RSS app15.61MiB/PostgreSQL parent32.15MiB; cgroup memory includes workers/cache, while mapped shared pages can appear in RSS without being charged to that group. These are different accounting measures, not forecasts for large datasets. Sampled runtime pool:10 connections, at most4 active,0 observed lock waits. Pool acquisition wait duration is not independently instrumented, and sparse samples cannot prove absence of waits. Maximum261 nonces per device stayed below the1200/120-second window; no nonce saturation claim.
+Peak cgroup memory: app10.38MiB/database180.25MiB. PID1 RSS app16.34MiB/PostgreSQL parent32.02MiB; cgroup memory includes workers/cache, while mapped shared pages can appear in RSS without being charged to that group. These are different accounting measures, not forecasts for large datasets. Runtime pool32 samples:10 connections, at most5 active,0 observed lock waits. Pool acquisition wait duration is not independently instrumented, and sparse samples cannot prove absence of waits. Maximum509 nonces per device stayed below the1200/120-second window; no nonce saturation claim.
 
-DB allocation after warmup10,385,075bytes →15,324,851bytes; growth4,939,776bytes across308 additional private/shared pairs (about15.66KiB/pair including revisions/graphs/indexes/operational rows). WAL counter grew5,934,816bytes; allocated WAL segment space can be larger. Final encrypted full snapshot1,188,328bytes. One actual operator retention sweep cleared/journaled one expired private body. Fixture text repeats technical vocabulary and compresses well; this density must not be extrapolated to arbitrary developer summaries.
+DB allocation after warmup10,393,267bytes →19,633,843bytes; growth9,240,576bytes across608 additional private/shared pairs (about14.84KiB/pair including revisions/graphs/indexes/operational rows). WAL counter grew11,441,891bytes; allocated WAL segment space can be larger. Final encrypted full snapshot1,991,848bytes. One actual operator retention sweep cleared/journaled one expired private body. Fixture text repeats technical vocabulary and compresses well; this density must not be extrapolated to arbitrary developer summaries.
 
-Owned pilot containers/network/anonymous volumes and failed-test fixture database/role were removed; build image/cache remain for reproducibility. The original project database and native client profiles were not used.
+Owned pilot containers/network/anonymous volumes and restore fixture databases/role were removed; build images/cache remain for reproducibility. The original project database and native client profiles were not used.
 
 ## Storage planning and remaining release gates
 
@@ -58,6 +58,8 @@ A2–4vCPU/8GiB/40GiB starting allocation remains provisional. The measured data
 Release gates: chosen production issuer/native client registrations and iat behavior; same-origin HTTPS/proxy connection/header/body deadlines and rate limits; secret/vault/operator/journal recovery procedures; RSA advisory resolution or reviewed mitigation; real restored-native reauthentication after cooldown; Linux/Windows client and wider version-specific capture coverage; target-server load/soak/storage acceptance. Native Codex/Antigravity and other clients retain their existing bounded acceptance/blocked-version facts; this portal adds no universal capture claim.
 
 ## Rulings I made
+
+Chronological and exhaustive for this operations plan. The later additive migration13 ruling supersedes the initial schema12 archive boundary.
 
 - Ruling: execute this detailed operations plan under the already approved architecture roadmap and continuous proceed instructions — no additional deployment or integration is authorized — cost if wrong: reversible local plan/implementation changes.
 - Ruling: initial administration uses explicit product/service-scoped assignments and narrow authenticated CLI, while identity mapping and role/inference-ceiling widening remain operator bootstrap — preserves existing privileged provisioning boundary without a generic admin command runner — cost: organization-wide administration requires explicit assignments per product and protected operator access for bootstrap changes.
@@ -75,11 +77,29 @@ Release gates: chosen production issuer/native client registrations and iat beha
 - Task4 Ruling: buffer API and stateless MCP JSON responses up to8MiB under the same request deadline and slot — returning headers alone must not release an in-flight request while a body keeps working — cost: future streaming/SSE support needs a separately bounded design; current50-row/64KiB summaries fit below the cap.
 - Task4 Ruling: liveness/readiness remain outside the ordinary request gate, with readiness restricted to one concurrent query and a1-second deadline — overloaded clients must not queue unlimited readiness queries or suppress basic process liveness — cost: concurrent readiness probes may get temporary503.
 - Task4 Ruling: measure a disposable Linux app fixture with actual JWT verification/signed collector and restricted runtime database role, but leave production issuer/TLS/browser/native queue acceptance separate — local hardware and synthetic replay cannot certify remote deployment — cost: a deployment-specific acceptance/load run remains necessary.
+- Final Ruling: review the whole operations increment against accepted device-controls baseline9804989 rather than re-reviewing all earlier native/portal increments — earlier increments already have independent review and full suites still exercise their boundaries — cost: interaction risk remains bounded by explicit cross-boundary review focus and regression/live acceptance rather than a second full-project review.
+- Final Ruling: use a fresh gpt-6.1-sol reviewer after the preferred gpt-6-astra review returned a usage-limit error without reviewing — the most capable callable model supplies the single independent seat rather than self-review or another pass — cost: the preferred model's judgment is unavailable; independent read-only review remains bounded to the documented increment.
+- Final: Ruling: production IdP selection/registration/iat behavior set aside by reviewer — deliberately deferred by user and kept as a release gate — cost: no production sign-in compatibility certification.
+- Final: Ruling: public HTTPS proxy deadlines/rate limits/deployment set aside — application bounds are locally verified, external deployment remains unapproved/unverified — cost: target proxy must be configured and tested before release.
+- Final: Ruling: known normal-runtime RSA advisory set aside — existing unresolved release gate stands without clearance — cost: release remains blocked pending resolution or reviewed mitigation.
+- Final: Ruling: restored-native reauthentication after61-second cooldown set aside — epoch tests model elapsed cooldown, not live restored-client recovery — cost: real recovery acceptance remains required.
+- Final: Ruling: Windows/Linux credential storage and universal capture set aside — earlier version-specific acceptance does not certify other platforms/clients — cost: wider native coverage remains unverified.
+- Final: Ruling: target saturation/soak/content density/final allocation set aside — short local synthetic pilot is measured evidence, not capacity certification — cost: deployment-specific soak and storage sizing still required.
+- Final: Ruling: immediate WAL/page/backup/prior-recipient erasure set aside — logical withdrawal and physical current-body cleanup do not promise historical erasure — cost: backup lifetime and delivered-text exposure persist separately.
+- Final: Ruling: indefinite deletion/idempotency/installation metadata set aside — retained markers cover unknown backup and replay horizons — cost: metadata grows until an archival policy is measured and approved.
+- Final: Ruling: hosted admin form/global admin discovery/HTTPS inference set aside — initial administration is scoped CLI and inference is local-only under the approved increment — cost: additional admin UI and HTTPS transport are not available.
+- Final: Ruling: streaming/SSE set aside — current protocol is bounded stateless JSON — cost: streaming requires a separate bounded design.
+- Final: Ruling: arbitrary operator archive authentication set aside — restore trusts operator-selected archives; age provides integrity/confidentiality, not creator authentication — cost: operators must protect archive provenance and access.
+- Final: Ruling: inference already dispatched before narrowing is observed set aside — later policy checks prevent new dispatch and retention but cannot retract a dispatched request — cost: an in-flight approved inference can finish after a policy change.
+- Final: Ruling: introduce additive migration13 for corrected administration helpers and require exact schema13 readiness/backup/restore — editing migration10 would leave existing schema12 installations and archives with old lock ordering — cost: schema12 archives require trusted offline upgrade and a fresh v2/schema13 snapshot; earlier pilot image/data remain pre-fix evidence until rebuilt.
+- Final: Ruling: serialize administrative mutations per organization/product before owner registration/device/membership rows — resolves both role lock inversions without broadening content authority — cost: overlapping administrative requests for the same product wait within existing SQL/pool deadlines.
+- Final: Ruling: preserve both pre-review and corrected-image pilot datasets and report variance without attributing throughput gains to security fixes — local runs68.1 versus163.14requests/sec are not a controlled optimization experiment or remote capacity proof — cost: production CPU/latency/storage sizing still requires an isolated target-server soak with real cardinality.
+- Final: Ruling: keep the committed codex/cursor-native-capture branch and existing worktree locally under the approved implementation scope — deployment/merge/push were not requested, and preserving reviewable work is reversible — cost: integration and production provisioning remain separate future work.
 
 ## Independent review
 
-Pending one fresh whole-operations review and one Important/Critical fix pass.
+One fresh read-only reviewer assessed9804989..f5e63e2: three Important findings, no Critical or Minor findings. The implementer reproduced all three against real PostgreSQL and corrected them in one pass. Four regressions cover seven controlled interleavings: bootstrap registration/removal or narrowing, both role-lock cycles, and owner edit/delete/submit with retention-policy changes. All234Rust tests and30browser tests pass; local admin/native acceptance, schema13 encrypted recovery and the rebuilt Linux pilot pass. There was no second review or claim of production release clearance. [Finding, reproduction and fix details](hosted-operations/review-fixes.md).
 
 ## Deferred minors
 
-None recorded before the independent review.
+None. All reviewer-declined behaviors are explicitly ruled on above and remain bounded by the documented release gates.

@@ -59,6 +59,16 @@ fn decode_device(r: sqlx::postgres::PgRow) -> Result<Device, Error> {
     })
 }
 impl Knowledge {
+    // Same owner lock as wk_device_has_capacity: a membership mutation must
+    // cover installations not yet visible to its device-row enumeration.
+    pub(crate) async fn lock_registration(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        a: &Actor,
+    ) -> Result<(), Error> {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array($1::text,$2::text,'devices')::text,0))")
+            .bind(&a.org).bind(&a.user).execute(&mut **tx).await.map_err(db)?;
+        Ok(())
+    }
     pub fn device_bound(&self, d: &Device, permission: DevicePermission) -> Self {
         let mut k = self.clone();
         k.device_guard = Some(DeviceGuard {

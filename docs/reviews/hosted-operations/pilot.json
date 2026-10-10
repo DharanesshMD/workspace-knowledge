@@ -6,7 +6,7 @@
     "host_cpu_count": 8,
     "host_memory_bytes": 17179869184,
     "docker_vm": "8 CPUs; 12529250304 memory bytes",
-    "image_id": "sha256:ab55add8fd8452e69204bf8e88368b6cb4baa9523440ec2162e50f47a2d3ef28"
+    "image_id": "sha256:21fd2c39346615ec06727f9094537ed5f2343b1ab3f27a7b70979c4f5515c48f"
   },
   "schedule": {
     "identities": 5,
@@ -17,7 +17,7 @@
     "reviewer": "developer0",
     "scoped_admin": "developer1",
     "warmup": {
-      "duration_seconds": 5.004,
+      "duration_seconds": 5.005,
       "cycles_per_developer": [
         10,
         10,
@@ -27,13 +27,13 @@
       ]
     },
     "steady": {
-      "duration_seconds": 30.894,
+      "duration_seconds": 31.55,
       "cycles_per_developer": [
-        40,
-        41,
-        45,
-        41,
-        41
+        99,
+        102,
+        107,
+        100,
+        100
       ]
     },
     "cycle_operations": 10,
@@ -41,85 +41,85 @@
     "payload_bytes": 10240,
     "shared_body_bytes": 10247,
     "offline_catchup": "20 preassembled synthetic summaries per developer; not native disk-queue acceptance",
-    "burst_seconds": 4.056,
+    "burst_seconds": 1.428,
     "client": "five threads, one request each at a time; urllib HTTP and local OpenSSL signing"
   },
-  "requests": 2380,
+  "requests": 5380,
   "errors": [],
   "latency": {
     "collector_policy": {
-      "requests": 208,
-      "p50_ms": 30.53,
-      "p95_ms": 181.97,
-      "max_ms": 1012.35
+      "requests": 508,
+      "p50_ms": 10.73,
+      "p95_ms": 29.09,
+      "max_ms": 154.12
     },
     "collector_personal": {
-      "requests": 516,
-      "p50_ms": 38.4,
-      "p95_ms": 168.13,
-      "max_ms": 608.18
+      "requests": 1116,
+      "p50_ms": 11.11,
+      "p95_ms": 27.95,
+      "max_ms": 284.88
     },
     "collector_cards": {
-      "requests": 308,
-      "p50_ms": 40.39,
-      "p95_ms": 123.26,
-      "max_ms": 391.94
+      "requests": 608,
+      "p50_ms": 12.19,
+      "p95_ms": 30.99,
+      "max_ms": 150.67
     },
     "publish": {
-      "requests": 308,
-      "p50_ms": 25.2,
-      "p95_ms": 100.06,
-      "max_ms": 373.23
+      "requests": 608,
+      "p50_ms": 10.11,
+      "p95_ms": 19.75,
+      "max_ms": 205.25
     },
     "owner": {
-      "requests": 208,
-      "p50_ms": 23.07,
-      "p95_ms": 92.76,
-      "max_ms": 226.56
+      "requests": 508,
+      "p50_ms": 11.4,
+      "p95_ms": 26.48,
+      "max_ms": 107.67
     },
     "team": {
-      "requests": 208,
-      "p50_ms": 37.27,
-      "p95_ms": 109.42,
-      "max_ms": 853.63
+      "requests": 508,
+      "p50_ms": 15.25,
+      "p95_ms": 32.83,
+      "max_ms": 112.38
     },
     "search": {
-      "requests": 208,
-      "p50_ms": 26.19,
-      "p95_ms": 597.7,
-      "max_ms": 844.92
+      "requests": 508,
+      "p50_ms": 13.45,
+      "p95_ms": 68.74,
+      "max_ms": 1196.83
     },
     "mcp": {
-      "requests": 208,
-      "p50_ms": 24.76,
-      "p95_ms": 599.66,
-      "max_ms": 921.71
+      "requests": 508,
+      "p50_ms": 12.62,
+      "p95_ms": 86.45,
+      "max_ms": 1083.8
     },
     "review": {
-      "requests": 208,
-      "p50_ms": 9.64,
-      "p95_ms": 52.23,
-      "max_ms": 413.45
+      "requests": 508,
+      "p50_ms": 3.21,
+      "p95_ms": 10.42,
+      "max_ms": 151.72
     }
   },
-  "throughput_requests_per_second": 68.1,
+  "throughput_requests_per_second": 163.14,
   "resources": {
     "app": {
-      "peak_cpu_percent_one_core": 52.28,
-      "mean_cpu_percent_one_core": 36.63,
-      "peak_memory_bytes": 9166848,
-      "peak_rss_bytes": 16367616,
+      "peak_cpu_percent_one_core": 55.3,
+      "mean_cpu_percent_one_core": 36.32,
+      "peak_memory_bytes": 10878976,
+      "peak_rss_bytes": 17133568,
       "cpu_cap": 2,
       "throttled_microseconds_delta": 0,
       "memory_cap_bytes": 1073741824
     },
     "database": {
-      "peak_cpu_percent_one_core": 202.6,
-      "mean_cpu_percent_one_core": 116.48,
-      "peak_memory_bytes": 180011008,
-      "peak_rss_bytes": 33710080,
+      "peak_cpu_percent_one_core": 205.69,
+      "mean_cpu_percent_one_core": 116.75,
+      "peak_memory_bytes": 189005824,
+      "peak_rss_bytes": 33579008,
       "cpu_cap": 2,
-      "throttled_microseconds_delta": 14500691,
+      "throttled_microseconds_delta": 17883544,
       "memory_cap_bytes": 2147483648
     },
     "sampling_note": "Per-container guest uptime captured beside each cgroup read; sampled intervals are approximate. RSS is PID1 only; cgroup memory includes workers/cache. Throttle time counts throttled runnable tasks, not wall-clock outage.",
@@ -139,15 +139,15 @@
     }
   },
   "pool": {
-    "sample_count": 26,
+    "sample_count": 32,
     "peak_connections": 10,
-    "peak_active": 4,
+    "peak_active": 5,
     "peak_lock_waits": 0
   },
   "storage": {
     "initial": {
-      "database_bytes": 9074355,
-      "wal_bytes": 10651599,
+      "database_bytes": 9082547,
+      "wal_bytes": 10653584,
       "notes": 0,
       "cards": 0,
       "nonce_rows": 5,
@@ -252,8 +252,8 @@
       }
     },
     "after_warmup": {
-      "database_bytes": 10385075,
-      "wal_bytes": 11435617,
+      "database_bytes": 10393267,
+      "wal_bytes": 11506417,
       "notes": 50,
       "cards": 50,
       "nonce_rows": 205,
@@ -264,7 +264,7 @@
           "index_bytes": 32768
         },
         "graph_nodes": {
-          "total_bytes": 221184,
+          "total_bytes": 212992,
           "index_bytes": 57344
         },
         "collector_security_epoch": {
@@ -272,7 +272,7 @@
           "index_bytes": 16384
         },
         "graph_edges": {
-          "total_bytes": 147456,
+          "total_bytes": 139264,
           "index_bytes": 40960
         },
         "workspace_bindings": {
@@ -284,7 +284,7 @@
           "index_bytes": 16384
         },
         "cards": {
-          "total_bytes": 425984,
+          "total_bytes": 442368,
           "index_bytes": 196608
         },
         "audit_events": {
@@ -296,7 +296,7 @@
           "index_bytes": 8192
         },
         "card_revisions": {
-          "total_bytes": 229376,
+          "total_bytes": 237568,
           "index_bytes": 16384
         },
         "product_admins": {
@@ -348,7 +348,7 @@
           "index_bytes": 8192
         },
         "device_nonces": {
-          "total_bytes": 163840,
+          "total_bytes": 155648,
           "index_bytes": 49152
         },
         "device_reports": {
@@ -358,28 +358,28 @@
       }
     },
     "after_measured_load": {
-      "database_bytes": 15324851,
-      "wal_bytes": 17370433,
-      "notes": 358,
-      "cards": 358,
-      "nonce_rows": 1237,
-      "max_nonces_per_device": 261,
+      "database_bytes": 19633843,
+      "wal_bytes": 22948308,
+      "notes": 658,
+      "cards": 658,
+      "nonce_rows": 2437,
+      "max_nonces_per_device": 509,
       "tables": {
         "browser_sessions": {
           "total_bytes": 40960,
           "index_bytes": 32768
         },
         "graph_nodes": {
-          "total_bytes": 1056768,
-          "index_bytes": 221184
+          "total_bytes": 1769472,
+          "index_bytes": 344064
         },
         "collector_security_epoch": {
           "total_bytes": 24576,
           "index_bytes": 16384
         },
         "graph_edges": {
-          "total_bytes": 352256,
-          "index_bytes": 139264
+          "total_bytes": 516096,
+          "index_bytes": 237568
         },
         "workspace_bindings": {
           "total_bytes": 24576,
@@ -390,8 +390,8 @@
           "index_bytes": 16384
         },
         "cards": {
-          "total_bytes": 1818624,
-          "index_bytes": 647168
+          "total_bytes": 3252224,
+          "index_bytes": 1179648
         },
         "audit_events": {
           "total_bytes": 49152,
@@ -402,8 +402,8 @@
           "index_bytes": 8192
         },
         "card_revisions": {
-          "total_bytes": 1310720,
-          "index_bytes": 57344
+          "total_bytes": 2179072,
+          "index_bytes": 81920
         },
         "product_admins": {
           "total_bytes": 32768,
@@ -426,8 +426,8 @@
           "index_bytes": 16384
         },
         "personal_summaries": {
-          "total_bytes": 1433600,
-          "index_bytes": 172032
+          "total_bytes": 2408448,
+          "index_bytes": 253952
         },
         "collector_credentials": {
           "total_bytes": 49152,
@@ -454,8 +454,8 @@
           "index_bytes": 8192
         },
         "device_nonces": {
-          "total_bytes": 393216,
-          "index_bytes": 139264
+          "total_bytes": 540672,
+          "index_bytes": 245760
         },
         "device_reports": {
           "total_bytes": 24576,
@@ -463,7 +463,7 @@
         }
       }
     },
-    "encrypted_snapshot_bytes": 1188328,
+    "encrypted_snapshot_bytes": 1991848,
     "retention_operation": {
       "busy": false,
       "personal": 1,

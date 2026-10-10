@@ -46,16 +46,22 @@ async fn setup() -> (Knowledge, Vec<Actor>, sqlx::PgPool) {
 }
 async fn restricted(pool: &sqlx::PgPool) -> (Knowledge, sqlx::PgPool, String) {
     let role = format!("wk_admin_{}", uuid::Uuid::new_v4().simple());
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(733093)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     sqlx::query(&format!("CREATE ROLE {role} NOLOGIN"))
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .unwrap();
     sqlx::raw_sql(
         &include_str!("../../../deploy/scripts/application-role.sql").replace("wk_app", &role),
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .unwrap();
+    tx.commit().await.unwrap();
     let selected = role.clone();
     let scoped = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
@@ -73,6 +79,325 @@ async fn restricted(pool: &sqlx::PgPool) -> (Knowledge, sqlx::PgPool, String) {
 }
 fn body(key: &str) -> CardSubmission {
     serde_json::from_value(serde_json::json!({"schema_version":1,"idempotency_key":key,"policy_revision":1,"title":"Bound work","intent":"Reduce overload","rationale":"Scoped middleware","decisions":[],"constraints":[],"open_questions":[],"service_ids":["backend"],"evidence":[],"lifecycle":"proposed","capture_completeness":"complete","base_revision":null})).unwrap()
+}
+
+// Barrier-controlled tests use real transactions and restricted application roles.
+// A PostgreSQL lock wait proves each operation reached the intended barrier.
+async fn named_pool(role: Option<String>, name: &str) -> sqlx::PgPool {
+    let name = name.to_owned();
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .after_connect(move |c, _| {
+            let role = role.clone();
+            let name = name.clone();
+            Box::pin(async move {
+                if let Some(role) = role {
+                    sqlx::query(&format!("SET ROLE {role}"))
+                        .execute(&mut *c)
+                        .await?;
+                }
+                sqlx::query("SELECT set_config('application_name',$1,false)")
+                    .bind(name)
+                    .execute(c)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&std::env::var("WK_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap()
+}
+async fn wait_for_lock(pool: &sqlx::PgPool, name: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock')")
+                .bind(name).fetch_one(pool).await.unwrap();
+            if waiting { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("operation did not reach its database lock barrier");
+}
+fn registration(services: &[&str]) -> DeviceRegistration {
+    DeviceRegistration {
+        id: uuid::Uuid::new_v4(),
+        product: "demo".into(),
+        services: services.iter().map(|s| (*s).into()).collect(),
+        public_key: "55".repeat(32),
+        approval_hash: "66".repeat(32),
+    }
+}
+async fn drop_role(pool: &sqlx::PgPool, role: &str) {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(733093)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::raw_sql(&format!("DROP OWNED BY {role}; DROP ROLE {role}"))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn bootstrap_changes_revoke_installations_registered_across_the_boundary() {
+    let mut failures = Vec::new();
+    for remove in [true, false] {
+        let (k, u, pool) = setup().await;
+        let (_, scoped, role) = restricted(&pool).await;
+        scoped.close().await;
+        let label = uuid::Uuid::new_v4().simple().to_string();
+        let reg_name = format!("reg_{label}");
+        let op_name = format!("op_{label}");
+        let reg_pool = named_pool(Some(role.clone()), &reg_name).await;
+        let op_pool = named_pool(None, &op_name).await;
+        let function = format!("wk_barrier_{label}");
+        let latch = (uuid::Uuid::new_v4().as_u128() >> 64) as i64;
+        // Pause real registration after membership authorization but before insert.
+        sqlx::raw_sql(&format!("CREATE FUNCTION {function}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.org='{}' THEN PERFORM pg_advisory_xact_lock({latch}); END IF; RETURN NEW; END $$; CREATE TRIGGER {function} BEFORE INSERT ON registered_devices FOR EACH ROW EXECUTE FUNCTION {function}()", u[2].org)).execute(&pool).await.unwrap();
+        let mut barrier = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(latch)
+            .execute(&mut *barrier)
+            .await
+            .unwrap();
+        let request = registration(&["backend", "frontend"]);
+        let old_request = request.clone();
+        let reg = Knowledge::from_pool(reg_pool.clone());
+        let actor = u[2].clone();
+        let registering = tokio::spawn(async move { reg.device_register(&actor, request).await });
+        wait_for_lock(&pool, &reg_name).await;
+        let op = Knowledge::from_pool(op_pool.clone());
+        let actor = u[2].clone();
+        let changing = tokio::spawn(async move {
+            if remove {
+                op.revoke(&actor, "demo").await
+            } else {
+                op.grant(&actor, "demo", &["backend".into()], false).await
+            }
+        });
+        wait_for_lock(&pool, &op_name).await;
+        barrier.commit().await.unwrap();
+        let (_, changed) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            (registering.await.unwrap(), changing.await.unwrap())
+        })
+        .await
+        .unwrap();
+        k.grant(&u[2], "demo", &["backend".into(), "frontend".into()], false)
+            .await
+            .unwrap();
+        let revoked: bool =
+            sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM registered_devices WHERE id=$1")
+                .bind(old_request.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let retry = Knowledge::from_pool(reg_pool.clone())
+            .device_register(&u[2], old_request)
+            .await;
+        sqlx::raw_sql(&format!(
+            "DROP TRIGGER {function} ON registered_devices; DROP FUNCTION {function}()"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        reg_pool.close().await;
+        op_pool.close().await;
+        drop_role(&pool, &role).await;
+        assert!(changed.is_ok(), "bootstrap failed: {changed:?}");
+        if !revoked || !matches!(retry, Err(Error::Denied)) {
+            failures.push(format!("remove={remove}: installation survived removal/narrowing and regrant; retry={retry:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn admin_revocation_serializes_with_bootstrap_narrowing() {
+    let (k, u, pool) = setup().await;
+    let d = k
+        .device_register(&u[0], registration(&["backend", "frontend"]))
+        .await
+        .unwrap();
+    let (_, scoped, role) = restricted(&pool).await;
+    scoped.close().await;
+    let label = uuid::Uuid::new_v4().simple().to_string();
+    let op_name = format!("op_{label}");
+    let admin_name = format!("admin_{label}");
+    let op_pool = named_pool(None, &op_name).await;
+    let admin_pool = named_pool(Some(role.clone()), &admin_name).await;
+    let mut barrier = pool.begin().await.unwrap();
+    sqlx::query(
+        "SELECT 1 FROM memberships WHERE org=$1 AND product='demo' AND user_id='admin' FOR SHARE",
+    )
+    .bind(&u[0].org)
+    .execute(&mut *barrier)
+    .await
+    .unwrap();
+    let op = Knowledge::from_pool(op_pool.clone());
+    let actor = u[0].clone();
+    let narrowing =
+        tokio::spawn(async move { op.grant(&actor, "demo", &["backend".into()], false).await });
+    wait_for_lock(&pool, &op_name).await;
+    let admin = Knowledge::from_pool(admin_pool.clone());
+    let actor = u[0].clone();
+    let revoking =
+        tokio::spawn(async move { admin.admin_device_revoke(&actor, "demo", d.id).await });
+    wait_for_lock(&pool, &admin_name).await;
+    barrier.commit().await.unwrap();
+    let (narrowed, revoked) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        (narrowing.await.unwrap(), revoking.await.unwrap())
+    })
+    .await
+    .unwrap();
+    op_pool.close().await;
+    admin_pool.close().await;
+    drop_role(&pool, &role).await;
+    assert!(
+        narrowed.is_ok(),
+        "bootstrap narrowing aborted: {narrowed:?}"
+    );
+    assert_eq!(
+        revoked.unwrap_err(),
+        Error::Denied,
+        "removed admin must be denied, not deadlocked"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn admin_assignment_serializes_with_self_membership_change() {
+    let (k, u, pool) = setup().await;
+    let (_, scoped, role) = restricted(&pool).await;
+    scoped.close().await;
+    let label = uuid::Uuid::new_v4().simple().to_string();
+    let op_name = format!("op_{label}");
+    let admin_name = format!("admin_{label}");
+    let op_pool = named_pool(None, &op_name).await;
+    let admin_pool = named_pool(Some(role.clone()), &admin_name).await;
+    let mut barrier = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM product_admins WHERE org=$1 AND product='demo' AND user_id='admin' FOR SHARE").bind(&u[0].org).execute(&mut *barrier).await.unwrap();
+    let op = Knowledge::from_pool(op_pool.clone());
+    let actor = u[0].clone();
+    let assigning = tokio::spawn(async move {
+        op.admin_assign(&actor, "demo", &["backend".into(), "frontend".into()])
+            .await
+    });
+    wait_for_lock(&pool, &op_name).await;
+    let admin = Knowledge::from_pool(admin_pool.clone());
+    let actor = u[0].clone();
+    let changing = tokio::spawn(async move {
+        admin
+            .admin_member_put(
+                &actor,
+                "demo",
+                MemberChange {
+                    user: actor.user.clone(),
+                    services: vec!["backend".into(), "frontend".into()],
+                    can_review: false,
+                },
+            )
+            .await
+    });
+    wait_for_lock(&pool, &admin_name).await;
+    barrier.commit().await.unwrap();
+    let (assigned, changed) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        (assigning.await.unwrap(), changing.await.unwrap())
+    })
+    .await
+    .unwrap();
+    op_pool.close().await;
+    admin_pool.close().await;
+    drop_role(&pool, &role).await;
+    assert!(assigned.is_ok(), "assignment deadlocked: {assigned:?}");
+    assert!(
+        changed.is_ok(),
+        "self membership change deadlocked: {changed:?}"
+    );
+    // Keep setup's operator alive through the test, independent of runtime roles.
+    assert!(!k.admin_members(&u[0], "demo").await.unwrap().is_empty());
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn owner_mutations_serialize_with_retention_policy_changes() {
+    let mut failures = Vec::new();
+    for action in ["edit", "delete", "submit"] {
+        let (k, u, pool) = setup().await;
+        let note = k
+            .personal_put(
+                &u[2],
+                "demo",
+                PersonalInput {
+                    body: body("policy-race"),
+                    provenance: PersonalProvenance::Captured,
+                },
+            )
+            .await
+            .unwrap();
+        let (_, scoped, role) = restricted(&pool).await;
+        scoped.close().await;
+        let label = uuid::Uuid::new_v4().simple().to_string();
+        let owner_name = format!("owner_{label}");
+        let admin_name = format!("admin_{label}");
+        let owner_pool = named_pool(Some(role.clone()), &owner_name).await;
+        let admin_pool = named_pool(Some(role.clone()), &admin_name).await;
+        let mut barrier = pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM personal_summaries WHERE id=$1 FOR UPDATE")
+            .bind(note.id)
+            .execute(&mut *barrier)
+            .await
+            .unwrap();
+        let owner = Knowledge::from_pool(owner_pool.clone());
+        let actor = u[2].clone();
+        let editing = tokio::spawn(async move {
+            match action {
+                "edit" => owner
+                    .personal_edit(&actor, "demo", note.id, 1, body("policy-race"))
+                    .await
+                    .map(|_| ()),
+                "delete" => owner.personal_delete(&actor, "demo", note.id, 1).await,
+                _ => owner
+                    .personal_submit(&actor, "demo", note.id, 1)
+                    .await
+                    .map(|_| ()),
+            }
+        });
+        wait_for_lock(&pool, &owner_name).await;
+        let admin = Knowledge::from_pool(admin_pool.clone());
+        let actor = u[0].clone();
+        let restricting = tokio::spawn(async move {
+            admin
+                .admin_policy_put(
+                    &actor,
+                    "demo",
+                    ProductPolicy {
+                        private_days: 2,
+                        ..ProductPolicy::default()
+                    },
+                )
+                .await
+        });
+        wait_for_lock(&pool, &admin_name).await;
+        barrier.commit().await.unwrap();
+        let (edited, restricted) =
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                (editing.await.unwrap(), restricting.await.unwrap())
+            })
+            .await
+            .unwrap();
+        owner_pool.close().await;
+        admin_pool.close().await;
+        drop_role(&pool, &role).await;
+        if edited.is_err() || restricted.is_err() {
+            failures.push(format!(
+                "owner {action}={edited:?}, privacy policy={restricted:?}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
@@ -200,10 +525,7 @@ async fn scoped_admin_is_distinct_from_review_and_cannot_read_private_context() 
         Error::Denied
     );
     scoped.close().await;
-    sqlx::raw_sql(&format!("DROP OWNED BY {role}; DROP ROLE {role}"))
-        .execute(&pool)
-        .await
-        .unwrap();
+    drop_role(&pool, &role).await;
 }
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]

@@ -76,10 +76,22 @@ fn scope(p: &str, services: &[String]) -> Result<(), Error> {
     }
 }
 impl Knowledge {
+    // Match wk_admin_ceiling's gate before taking role/device/membership rows.
+    // Bootstrap and authenticated administration must use the same ordering.
+    pub(crate) async fn lock_administration(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        a: &Actor,
+        p: &str,
+    ) -> Result<(), Error> {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array($1::text,$2::text,'administration')::text,0))")
+            .bind(&a.org).bind(p).execute(&mut **tx).await.map_err(db)?;
+        Ok(())
+    }
     /// Protected operator bootstrap; the application role cannot write this table.
     pub async fn admin_assign(&self, a: &Actor, p: &str, services: &[String]) -> Result<(), Error> {
         scope(p, services)?;
         let mut tx = self.pool.begin().await.map_err(db)?;
+        Self::lock_administration(&mut tx, a, p).await?;
         let allowed=sqlx::query("SELECT 1 FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3 AND services @> $4::text[] FOR SHARE").bind(&a.org).bind(p).bind(&a.user).bind(services).fetch_optional(&mut *tx).await.map_err(failure)?;
         if allowed.is_none() {
             return Err(Error::Denied);
@@ -193,6 +205,7 @@ impl Knowledge {
     ) -> Result<(), Error> {
         policy.validate()?;
         let mut tx = self.pool.begin().await.map_err(db)?;
+        Self::lock_administration(&mut tx, a, p).await?;
         sqlx::query(
             "SELECT 1 FROM registered_devices WHERE org=$1 AND product=$2 ORDER BY id FOR UPDATE",
         )

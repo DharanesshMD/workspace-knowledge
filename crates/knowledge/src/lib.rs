@@ -117,7 +117,7 @@ impl Knowledge {
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db)?;
-        if versions != (1..=12).collect::<Vec<_>>() {
+        if versions != (1..=13).collect::<Vec<_>>() {
             return Err(Error::Storage);
         }
         Ok(())
@@ -148,6 +148,7 @@ impl Knowledge {
             (10, include_str!("../../../migrations/server/0010.sql")),
             (11, include_str!("../../../migrations/server/0011.sql")),
             (12, include_str!("../../../migrations/server/0012.sql")),
+            (13, include_str!("../../../migrations/server/0013.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
@@ -184,6 +185,8 @@ impl Knowledge {
             return Err(Error::Invalid);
         }
         let mut tx = self.pool.begin().await.map_err(db)?;
+        Self::lock_administration(&mut tx, actor, product).await?;
+        Self::lock_registration(&mut tx, actor).await?;
         sqlx::query("INSERT INTO products(org,id) VALUES($1,$2) ON CONFLICT DO NOTHING")
             .bind(&actor.org)
             .bind(product)
@@ -199,6 +202,8 @@ impl Knowledge {
     }
     pub async fn revoke(&self, actor: &Actor, product: &str) -> Result<(), Error> {
         let mut tx = self.pool.begin().await.map_err(db)?;
+        Self::lock_administration(&mut tx, actor, product).await?;
+        Self::lock_registration(&mut tx, actor).await?;
         sqlx::query("SELECT id FROM registered_devices WHERE org=$1 AND product=$2 AND owner=$3 ORDER BY id FOR UPDATE").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("UPDATE registered_devices SET revoked_at=now(),revision=revision+1 WHERE org=$1 AND product=$2 AND owner=$3 AND revoked_at IS NULL").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("DELETE FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3")
