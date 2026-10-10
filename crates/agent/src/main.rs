@@ -4,6 +4,7 @@ mod cursor_capture;
 mod cursor_source;
 mod daemon;
 mod network;
+mod personal_sync;
 mod process;
 mod state;
 mod team;
@@ -75,6 +76,12 @@ enum Command {
         id: String,
         #[arg(long)]
         reviewed: bool,
+    },
+    /// Configure owner-only hosted summary synchronization (off by default).
+    OwnerSync {
+        action: String,
+        #[arg(long)]
+        yes: bool,
     },
     Doctor,
     Auth,
@@ -307,6 +314,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 context.as_deref(),
             ))
         }
+        Command::OwnerSync { action, yes } => personal_sync::configure(&state, &action, yes).await,
         Command::Process => process::run(&state).await,
         Command::Drafts { after } => process::list(&state, &after),
         Command::Submit { id, reviewed } => {

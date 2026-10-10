@@ -99,7 +99,12 @@ pub async fn run(dir: &Path) -> Result<Value, String> {
             }
         }
     }
-    Ok(json!({"private_drafts_created":drafts,"held":held,"published":false}))
+    let owner_sync = crate::personal_sync::run(dir)
+        .await
+        .unwrap_or_else(|_| json!({"enabled":false,"uploaded":0,"held":0,"status":"unavailable"}));
+    Ok(
+        json!({"private_drafts_created":drafts,"held":held,"published":false,"owner_sync":owner_sync}),
+    )
 }
 pub fn list(dir: &Path, after: &str) -> Result<Value, String> {
     if !after.is_empty() && (!after.starts_with("draft:") || after.len() != 70) {
@@ -123,6 +128,37 @@ pub fn list(dir: &Path, after: &str) -> Result<Value, String> {
     Ok(json!({"private_drafts":result,"next_cursor":next_cursor}))
 }
 pub async fn submit(dir: &Path, id: &str) -> Result<Value, String> {
+    deliver(dir, id, false).await
+}
+pub(crate) async fn sync_owner(dir: &Path, id: &str) -> Result<Value, String> {
+    deliver(dir, id, true).await
+}
+async fn post_draft(
+    dir: &Path,
+    c: &state::Config,
+    b: &wk_scope::enrollment::Binding,
+    t: &str,
+    v: &Value,
+    owner_only: bool,
+) -> Result<Value, String> {
+    if owner_only {
+        let revision = v["card"]["policy_revision"]
+            .as_u64()
+            .ok_or("invalid policy")?;
+        if !crate::personal_sync::permits(dir, &b.policy_hash, revision)? {
+            return Err("owner synchronization disabled or approval changed".into());
+        }
+        return crate::personal_sync::send(c, &b.product, t, &v["card"]).await;
+    }
+    network::post(
+        c,
+        t,
+        "/v1/cards",
+        &json!({"product":b.product,"card":v["card"]}),
+    )
+    .await
+}
+async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String> {
     if dir.join("capture-gap.json").exists() {
         return Err("capture gap requires clean-session reset".into());
     }
@@ -138,19 +174,18 @@ pub async fn submit(dir: &Path, id: &str) -> Result<Value, String> {
         .read_record(id, daemon::now()?)?
         .ok_or("draft expired or unavailable")?;
     let v: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid private draft")?;
+    if owner_only {
+        crate::personal_sync::payload(&v["card"])?;
+    }
     if v.get("native_adapter").is_some() {
         let _guard = crate::native_process::validate_draft(dir, &v).await?;
         if wk_summarize::sensitive(&v["card"].to_string()) {
             return Err("sensitive_summary".into());
         }
-        let result = network::post(
-            &c,
-            &t,
-            "/v1/cards",
-            &json!({"product":b.product,"card":v["card"]}),
-        )
-        .await?;
-        s.ack(id)?;
+        let result = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
+        if !owner_only {
+            s.ack(id)?;
+        }
         return Ok(result);
     }
     if v.get("native_turn_index").is_some() {
@@ -177,14 +212,10 @@ pub async fn submit(dir: &Path, id: &str) -> Result<Value, String> {
         if wk_summarize::sensitive(&v["card"].to_string()) {
             return Err("sensitive_summary".into());
         }
-        let response = network::post(
-            &c,
-            &t,
-            "/v1/cards",
-            &json!({"product":latest.product,"card":v["card"]}),
-        )
-        .await?;
-        s.ack(id)?;
+        let response = post_draft(dir, &c, &latest, &t, &v, owner_only).await?;
+        if !owner_only {
+            s.ack(id)?;
+        }
         return Ok(response);
     }
     let source = s
@@ -218,14 +249,10 @@ pub async fn submit(dir: &Path, id: &str) -> Result<Value, String> {
     if wk_summarize::sensitive(&v["card"].to_string()) {
         return Err("draft requires sensitive-content review".into());
     }
-    let response = network::post(
-        &c,
-        &t,
-        "/v1/cards",
-        &json!({"product":b.product,"card":v["card"]}),
-    )
-    .await?;
-    s.ack(id)?;
+    let response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
+    if !owner_only {
+        s.ack(id)?;
+    }
     Ok(response)
 }
 
