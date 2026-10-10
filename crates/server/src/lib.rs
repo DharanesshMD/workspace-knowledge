@@ -1,5 +1,6 @@
 //! Authenticated shared knowledge HTTP API.
 pub mod auth;
+pub mod browser_auth;
 pub mod decisions;
 pub mod environments;
 pub mod remote_mcp;
