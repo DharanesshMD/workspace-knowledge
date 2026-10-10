@@ -265,6 +265,8 @@ mod tests {
             port: 4319,
             account: "test".into(),
             device_id: "d".into(),
+
+            device: None,
         };
         std::fs::create_dir(root.join("app")).unwrap();
         let b = wk_scope::enrollment::Binding::approve(&root, "test", vec!["app".into()]).unwrap();

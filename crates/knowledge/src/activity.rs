@@ -196,11 +196,13 @@ impl Knowledge {
 
     /// Opt-out: remove all of the caller's activity for a product.
     pub async fn clear_activity(&self, a: &Actor, product: &str) -> Result<(), Error> {
+        self.device_scope(product, &[])?;
         let mut tx = self.actor_tx(a).await?;
-        sqlx::query("DELETE FROM activity WHERE org=$1 AND product=$2 AND user_id=$3")
+        sqlx::query("DELETE FROM activity WHERE org=$1 AND product=$2 AND user_id=$3 AND ($4::text[] IS NULL OR services <@ $4)")
             .bind(&a.org)
             .bind(product)
             .bind(&a.user)
+            .bind(self.device_guard.as_ref().map(|g|&g.services))
             .execute(&mut *tx)
             .await
             .map_err(db)?;

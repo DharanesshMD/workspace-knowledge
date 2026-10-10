@@ -4186,8 +4186,12 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
+ "ed25519-dalek",
+ "hex",
+ "jsonwebtoken",
  "keyring",
  "libc",
+ "openidconnect",
  "rand 0.8.8",
  "reqwest",
  "serde",

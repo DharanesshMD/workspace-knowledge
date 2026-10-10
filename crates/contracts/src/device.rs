@@ -20,6 +20,7 @@ pub struct DeviceSettings {
 macro_rules! enumeration {($name:ident {$($v:ident),+})=>{#[derive(Debug,Clone,Serialize,Deserialize,PartialEq,Eq)] #[serde(rename_all="snake_case")] pub enum $name {$($v),+}}}
 enumeration!(ConfigStatus { Applied, Rejected });
 enumeration!(Queue {
+    Unknown,
     Empty,
     Small,
     Large

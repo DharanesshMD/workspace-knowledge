@@ -22,8 +22,13 @@ keyring={version="3.6",features=["apple-native","windows-native","sync-secret-se
 rand="0.8"
 zeroize="1"
 uuid={version="1",features=["v4"]}
+ed25519-dalek="2"
+hex="0.4"
+openidconnect={version="4.0.1",default-features=false}
 [[bin]]
 name="wk-agent"
 path="src/main.rs"
 [target.'cfg(unix)'.dependencies]
 libc="0.2"
+[dev-dependencies]
+jsonwebtoken={version="10",features=["aws_lc_rs"]}

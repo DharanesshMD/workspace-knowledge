@@ -159,6 +159,8 @@ mod tests {
             port: 1,
             account: "test".into(),
             device_id: "d".into(),
+
+            device: None,
         };
         state::save(&c.binding_file, &b).unwrap();
         state::save(&root.join("agent.json"), &c).unwrap();

@@ -220,7 +220,7 @@ async fn collect(
         "cards" => DevicePermission::SharedUpload,
         "personal" => DevicePermission::OwnerUpload,
         "activity" => DevicePermission::ActivityUpload,
-        "policy" | "report" | "overlaps" => DevicePermission::Read,
+        "policy" | "report" | "overlaps" | "activity-clear" => DevicePermission::Read,
         _ => return Err(Failure(StatusCode::NOT_FOUND, "not_found")),
     };
     let k = api.knowledge.device_bound(&d, permission);
@@ -247,6 +247,11 @@ async fn collect(
             )
             .await?;
             json!({"accepted":true})
+        }
+        "activity-clear" => {
+            let _: Empty = serde_json::from_value(e.request).map_err(|_| invalid())?;
+            k.clear_activity(&who, &e.product).await?;
+            json!({"cleared":true})
         }
         "overlaps" => {
             let n = k

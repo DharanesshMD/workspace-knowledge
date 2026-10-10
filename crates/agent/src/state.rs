@@ -17,6 +17,8 @@ pub struct Config {
     pub port: u16,
     pub account: String,
     pub device_id: String,
+    #[serde(default)]
+    pub device: Option<crate::device::Connection>,
 }
 pub fn private_dir(path: &Path, create: bool) -> Result<PathBuf, String> {
     if !path.is_absolute()
@@ -111,12 +113,34 @@ pub fn load(state: &Path) -> Result<Config, String> {
     serde_json::from_str(&read(&state.join("agent.json"), 65536)?)
         .map_err(|_| "invalid agent config".into())
 }
-pub fn binding(c: &Config) -> Result<Binding, String> {
+pub fn base_binding(c: &Config) -> Result<Binding, String> {
     let b: Binding = serde_json::from_str(&read(&c.binding_file, 65536)?)
         .map_err(|_| "invalid local approval")?;
-    if b.root != c.root || !b.services.contains(&c.service) || !b.eligible(&b.root.join(&c.service))
+    let approved = Binding {
+        root: b.root.clone(),
+        product: b.product.clone(),
+        services: b.services.clone(),
+        enabled: true,
+        policy_hash: b.policy_hash.clone(),
+    };
+    if b.root != c.root
+        || !b.services.contains(&c.service)
+        || !approved.eligible(&b.root.join(&c.service))
     {
         return Err("workspace approval absent, changed or paused".into());
+    }
+    Ok(b)
+}
+pub fn binding(c: &Config) -> Result<Binding, String> {
+    let b = base_binding(c)?;
+    if !b.enabled {
+        return Err("workspace approval paused".into());
+    }
+    if c.device.is_some() {
+        crate::device::validate(c, &b)?;
+        if crate::device::remote(c)?.settings.paused {
+            return Err("remote capture pause requested".into());
+        }
     }
     Ok(b)
 }
@@ -143,6 +167,12 @@ pub fn secret(state: &Path, purpose: &str) -> Result<zeroize::Zeroizing<Vec<u8>>
     ))
 }
 pub fn token(state: &Path, purpose: &str) -> Result<zeroize::Zeroizing<String>, String> {
+    if purpose == "server-token"
+        && load(state)?.device.is_some()
+        && !crate::device::credential_current(state)?
+    {
+        return Err("collector authentication expired; run device login".into());
+    }
     Ok(zeroize::Zeroizing::new(
         String::from_utf8(secret(state, purpose)?.to_vec())
             .map_err(|_| "invalid stored credential")?,

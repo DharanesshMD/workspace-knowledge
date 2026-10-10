@@ -27,6 +27,20 @@ pub async fn policy(
     b: &wk_scope::enrollment::Binding,
     token: &str,
 ) -> Result<Value, String> {
+    crate::device::require_device_for_remote(&c.server, c.device.is_some())?;
+    if c.device.is_some() {
+        let value = crate::device::signed(c, token, "policy", &serde_json::json!({}), 3).await?;
+        if value["device"]["settings"]["paused"] == true {
+            return Err("remote capture pause requested".into());
+        }
+        if !value["policy"]["services"]
+            .as_array()
+            .is_some_and(|v| v.iter().any(|s| s == &c.service))
+        {
+            return Err("device service membership denied".into());
+        }
+        return Ok(value["policy"].clone());
+    }
     let r = client(3)?
         .get(format!("{}/v1/policy", server_url(&c.server)?))
         .query(&[("product", &b.product)])
@@ -44,6 +58,18 @@ pub async fn policy(
     Ok(v["policy"].clone())
 }
 pub async fn post(c: &Config, token: &str, path: &str, body: &Value) -> Result<Value, String> {
+    crate::device::require_device_for_remote(&c.server, c.device.is_some())?;
+    if c.device.is_some() {
+        let b = crate::state::base_binding(c)?;
+        let operation = if path == "/v1/cards" {
+            "cards"
+        } else if path == format!("/v1/products/{}/personal", b.product) {
+            "personal"
+        } else {
+            return Err("unsupported collector operation".into());
+        };
+        return crate::device::signed(c, token, operation, body, 10).await;
+    }
     let r = client(10)?
         .post(format!("{}{path}", server_url(&c.server)?))
         .bearer_auth(token)

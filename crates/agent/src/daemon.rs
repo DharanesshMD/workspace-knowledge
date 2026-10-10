@@ -167,7 +167,11 @@ async fn retention_loop(mut store: wk_local::LocalStore) {
 }
 pub async fn serve(dir: PathBuf) -> Result<Value, String> {
     let c = state::load(&dir)?;
-    state::binding(&c)?;
+    if c.device.is_some() {
+        state::base_binding(&c)?;
+    } else {
+        state::binding(&c)?;
+    }
     state::store(&dir)?;
     let auth = Sha256::digest(ipc(&dir)?.as_bytes()).into();
     let a = App {
@@ -191,6 +195,7 @@ pub async fn serve(dir: PathBuf) -> Result<Value, String> {
         let mut ticks = tokio::time::interval(std::time::Duration::from_secs(15));
         loop {
             ticks.tick().await;
+            let _ = crate::device::poll(&dir).await;
             let _ = crate::process::run(&dir).await;
         }
     });

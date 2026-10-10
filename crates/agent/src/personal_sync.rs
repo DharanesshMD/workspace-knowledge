@@ -37,6 +37,13 @@ fn matches(choice: &Choice, c: &state::Config, b: &wk_scope::enrollment::Binding
         && choice.inference == c.inference
         && choice.account == c.account
 }
+pub fn declared_consent(
+    dir: &Path,
+    c: &state::Config,
+    b: &wk_scope::enrollment::Binding,
+) -> Result<bool, String> {
+    Ok(matches(&read(dir)?, c, b))
+}
 pub fn status(dir: &Path) -> Result<Value, String> {
     let choice = read(dir)?;
     let enabled = choice.enabled
@@ -215,6 +222,8 @@ mod tests {
             port: 0,
             account: "test".into(),
             device_id: "test-device".into(),
+
+            device: None,
         };
         state::save(&c.binding_file, &binding).unwrap();
         state::save(&temp.path().join("agent.json"), &c).unwrap();

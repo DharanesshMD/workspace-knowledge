@@ -278,7 +278,7 @@ impl Knowledge {
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(db)?;
-        if count >= 120 {
+        if count >= 1200 {
             return Err(Error::Denied);
         }
         let result=sqlx::query("INSERT INTO device_nonces(device_id,org,owner,nonce) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING").bind(d.id).bind(&a.org).bind(&a.user).bind(nonce).execute(&mut *tx).await.map_err(db)?;

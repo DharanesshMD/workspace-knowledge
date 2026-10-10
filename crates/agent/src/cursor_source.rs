@@ -268,6 +268,8 @@ mod tests {
             port: 1,
             account: "test".into(),
             device_id: "test".into(),
+
+            device: None,
         };
         let consent = CursorConsent {
             policy_hash: binding.policy_hash,

@@ -19,6 +19,23 @@ async fn call(
     path: &str,
     body: &Value,
 ) -> Result<Value, String> {
+    crate::device::require_device_for_remote(&c.server, c.device.is_some())?;
+    if c.device.is_some() {
+        let b = state::base_binding(c)?;
+        let operation = if path == product_path(&b.product, "overlaps")
+            && method == reqwest::Method::POST
+        {
+            "overlaps"
+        } else if path == product_path(&b.product, "activity") && method == reqwest::Method::POST {
+            "activity"
+        } else if path == product_path(&b.product, "activity") && method == reqwest::Method::DELETE
+        {
+            "activity-clear"
+        } else {
+            return Err("unsupported collector operation".into());
+        };
+        return crate::device::signed(c, token, operation, body, 2).await;
+    }
     let r = network::client(2)?
         .request(method, format!("{}{path}", network::server_url(&c.server)?))
         .bearer_auth(token)

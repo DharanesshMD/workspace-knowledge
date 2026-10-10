@@ -345,3 +345,45 @@ async fn revoking_one_of_ten_installations_allows_replacement_and_audits_metadat
     .unwrap();
     assert_eq!(events, vec!["device_register", "device_revoke"]);
 }
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn collector_activity_opt_out_clears_only_its_registered_service_scopes() {
+    let (k, a, _, _) = setup().await;
+    let d = k.device_register(&a, registration()).await.unwrap();
+    for service in ["backend", "frontend"] {
+        k.record_activity(
+            &a,
+            "demo",
+            wk_knowledge::activity::ActivityUpdate {
+                session_id: service.into(),
+                services: vec![service.into()],
+                files: vec![format!("{service}/code.rs")],
+                intent: "Review bounded work".into(),
+                ended: false,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    k.device_bound(&d, DevicePermission::Read)
+        .clear_activity(&a, "demo")
+        .await
+        .unwrap();
+    let remaining = k.team_activity(&a, "demo").await.unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].services, vec!["frontend"]);
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn collector_policy_bursts_fit_a_bounded_replay_window() {
+    let (k, a, _, pool) = setup().await;
+    let d = k.device_register(&a, registration()).await.unwrap();
+    for _ in 0..121 {
+        k.device_nonce(&a, &d, uuid::Uuid::new_v4()).await.unwrap();
+    }
+    sqlx::query("INSERT INTO device_nonces(device_id,org,owner,nonce) SELECT $1,$2,$3,gen_random_uuid() FROM generate_series(1,1079)").bind(d.id).bind(&a.org).bind(&a.user).execute(&pool).await.unwrap();
+    assert!(matches!(
+        k.device_nonce(&a, &d, uuid::Uuid::new_v4()).await,
+        Err(Error::Denied)
+    ));
+}

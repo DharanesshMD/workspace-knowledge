@@ -3,6 +3,8 @@ mod compliance;
 mod cursor_capture;
 mod cursor_source;
 mod daemon;
+mod device;
+mod native_login;
 mod network;
 mod personal_sync;
 mod process;
@@ -43,6 +45,11 @@ enum Command {
         yes: bool,
     },
     Serve,
+    /// Connect a hosted collector through upstream sign-in and a bound installation key.
+    Device {
+        #[command(subcommand)]
+        action: device::Action,
+    },
     /// Opt into version-pinned native capture in the enrolled service.
     NativeEnroll {
         #[arg(long)]
@@ -167,9 +174,16 @@ async fn main() {
     }
 }
 async fn run(cli: Cli) -> Result<Value, String> {
-    let create = matches!(&cli.command, Command::Init { .. });
+    let create = matches!(
+        &cli.command,
+        Command::Init { .. }
+            | Command::Device {
+                action: device::Action::Connect(_)
+            }
+    );
     let state = state::private_dir(&cli.state_dir, create)?;
     match cli.command {
+        Command::Device { action } => device::run(&state, action).await,
         Command::Init {
             binding,
             service,
@@ -212,6 +226,8 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 port,
                 account: "workspace".into(),
                 device_id: uuid::Uuid::new_v4().to_string(),
+
+                device: None,
             };
             let policy = network::policy(&c, &b, &token).await?;
             network::post(&c,&token,"/v1/workspace-bindings",&json!({"product":b.product,"device_id":c.device_id,"approval_hash":b.policy_hash,"services":[c.service],"policy_revision":policy["policy_revision"]})).await?;
@@ -325,6 +341,9 @@ async fn run(cli: Cli) -> Result<Value, String> {
         }
         Command::Auth => {
             let c = state::load(&state)?;
+            if c.device.is_some() {
+                return Err("hosted devices use device login; token replacement through the legacy command is disabled".into());
+            }
             let b = state::binding(&c)?;
             let t = zeroize::Zeroizing::new(
                 std::env::var("WK_ACCESS_TOKEN").map_err(|_| "WK_ACCESS_TOKEN required")?,
