@@ -58,6 +58,30 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if mode == "retention-once" {
+        let counts = Knowledge::open(&url).await?.retention_batch(1000).await?;
+        println!("{}", serde_json::to_string(&counts)?);
+        return Ok(());
+    }
+    if mode == "replay-personal-deletions" {
+        Knowledge::open(&url)
+            .await?
+            .replay_personal_deletions()
+            .await?;
+        return Ok(());
+    }
+    if mode == "retention-worker" {
+        let k = Knowledge::open(&url).await?;
+        wk_server::retention_worker::run(
+            &k,
+            async {
+                let _ = tokio::signal::ctrl_c().await;
+            },
+            std::time::Duration::from_secs(60),
+        )
+        .await?;
+        return Ok(());
+    }
     if mode == "admin-assign" {
         let p: wk_server::admin_cli::AdminAssignment =
             wk_server::admin_cli::parse(std::io::stdin().lock())?;

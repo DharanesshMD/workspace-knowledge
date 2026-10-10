@@ -26,3 +26,5 @@ GRANT SELECT,INSERT,DELETE ON collector_credentials TO wk_app;
 
 GRANT SELECT ON product_settings TO wk_app;
 GRANT EXECUTE ON FUNCTION wk_admin_members(TEXT),wk_admin_member(TEXT,TEXT,TEXT[],BOOLEAN,BOOLEAN),wk_admin_device(TEXT,UUID),wk_admin_policy(TEXT,JSONB) TO wk_app;
+
+GRANT EXECUTE ON FUNCTION wk_personal_deleted_key(TEXT,TEXT,TEXT,TEXT) TO wk_app;

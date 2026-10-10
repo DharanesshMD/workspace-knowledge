@@ -11,6 +11,7 @@ pub mod evidence;
 pub mod graph;
 pub mod lifecycle;
 pub mod personal;
+pub mod retention;
 pub mod signed_evidence;
 pub mod team;
 #[derive(Clone)]
@@ -133,6 +134,7 @@ impl Knowledge {
             (8, include_str!("../../../migrations/server/0008.sql")),
             (9, include_str!("../../../migrations/server/0009.sql")),
             (10, include_str!("../../../migrations/server/0010.sql")),
+            (11, include_str!("../../../migrations/server/0011.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",

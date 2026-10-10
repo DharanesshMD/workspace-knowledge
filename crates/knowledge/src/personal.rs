@@ -89,6 +89,18 @@ impl Knowledge {
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(db)?;
+        let deleted: bool =
+            sqlx::query_scalar("SELECT public.wk_personal_deleted_key($1,$2,$3,$4)")
+                .bind(&a.org)
+                .bind(p)
+                .bind(&a.user)
+                .bind(&input.body.idempotency_key)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db)?;
+        if deleted {
+            return Err(Error::Conflict);
+        }
         let existing=sqlx::query(&format!("SELECT {FIELDS},s.deleted,s.expires_at>now() AS live FROM personal_summaries s WHERE s.org=$1 AND s.product=$2 AND s.owner=$3 AND s.idempotency_key=$4")).bind(&a.org).bind(p).bind(&a.user).bind(&input.body.idempotency_key).fetch_optional(&mut *tx).await.map_err(db)?;
         if let Some(row) = existing {
             if row.try_get::<bool, _>("deleted").map_err(db)?

@@ -8,6 +8,7 @@ pub mod device_routes;
 pub mod environments;
 mod personal_routes;
 pub mod remote_mcp;
+pub mod retention_worker;
 mod team_routes;
 use axum::{
     extract::{rejection::JsonRejection, DefaultBodyLimit, Path, Query, State},
