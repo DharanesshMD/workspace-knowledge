@@ -86,11 +86,7 @@ impl Knowledge {
         for row in rows {
             let intent: String = row.try_get("intent").map_err(db)?;
             let files: Vec<String> = row.try_get("files").map_err(db)?;
-            if files.iter().any(|f| !safe_file(f))
-                || wk_summarize::sensitive(
-                    &serde_json::json!({"intent":intent,"files":files}).to_string(),
-                )
-            {
+            if !activity::safe_content(&intent, &files) {
                 continue;
             }
             reports.push(SharedActivity {

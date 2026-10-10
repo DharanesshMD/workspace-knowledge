@@ -376,3 +376,31 @@ async fn pagination_anchor_must_match_the_current_filters() {
         .unwrap()
         .is_empty());
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn unsafe_activity_is_absent_from_feed_and_overlaps() {
+    let (k, a, _, r, pool) = setup().await;
+    let secret = "sk-proj-SYNTHETIC_SECRET_CANARY";
+    sqlx::query("INSERT INTO activity(org,product,user_id,session_id,services,files,intent,status,expires_at) VALUES($1,'demo','alice','unsafe-overlap',ARRAY['backend'],ARRAY['backend/limiter.rs'],$2,'active',now()+interval '1 hour')").bind(&a.org).bind(secret).execute(&pool).await.unwrap();
+    assert!(k.team_activity(&r, "demo").await.unwrap().is_empty());
+    assert!(k
+        .overlaps(
+            &r,
+            "demo",
+            wk_knowledge::activity::OverlapQuery {
+                files: vec!["backend/limiter.rs".into()],
+                query: None,
+                limit: 8
+            }
+        )
+        .await
+        .unwrap()
+        .is_empty());
+    let mut unsafe_input = activity("new-unsafe", &["backend"], false);
+    unsafe_input.intent = secret.into();
+    assert!(matches!(
+        k.record_activity(&a, "demo", unsafe_input).await,
+        Err(Error::Invalid)
+    ));
+}

@@ -63,6 +63,12 @@ pub fn valid_path(p: &str) -> bool {
             .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
 }
 
+/// Safe shared activity fields; also screens stored records from older collectors.
+pub(crate) fn safe_content(intent: &str, files: &[String]) -> bool {
+    files.iter().all(|f| valid_path(f) && !f.contains(':'))
+        && !wk_summarize::sensitive(&serde_json::json!({"intent":intent,"files":files}).to_string())
+}
+
 /// Files nearly every session touches (plans, task lists, lockfiles). Matching on them alone
 /// would report every developer as overlapping with every other.
 pub fn bookkeeping(p: &str) -> bool {
@@ -149,7 +155,7 @@ impl Knowledge {
             || u.services.len() > 20
             || u.services.iter().any(|s| !wk_contracts::valid_id(s))
             || u.files.len() > 200
-            || u.files.iter().any(|f| !valid_path(f))
+            || !safe_content(&u.intent, &u.files)
             || u.intent.trim().is_empty()
             || u.intent.chars().count() > 280
         {
@@ -272,12 +278,15 @@ impl Knowledge {
                 .fetch_all(&mut *tx).await.map_err(db)?;
             for r in rows {
                 let files: Vec<String> = r.try_get("files").map_err(db)?;
+                let intent: String = r.try_get("intent").map_err(db)?;
+                if !safe_content(&intent, &files) {
+                    continue;
+                }
                 let (by, matched) = classify(&files);
                 if by.is_empty() {
                     continue;
                 }
                 let developer: String = r.try_get("user_id").map_err(db)?;
-                let intent: String = r.try_get("intent").map_err(db)?;
                 let seen: i64 = r.try_get("seen").map_err(db)?;
                 let place = if by == "file" {
                     format!("is working on {}", list(&matched))
