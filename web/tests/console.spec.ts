@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+test.beforeEach(async({page})=>{await page.route('**/auth/config',r=>r.fulfill({json:{browser_login:false,development:true}}));});
 test('shows authentication failures without persisting credentials',async({page})=>{
  await page.route('**/v1/search',route=>route.fulfill({status:401,contentType:'application/json',body:'{"error":"unauthenticated"}'}));
  await page.goto('/');await page.getByLabel('Product ID').fill('demo');await page.getByLabel('Access token').fill('SYNTHETIC_TOKEN');await page.getByRole('button',{name:'Connect',exact:true}).click();

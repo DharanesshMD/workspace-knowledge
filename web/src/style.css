@@ -4,3 +4,6 @@
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 
 select{font:inherit;width:100%;max-width:100%;border:1px solid #aabbd0;border-radius:4px;padding:.65rem .8rem;background:white;color:#172c48}details form{margin-block:1.25rem}.evidence code,.evidence p{overflow-wrap:anywhere}
+.session-page{min-height:100vh;display:grid;align-content:center;justify-items:center;padding:2rem 1rem}.session-page .connect{width:100%;max-width:650px}.sign-in{display:inline-block;padding:.7rem 1rem;background:#185fba;color:white;border-radius:5px;text-decoration:none;font-weight:600}.session-bar{display:flex;gap:1rem;align-items:center;justify-content:flex-end;flex-wrap:wrap;padding:.65rem 1rem;background:#e9eef6;border-bottom:1px solid #cbd5e1}.session-bar label{display:flex;align-items:center;gap:.7rem;margin:0}.session-bar select{width:auto;max-width:55vw}.session-bar span{overflow-wrap:anywhere}
+
+.hosted-session{min-height:100vh;display:flex;flex-direction:column}.hosted-session>.shell{flex:1;min-height:0}.hosted-session>.session-page{min-height:0;flex:1}
