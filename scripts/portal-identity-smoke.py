@@ -49,16 +49,18 @@ class Provider(http.server.BaseHTTPRequestHandler):
         self.send(200,{'access_token':secrets.token_urlsafe(32),'token_type':'Bearer','expires_in':300,'id_token':raw+'.'+b64(signed)})
 def allocate():
     with socket.socket() as sock:sock.bind(('127.0.0.1',0));return sock.getsockname()[1]
-def main(owner_acceptance=None):
+def main(owner_acceptance=None,provider_handler=Provider,collector=False):
     parser=argparse.ArgumentParser();parser.add_argument('--serve',action='store_true');parser.add_argument('--public-client',action='store_true');args=parser.parse_args()
     db=os.environ['WK_TEST_DATABASE_URL'];assert db.endswith('/wk_test'),'Only disposable wk_test accepted'
     exe=REPO/'target/debug/wk-server';assert exe.exists()
     results={};server=None;provider=None
     with tempfile.TemporaryDirectory(prefix='wk-portal-identity-') as private:
         os.chmod(private,0o700);key=json.loads((REPO/'crates/server/tests/fixtures/synthetic-rsa-a.json').read_text());pem=Path(private)/'synthetic.pem';pem.write_text(key['private_pkcs8_pem']);pem.chmod(0o600)
-        port=allocate();origin=f'http://127.0.0.1:{port}';provider=http.server.ThreadingHTTPServer(('127.0.0.1',0),Provider);issuer=f'http://127.0.0.1:{provider.server_port}'
+        port=allocate();origin=f'http://127.0.0.1:{port}';provider=http.server.ThreadingHTTPServer(('127.0.0.1',0),provider_handler);issuer=f'http://127.0.0.1:{provider.server_port}'
         provider.cfg={'issuer':issuer,'callback':origin+'/auth/callback','key':key,'pem':str(pem),'secret':None if args.public_client else secrets.token_urlsafe(32),'codes':{}};threading.Thread(target=provider.serve_forever,daemon=True).start()
         env=dict(os.environ,WK_DATABASE_URL=db,WK_PORT=str(port),WK_DEV_TOKEN=secrets.token_urlsafe(32),WK_CONSOLE_ORIGIN=origin,WK_WEB_DIR=str(REPO/'web/dist'),WK_BROWSER_CLIENT_ID='portal-test',WK_BROWSER_CLIENT_SECRET=provider.cfg['secret'] or '',WK_BROWSER_TEST_ISSUER=issuer)
+        if collector:
+            env.update(WK_COLLECTOR_TEST_ISSUER=issuer,WK_COLLECTOR_TEST_AUDIENCE='wk-collector',WK_COLLECTOR_TEST_JWKS_URL=issuer+'/keys',WK_COLLECTOR_TEST_CLIENT_ID='collector-test')
         for name in ['WK_OIDC_ISSUER','WK_OIDC_AUDIENCE','WK_OIDC_JWKS_URL']:env.pop(name,None)
         def command(mode,data=None):
             subprocess.run([str(exe),mode],input=None if data is None else json.dumps(data).encode(),env=env,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)

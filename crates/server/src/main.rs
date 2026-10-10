@@ -184,6 +184,25 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             tokens: vec![],
             client_id: Some(required("WK_COLLECTOR_CLIENT_ID")?),
         })
+    } else if mode == "--dev" && std::env::var("WK_COLLECTOR_TEST_ISSUER").is_ok() {
+        if std::env::var("WK_COLLECTOR_TEST_TOKEN").is_ok() {
+            return Err("choose one synthetic collector authentication mode".into());
+        }
+        Some(wk_server::device_routes::CollectorAuth {
+            origin: origin
+                .clone()
+                .ok_or("WK_CONSOLE_ORIGIN required for test collector")?,
+            oidc: Some(
+                wk_server::auth::Oidc::load_for_development(
+                    required("WK_COLLECTOR_TEST_ISSUER")?,
+                    required("WK_COLLECTOR_TEST_AUDIENCE")?,
+                    required("WK_COLLECTOR_TEST_JWKS_URL")?,
+                )
+                .await?,
+            ),
+            tokens: vec![],
+            client_id: Some(required("WK_COLLECTOR_TEST_CLIENT_ID")?),
+        })
     } else if mode == "--dev" {
         std::env::var("WK_COLLECTOR_TEST_TOKEN").ok().map(|token| {
             wk_server::device_routes::CollectorAuth {
