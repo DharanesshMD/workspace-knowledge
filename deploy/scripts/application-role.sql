@@ -30,3 +30,4 @@ GRANT EXECUTE ON FUNCTION wk_admin_members(TEXT),wk_admin_member(TEXT,TEXT,TEXT[
 GRANT EXECUTE ON FUNCTION wk_personal_deleted_key(TEXT,TEXT,TEXT,TEXT) TO wk_app;
 
 GRANT SELECT ON collector_security_epoch TO wk_app;
+GRANT SELECT ON wk_schema_migrations TO wk_app;

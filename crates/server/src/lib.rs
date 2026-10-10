@@ -6,9 +6,11 @@ mod browser_routes;
 pub mod decisions;
 pub mod device_routes;
 pub mod environments;
+mod health;
 mod personal_routes;
 pub mod remote_mcp;
 pub mod retention_worker;
+pub mod runtime;
 mod team_routes;
 use axum::{
     extract::{rejection::JsonRejection, DefaultBodyLimit, Path, Query, State},
@@ -24,6 +26,7 @@ use std::{collections::HashMap, sync::Arc};
 use wk_knowledge::{Actor, Error, Knowledge};
 #[derive(Clone)]
 struct Api {
+    health_slots: Arc<tokio::sync::Semaphore>,
     decisions: Arc<std::sync::OnceLock<Result<decisions::Jev, String>>>,
     knowledge: Knowledge,
     tokens: Arc<HashMap<[u8; 32], Actor>>,
@@ -478,6 +481,7 @@ pub fn portal_router_with_collector(
         .map(|(token, actor)| (Sha256::digest(token.as_bytes()).into(), actor))
         .collect();
     let api = Api {
+        health_slots: Arc::new(tokio::sync::Semaphore::new(1)),
         decisions: Arc::new(std::sync::OnceLock::new()),
         knowledge,
         tokens: Arc::new(tokens),
@@ -486,7 +490,8 @@ pub fn portal_router_with_collector(
         browser,
         collector,
     };
-    Ok(Router::new()
+    let limits = runtime::Limits::from_env()?;
+    let router = Router::new()
         .merge(browser_routes::routes())
         .merge(personal_routes::routes())
         .merge(team_routes::routes())
@@ -533,5 +538,6 @@ pub fn portal_router_with_collector(
             api.clone(),
             browser_routes::protect,
         ))
-        .with_state(api))
+        .with_state(api.clone());
+    Ok(runtime::bound(router, limits).merge(health::routes().with_state(api)))
 }

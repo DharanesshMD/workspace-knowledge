@@ -1,6 +1,6 @@
 # Hosted portal operations
 
-Implementation status: scoped administration is locally tested. Physical cleanup, deletion-safe restore and a measured deployment pilot are the remaining work in the approved operations plan. This document does not certify a production identity provider or server capacity.
+Implementation status: scoped administration, bounded physical cleanup and deletion-safe encrypted restore are tested locally. Deployment limits and a five-developer synthetic Linux-container pilot passed local acceptance; see `docs/reviews/2026-10-10-hosted-operations-acceptance.md` for measured evidence and final review status. Production identity/TLS and deployment-specific capacity remain separate gates.
 
 ## Administrative boundaries
 
@@ -31,3 +31,27 @@ Run `wk-server retention-worker` as a separate operator process with a protected
 Logical expiry remains immediate even if the worker is delayed. Physical erasure here means live PostgreSQL text/rows are cleared; WAL, freed database pages and encrypted backups have independent retention and are not instantly erased. Private deletion writes a body-free journal in the same transaction, including only scope, note ID, revision, hashed idempotency key and deletion time. Retries of a deleted key are denied even when the original note was absent from an old snapshot. No application role can read/write that journal or invoke cleanup/replay. `replay-personal-deletions` is an offline operator command.
 
 Keep personal idempotency markers, independent deletion journals and revoked installation-key tombstones. Their metadata currently grows indefinitely; archive only with a defined backup/replay horizon. Unexpired collector bindings must survive through token expiry plus120seconds. The newest independently encrypted journal must cover every backup still retained.
+
+## Deployment bounds
+
+The API validates these per-process settings before serving. Defaults: `WK_POOL_MAX=10` (1–32), `WK_DB_ACQUIRE_MS=5000` (100–10000), `WK_DB_STATEMENT_MS=5000` (100–15000), `WK_DB_LOCK_MS=3000` (100–5000, no greater than statement), `WK_MAX_INFLIGHT=64` (1–64), `WK_HTTP_TIMEOUT_SECONDS=30` (1–30). Acquisition plus statement must fit within the HTTP deadline. Production uses the configured pool; protected operator commands use the same default SQL deadlines. Size total database connections across every API instance, admin process and worker, not just one pool.
+
+Excess API requests receive opaque503 immediately instead of an unbounded queue. The deadline covers response body completion; JSON API/stateless MCP output is buffered up to8MiB. A timed-out write may have committed before cancellation, so retry the same idempotency key or reload a revision instead of inventing another write. New streaming protocols require their own bounds.
+
+`/health/live` reports only process liveness. `/health/ready` requires exactly schema migrations1–12 through the restricted runtime connection, with one concurrent probe and a1-second deadline. It returns only readiness or opaque503. A running retention worker does not make readiness claim backups, capture coverage, issuer health or model availability. `wk-server healthcheck` checks only fixed localhost:8080 readiness, disables proxy/redirect forwarding and needs no database credential of its own. The legacy `/health` remains for compatibility; use readiness to decide whether to route traffic.
+
+Compose starts with app2CPU/1GiB, PostgreSQL2CPU/2GiB,256-process caps,50 database connections,256MiB shared buffers and4MiB work memory. App remains non-root/read-only/cap-drop/no-new-privileges; PostgreSQL is private and app port binds host loopback. Override CPU/RAM deliberately after measurement. These are resource ceilings, not a proven minimum server size. A same-origin HTTPS reverse proxy still needs connection/header/body deadlines and rate limits; application request bounds begin after HTTP headers are received. Do not expose plain app/PostgreSQL ports publicly.
+
+Build and reproduce the owned synthetic load fixture:
+
+```sh
+docker build --target pilot -f deploy/Dockerfile -t wk-hosted-pilot:oct10-owned .
+scripts/cargo build -p wk-server
+python3 scripts/hosted-pilot.py --duration 30 --output /private/hosted-pilot.json
+```
+
+The harness allocates new containers/network/database, five distinct upstream-signed test identities, separate API/collector audiences and installation keys, a reviewer, a scoped admin and restricted services. It uses the actual application runtime grants and real HTTP/signed collector/MCP reads, duplicate idempotent writes and a preassembled offline-catch-up burst. It removes its own containers/network/volumes on exit; the build image/cache remain for reproducibility. It never uses a real project's database. Signing and client generation run outside the app container. This fixture is separate from the real upstream PKCE/browser/macOS Keychain acceptance; its replay burst is not a native disk-queue or cross-client capture certification.
+
+At five developers×50 sanitized10KiB summaries/day, one persistent shared copy adds2.44MiB/day or0.87GiB/year of JSON bodies.30days of active private copies adds73.2MiB before metadata. Revisions, full-text/other indexes, owner deletion markers, credential/nonces/audit, WAL and retained encrypted backups add storage. Four times shared body growth (about3.48GiB/year) is an illustrative allowance, not a measured guarantee; every correction may add another retained revision.50/day×30days is1500 active private notes per owner, below the existing2000 limit. Draft and withdrawn shared rows also consume storage; logical withdrawal does not instantly erase old summary revisions.
+
+A2–4vCPU/8GiB/40GiB starting server is provisional. Choose disk from the measured workload/content density, shared revision/retention policy, WAL/checkpoint behavior and backup count; keep operational free space and track growth. Framework count alone does not determine load. Locally generated repetitive text may compress better than real summaries. No central LLM inference is included in these API/database budgets.

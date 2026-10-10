@@ -12,6 +12,8 @@ pub mod evidence;
 pub mod graph;
 pub mod lifecycle;
 pub mod personal;
+mod pool;
+pub use pool::PoolConfig;
 pub mod retention;
 pub mod signed_evidence;
 pub mod team;
@@ -101,15 +103,24 @@ impl Knowledge {
     }
     /// Production application connection: never performs DDL.
     pub async fn open(url: &str) -> Result<Self, Error> {
+        Self::open_with_config(url, PoolConfig::default()).await
+    }
+    pub async fn open_with_config(url: &str, config: PoolConfig) -> Result<Self, Error> {
         Ok(Self {
             device_guard: None,
-            pool: sqlx::postgres::PgPoolOptions::new()
-                .max_connections(10)
-                .acquire_timeout(std::time::Duration::from_secs(5))
-                .connect(url)
-                .await
-                .map_err(db)?,
+            pool: config.connect(url).await?,
         })
+    }
+    pub async fn ready(&self) -> Result<(), Error> {
+        let versions: Vec<i32> =
+            sqlx::query_scalar("SELECT version FROM public.wk_schema_migrations ORDER BY version")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(db)?;
+        if versions != (1..=12).collect::<Vec<_>>() {
+            return Err(Error::Storage);
+        }
+        Ok(())
     }
     /// Run only with the deployment migration role, before starting app processes.
     pub async fn migrate(&self) -> Result<(), Error> {

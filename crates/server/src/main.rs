@@ -27,6 +27,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mode = std::env::args()
         .nth(1)
         .ok_or("choose --dev, --production, migrate, provision, revoke, or replay-tombstones")?;
+    if mode == "healthcheck" {
+        // Fixed local destination, no environment-supplied URL or credential forwarding.
+        reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(2))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?
+            .get("http://127.0.0.1:8080/health/ready")
+            .send()
+            .await?
+            .error_for_status()?;
+        return Ok(());
+    }
     let url = required("WK_DATABASE_URL")?;
     if mode == "migrate" {
         Knowledge::open(&url).await?.migrate().await?;
@@ -155,6 +168,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("WK_CONSOLE_ORIGIN must be an exact origin without a path".into());
         }
     }
+    let limits = wk_server::runtime::Limits::from_env()?;
     let (knowledge, tokens, oidc, address) = match mode.as_str() {
         "--production" => {
             let oidc = wk_server::auth::Oidc::load(
@@ -165,7 +179,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .await
             .map_err(|e| format!("OIDC initialization failed: {e}"))?;
             (
-                Knowledge::open(&url).await?,
+                Knowledge::open_with_config(&url, limits.pool.clone()).await?,
                 vec![],
                 Some(oidc),
                 std::env::var("WK_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into()),
