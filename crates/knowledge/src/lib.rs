@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use wk_contracts::CardSubmission;
 pub mod activity;
+pub mod browser;
 pub mod evidence;
 pub mod graph;
 pub mod lifecycle;
@@ -114,6 +115,7 @@ impl Knowledge {
             (3, include_str!("../../../migrations/server/0003.sql")),
             (4, include_str!("../../../migrations/server/0004.sql")),
             (5, include_str!("../../../migrations/server/0005.sql")),
+            (6, include_str!("../../../migrations/server/0006.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
