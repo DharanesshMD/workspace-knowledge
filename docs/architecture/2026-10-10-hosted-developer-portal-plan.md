@@ -1,7 +1,7 @@
 # Hosted developer portal: architecture and delivery proposal
 
 Date: 2026-10-10
-Status: user approved execution on 2026-10-10. Hosted identity is implemented and locally tested; the remaining increments below are proposed behavior until separately implemented and verified.
+Status: user approved execution on 2026-10-10. Hosted identity and owner-only My context are implemented and locally tested; the remaining increments below are proposed behavior until separately implemented and verified.
 
 ## 1. Intended outcome
 

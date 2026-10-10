@@ -9,8 +9,8 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class Browser:
     def __init__(self):
         self.jar=http.cookiejar.CookieJar();self.client=urllib.request.build_opener(NoRedirect(),urllib.request.HTTPCookieProcessor(self.jar))
-    def request(self,url,body=None,headers=None):
-        request=urllib.request.Request(url,data=None if body is None else json.dumps(body).encode(),headers=headers or {})
+    def request(self,url,body=None,headers=None,method=None):
+        request=urllib.request.Request(url,data=None if body is None else json.dumps(body).encode(),headers=headers or {},method=method)
         try:r=self.client.open(request,timeout=15)
         except urllib.error.HTTPError as e:r=e
         return r.code,r.headers,r.read(262145)
@@ -28,7 +28,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
         if parsed.path=='/authorize':
             q=urllib.parse.parse_qs(parsed.query);required=['state','nonce','code_challenge','redirect_uri','client_id','response_type','code_challenge_method']
             if any(len(q.get(k,[]))!=1 for k in required) or q['client_id'][0]!='portal-test' or q['redirect_uri'][0]!=cfg['callback'] or q['response_type'][0]!='code' or q['code_challenge_method'][0]!='S256':return self.send(400,{'error':'invalid_request'})
-            code=secrets.token_urlsafe(32);cfg['codes'][code]=q
+            code=secrets.token_urlsafe(32);q['synthetic_subject']=[cfg.get('subject','alice')];cfg['codes'][code]=q
             return self.send(302,location=cfg['callback']+'?'+urllib.parse.urlencode({'code':code,'state':q['state'][0]}))
         self.send(404,{})
     def do_POST(self):
@@ -42,14 +42,14 @@ class Provider(http.server.BaseHTTPRequestHandler):
         if not public_ok or grant is None or self.headers.get('Authorization')!=expected or q.get('redirect_uri',[''])[0]!=cfg['callback'] or q.get('grant_type',[''])[0]!='authorization_code' or b64(hashlib.sha256(q.get('code_verifier',[''])[0].encode()).digest())!=grant['code_challenge'][0]:return self.send(400,{'error':'invalid_grant'})
         nonce=grant['nonce'][0]
         if cfg.pop('bad_nonce_once',False):nonce='wrong-nonce'
-        now=int(time.time());claims={'iss':cfg['issuer'],'aud':'portal-test','sub':'alice','iat':now,'exp':now+300,'nonce':nonce}
+        now=int(time.time());claims={'iss':cfg['issuer'],'aud':'portal-test','sub':grant['synthetic_subject'][0],'iat':now,'exp':now+300,'nonce':nonce}
         raw=b64(json.dumps({'alg':'RS256','kid':'synthetic-portal'}).encode())+'.'+b64(json.dumps(claims).encode())
         signed=subprocess.check_output(['/usr/bin/openssl','dgst','-sha256','-sign',cfg['pem']],input=raw.encode(),stderr=subprocess.DEVNULL)
         if cfg.pop('bad_signature_once',False):signed=bytes([signed[0]^1])+signed[1:]
         self.send(200,{'access_token':secrets.token_urlsafe(32),'token_type':'Bearer','expires_in':300,'id_token':raw+'.'+b64(signed)})
 def allocate():
     with socket.socket() as sock:sock.bind(('127.0.0.1',0));return sock.getsockname()[1]
-def main():
+def main(owner_acceptance=None):
     parser=argparse.ArgumentParser();parser.add_argument('--serve',action='store_true');parser.add_argument('--public-client',action='store_true');args=parser.parse_args()
     db=os.environ['WK_TEST_DATABASE_URL'];assert db.endswith('/wk_test'),'Only disposable wk_test accepted'
     exe=REPO/'target/debug/wk-server';assert exe.exists()
@@ -82,6 +82,7 @@ def main():
             assert owner.request(origin+'/auth/logout',{}, {'Origin':origin,'Content-Type':'application/json'})[0]==403;results['csrf_and_origin']=True
             for flag in ['bad_nonce_once','bad_signature_once']:
                 provider.cfg[flag]=True;other=Browser();assert other.request(start(other))[0]==401;assert other.request(origin+'/v1/me')[0]==401;results[flag.replace('_once','_rejected')]=True
+            if owner_acceptance:results.update(owner_acceptance(origin,owner,mutation,command,provider,start))
             command('revoke',grant('alpha'));me=json.loads(owner.request(origin+'/v1/me')[2]);assert [p['product'] for p in me['products']]==['beta'];results['membership_revocation']=True
             assert owner.request(origin+'/v1/policy?product=alpha')[0] in (403,404)
             session_cookie='; '.join(c.name+'='+c.value for c in owner.jar if c.name=='wk_dev_session')
