@@ -4,9 +4,10 @@ import {TrustedEvidence} from './TrustedEvidence';
 import {ApiError, productPath, request} from './api';
 import {Session,type Membership} from './Session';
 import {MyContext} from './MyContext';
+import {TeamContext} from './TeamContext';
 import type {Card, Status, Profile, Edge} from './types';
 
-type View = 'My context'|'Knowledge'|'Review queue'|'Relationships'|'Workspace'|'Environments';
+type View = 'My context'|'Team context'|'Knowledge'|'Review queue'|'Relationships'|'Workspace'|'Environments';
 const views:View[] = ['Knowledge','Review queue','Relationships','Workspace','Environments'];
 const readable = (value:string) => value.replaceAll('_',' ');
 
@@ -24,8 +25,8 @@ function DevelopmentApp() {
 }
 function HostedWorkbench({user,product,onLogout,policy}:{user:string;product:string;onLogout:()=>void;policy:Membership}) {
  const [view,setView]=useState<View>('My context');
- const hostedViews:View[]=['My context',...views.filter(v=>v!=='Review queue'||policy.can_review)];
- return <><a className="skip" href="#main">Skip to content</a><div className="shell"><aside className="sidebar"><a className="brand" href="#main"><span className="mark" aria-hidden="true">W</span><span>Workspace Knowledge</span></a><p className="sidebar-copy">Shared decisions.<br/>Private conversations.</p><nav aria-label="Main navigation">{hostedViews.map(item=><button key={item} aria-current={view===item?'page':undefined} onClick={()=>setView(item)}>{item}</button>)}</nav><div className="connection-note"><span>Signed in as</span><strong>{user}</strong><span>Product</span><strong>{product}</strong><button onClick={onLogout}>Sign out</button></div></aside><main id="main" tabIndex={-1}><header className="page-header"><div><p className="context">Developer workbench</p><h1>{view}</h1></div><span className="privacy-label">{view==='My context'?'Owner-only':'Summaries only'}</span></header>{view==='My context'?<MyContext key={product} product={product} policy={policy}/>:<Workspace key={product+view} view={view} product={product} token=""/>}</main></div></>;
+ const hostedViews:View[]=['My context','Team context',...views.filter(v=>v!=='Review queue'||policy.can_review)];
+ return <><a className="skip" href="#main">Skip to content</a><div className="shell"><aside className="sidebar"><a className="brand" href="#main"><span className="mark" aria-hidden="true">W</span><span>Workspace Knowledge</span></a><p className="sidebar-copy">Shared decisions.<br/>Private conversations.</p><nav aria-label="Main navigation">{hostedViews.map(item=><button key={item} aria-current={view===item?'page':undefined} onClick={()=>setView(item)}>{item}</button>)}</nav><div className="connection-note"><span>Signed in as</span><strong>{user}</strong><span>Product</span><strong>{product}</strong><button onClick={onLogout}>Sign out</button></div></aside><main id="main" tabIndex={-1}><header className="page-header"><div><p className="context">Developer workbench</p><h1>{view}</h1></div><span className="privacy-label">{view==='My context'?'Owner-only':'Summaries only'}</span></header>{view==='My context'?<MyContext key={product} product={product} policy={policy}/>:view==='Team context'?<TeamContext key={product} product={product} policy={policy}/>:<Workspace key={product+view} view={view} product={product} token=""/>}</main></div></>;
 }
 function Workspace({token,product,view}:{token:string;product:string;view:View}) {
   const [query,setQuery]=useState(''); const [cards,setCards]=useState<Card[]>([]); const [selected,setSelected]=useState<Card|null>(null);
@@ -48,7 +49,7 @@ function Workspace({token,product,view}:{token:string;product:string;view:View})
   {view==='Relationships'&&selected&&<Detail token={token} card={selected} headingRef={detailHeading} busy={busy} action={action} product={product} revisions={revisionHistory} loadRevisions={()=>void run(async signal=>{const r=await request<{revisions:{revision:number;body:Card['body']}[]}>(token,`${path}/cards/${selected.id}/revisions`,undefined,undefined,signal);setRevisionHistory(r.revisions.map(v=>({...selected,...v})));})}/>}
   </>;
 }
-function Detail({token,card,headingRef,busy,action,product,revisions,loadRevisions}:{token:string;card:Card;headingRef:React.RefObject<HTMLHeadingElement|null>;busy:boolean;action:(kind:string,body:unknown)=>Promise<void>;product:string;revisions:Card[];loadRevisions:()=>void}) {
+export function Detail({token,card,headingRef,busy,action,product,revisions,loadRevisions}:{token:string;card:Card;headingRef:React.RefObject<HTMLHeadingElement|null>;busy:boolean;action:(kind:string,body:unknown)=>Promise<void>;product:string;revisions:Card[];loadRevisions:()=>void}) {
   const [editing,setEditing]=useState(false);const [intent,setIntent]=useState(card.body.intent);const [rationale,setRationale]=useState(card.body.rationale);const [reason,setReason]=useState('');const [feedback,setFeedback]=useState('');const [confirmWithdraw,setConfirmWithdraw]=useState(false);
   useEffect(()=>{setEditing(false);setIntent(card.body.intent);setRationale(card.body.rationale);setReason('');setFeedback('');setConfirmWithdraw(false);},[card.id,card.revision]);
   const lists:[string,string[]][]=[['Decisions',card.body.decisions],['Constraints',card.body.constraints],['Open questions',card.body.open_questions]];

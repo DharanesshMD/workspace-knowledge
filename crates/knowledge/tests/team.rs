@@ -343,3 +343,36 @@ async fn restricted_runtime_feed_keeps_multi_service_rows_hidden() {
         .await
         .unwrap();
 }
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn pagination_anchor_must_match_the_current_filters() {
+    let (k, a, b, _, pool) = setup().await;
+    let anchor = k
+        .submit(&a, "demo", body("anchor", &["backend"]))
+        .await
+        .unwrap();
+    let older = k
+        .submit(&b, "demo", body("older", &["backend"]))
+        .await
+        .unwrap();
+    k.publish(&b, "demo", anchor.id).await.unwrap();
+    k.publish(&b, "demo", older.id).await.unwrap();
+    sqlx::query("UPDATE cards SET created_at=created_at-interval '1 hour' WHERE id=$1")
+        .bind(older.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(k
+        .team_context(
+            &b,
+            "demo",
+            TeamQuery {
+                before: Some(anchor.id),
+                author: Some("bob".into()),
+                ..Default::default()
+            }
+        )
+        .await
+        .unwrap()
+        .is_empty());
+}
