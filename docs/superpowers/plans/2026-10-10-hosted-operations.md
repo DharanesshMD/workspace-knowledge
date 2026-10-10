@@ -41,7 +41,7 @@
 - `crates/server/src/health.rs`, deployment Compose/runtime configuration and `scripts/hosted-pilot.py`: readiness, bounded process/pool/requests, actual five-identity load and sizing evidence.
 - `docs/operations/hosted-portal.md`, `docs/reviews/2026-10-10-hosted-operations-acceptance.md`: actionable operator procedure, measured results, remaining gates and exhaustive rulings.
 
-### Task1: Scoped administration and effective product restrictions
+### Task 1: Scoped administration and effective product restrictions
 
 **Interfaces:**
 - `AdminAssignment {product:String, user:String, services:Vec<String>}` assigned only by protected bootstrap. The member must already exist and its services must contain the role ceiling.
@@ -76,7 +76,7 @@ Use fixed `SECURITY DEFINER SET search_path=pg_catalog` functions for admin meta
 - [ ] Extend effective `policy` with typed restrictions. Validate the already approved inference origin before any request; defaults allow literal-loopback local inference only. Network regression must reject unapproved HTTPS and allow configured exact origins without redirect/destination changes. Observe RED before enforcing restrictions.
 - [ ] Run all Rust DB suites plus existing portal smoke, fmt/clippy. Expected PASS and no regression in owner/team/device access. Commit `feat: add scoped audited portal administration`.
 
-### Task2: Physical retention and personal deletion journal
+### Task 2: Physical retention and personal deletion journal
 
 **Interfaces:**
 - `personal_deletions(org,product,owner,note_id,revision,key_hash,deleted_at)` retains no body or raw idempotency key; unique scope/key hash and scope/note identity. No product FK because post-snapshot deletions can reference a product absent from the backup.
@@ -89,8 +89,9 @@ Use fixed `SECURITY DEFINER SET search_path=pg_catalog` functions for admin meta
 
 ```rust
 k.personal_delete(&alice,"demo",note.id,1).await.unwrap();
-assert_eq!(journal_body_fields(&pool).await,0);
-remove_only_synthetic_note_row(&pool,note.id).await;
+let journal:serde_json::Value=sqlx::query_scalar("SELECT to_jsonb(d) FROM personal_deletions d WHERE note_id=$1").bind(note.id).fetch_one(&pool).await.unwrap();
+assert!(journal.get("body").is_none() && journal.get("idempotency_key").is_none());
+sqlx::query("DELETE FROM personal_summaries WHERE id=$1").bind(note.id).execute(&pool).await.unwrap();
 assert_eq!(k.personal_put(&alice,"demo",input("one")).await.unwrap_err(),Error::Conflict);
 let counts=k.retention_batch(1).await.unwrap();
 assert!(counts.personal<=1);
@@ -99,7 +100,7 @@ assert!(counts.personal<=1);
 Implement the new migration, fixed-schema deletion trigger and operator cleanup/replay. Use the existing personal owner advisory lock before checking deletion hashes; membership still guards every owner operation. Do not extend creation-relative TTL on edits, retries or policy changes. Require proper operator DB permissions rather than trusting a caller-supplied Actor.
 - [ ] Test worker shutdown/error behavior and audit age. Run full Rust DB suites and fmt/clippy. Commit `feat: preserve personal deletions and bound hosted retention`.
 
-### Task3: Encrypted deletion-safe backup and restore acceptance
+### Task 3: Encrypted deletion-safe backup and restore acceptance
 
 **Interfaces:**
 - `personal-deletions.sh export AGE_RECIPIENT OUTPUT.age` atomic no-overwrite publication from private temp directory; `merge AGE_IDENTITY INPUT.age` fixed COPY columns/types in one transaction. Protected PostgreSQL service credentials, strict shell options, no SQL interpolation of decrypted fields. Merge max revision/date and replay matching bodies before commit.
@@ -110,7 +111,7 @@ Implement the new migration, fixed-schema deletion trigger and operator cleanup/
 - [ ] Implement encrypted personal journal tool, update restore atomic quarantine and operator instructions. Use fixed COPY temp files and exact identity/scope matching. Test malformed/tampered ledger and interrupted/nonempty restore failure without enabling access.
 - [ ] Actual encrypted restore must prove: memberships/admin/browser all absent, old installation permanently revoked even after explicit regrant, shared withdrawal replay removes retrieval, private text cleared, orphan retry denied, later journal re-merge idempotent, unrelated note preserved, nonempty restore refused. No real project DB used. Record versions and outputs. Full suites green, commit `feat: quarantine restored access and replay personal deletions`.
 
-### Task4: Deployment bounds and measured five-developer pilot
+### Task 4: Deployment bounds and measured five-developer pilot
 
 **Interfaces:**
 - `/health/live` returns only `{live:true}`; `/health/ready` checks a bounded DB connection and exact schema version and returns no credentials/config/counts. Production behind existing same-origin HTTPS proxy.

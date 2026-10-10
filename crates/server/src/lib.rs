@@ -1,4 +1,5 @@
 //! Authenticated shared knowledge HTTP API.
+pub mod admin_cli;
 pub mod auth;
 pub mod browser_auth;
 mod browser_routes;

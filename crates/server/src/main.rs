@@ -58,6 +58,72 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if mode == "admin-assign" {
+        let p: wk_server::admin_cli::AdminAssignment =
+            wk_server::admin_cli::parse(std::io::stdin().lock())?;
+        Knowledge::open(&url)
+            .await?
+            .admin_assign(
+                &Actor {
+                    org: p.org,
+                    user: p.user,
+                },
+                &p.product,
+                &p.services,
+            )
+            .await?;
+        return Ok(());
+    }
+    if mode == "admin-policy-bootstrap" {
+        let p: wk_server::admin_cli::PolicyBootstrap =
+            wk_server::admin_cli::parse(std::io::stdin().lock())?;
+        Knowledge::open(&url)
+            .await?
+            .admin_policy_bootstrap(
+                &Actor {
+                    org: p.org,
+                    user: p.user,
+                },
+                &p.product,
+                p.policy,
+            )
+            .await?;
+        return Ok(());
+    }
+    if mode == "admin" || mode == "--dev-admin" {
+        let input = wk_server::admin_cli::parse(std::io::stdin().lock())?;
+        let verifier = if mode == "admin" {
+            wk_server::auth::Oidc::load(
+                required("WK_OIDC_ISSUER")?,
+                required("WK_OIDC_AUDIENCE")?,
+                required("WK_OIDC_JWKS_URL")?,
+            )
+            .await?
+        } else {
+            let name = url
+                .split('?')
+                .next()
+                .unwrap_or_default()
+                .rsplit('/')
+                .next()
+                .unwrap_or_default();
+            if name != "wk_test" && name != "wk_dev" {
+                return Err(
+                    "development administration requires isolated wk_test or wk_dev".into(),
+                );
+            }
+            wk_server::auth::Oidc::load_for_development(
+                required("WK_ADMIN_TEST_ISSUER")?,
+                required("WK_ADMIN_TEST_AUDIENCE")?,
+                required("WK_ADMIN_TEST_JWKS_URL")?,
+            )
+            .await?
+        };
+        let result =
+            wk_server::admin_cli::execute(&Knowledge::open(&url).await?, &verifier, input).await?;
+        println!("{}", serde_json::to_string(&result)?);
+        return Ok(());
+    }
     let origin = std::env::var("WK_CONSOLE_ORIGIN").ok();
     if let Some(ref value) = origin {
         let u = reqwest::Url::parse(value)?;

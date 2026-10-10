@@ -23,6 +23,41 @@ pub fn server_url(value: &str) -> Result<String, String> {
     }
     Ok(value.trim_end_matches('/').into())
 }
+pub fn inference_allowed(endpoint: &str, restrictions: &Value) -> Result<(), String> {
+    let url = reqwest::Url::parse(endpoint).map_err(|_| "invalid inference endpoint")?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("invalid inference endpoint".into());
+    }
+    let local =
+        url.scheme() == "http" && matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "::1"));
+    let allowed = local && restrictions["allow_loopback"] == true
+        || url.scheme() == "https"
+            && restrictions["https_origins"]
+                .as_array()
+                .is_some_and(|origins| {
+                    origins.iter().any(|origin| {
+                        origin.as_str() == Some(url.origin().ascii_serialization().as_str())
+                    })
+                });
+    if !allowed {
+        return Err("inference destination denied by product policy".into());
+    }
+    Ok(())
+}
+fn check_inference(c: &Config, policy: &Value) -> Result<(), String> {
+    if c.device.is_some() && policy.get("restrictions").is_none() {
+        return Err("missing inference policy".into());
+    }
+    let restrictions = policy
+        .get("restrictions")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({"allow_loopback":true,"https_origins":[]}));
+    inference_allowed(&c.inference, &restrictions)
+}
 pub async fn policy(
     c: &Config,
     b: &wk_scope::enrollment::Binding,
@@ -40,6 +75,7 @@ pub async fn policy(
         {
             return Err(AUTH_DENIED.into());
         }
+        check_inference(c, &value["policy"])?;
         return Ok(value["policy"].clone());
     }
     let r = client(3)?
@@ -59,6 +95,7 @@ pub async fn policy(
     {
         return Err(AUTH_DENIED.into());
     }
+    check_inference(c, &v["policy"])?;
     Ok(v["policy"].clone())
 }
 pub async fn post(c: &Config, token: &str, path: &str, body: &Value) -> Result<Value, String> {
@@ -82,4 +119,33 @@ pub async fn post(c: &Config, token: &str, path: &str, body: &Value) -> Result<V
         .await
         .map_err(|_| "knowledge service unavailable")?;
     wk_summarize::bounded_json(r, 1024 * 1024).await
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+    #[test]
+    fn inference_policy_restricts_approved_destination_without_rewriting_it() {
+        let local = "http://127.0.0.1:11434/v1/chat/completions";
+        assert!(inference_allowed(
+            local,
+            &serde_json::json!({"allow_loopback":true,"https_origins":[]})
+        )
+        .is_ok());
+        assert!(inference_allowed(
+            local,
+            &serde_json::json!({"allow_loopback":false,"https_origins":[]})
+        )
+        .is_err());
+        let url = "https://model.synthetic.example/v1/chat/completions";
+        assert!(inference_allowed(
+            url,
+            &serde_json::json!({"allow_loopback":true,"https_origins":[]})
+        )
+        .is_err());
+        assert!(inference_allowed(url,&serde_json::json!({"allow_loopback":false,"https_origins":["https://model.synthetic.example"]})).is_ok());
+        assert!(inference_allowed("https://model.synthetic.example.evil.test/v1",&serde_json::json!({"allow_loopback":false,"https_origins":["https://model.synthetic.example"]})).is_err());
+        assert!(inference_allowed("https://user:secret@model.synthetic.example/v1",&serde_json::json!({"allow_loopback":false,"https_origins":["https://model.synthetic.example"]})).is_err());
+        assert!(inference_allowed(url, &serde_json::Value::Null).is_err());
+    }
 }

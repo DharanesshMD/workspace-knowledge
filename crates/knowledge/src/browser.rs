@@ -71,15 +71,18 @@ impl Knowledge {
         let mut tx = self.actor_tx(actor).await?;
         let rows = sqlx::query("SELECT product,services,can_review,policy_revision FROM memberships WHERE org=$1 AND user_id=$2 ORDER BY product LIMIT 100")
             .bind(&actor.org).bind(&actor.user).fetch_all(&mut *tx).await.map_err(db)?;
-        rows.into_iter()
-            .map(|r| {
-                Ok(lifecycle::Policy {
-                    product: r.try_get("product").map_err(db)?,
-                    services: r.try_get("services").map_err(db)?,
-                    can_review: r.try_get("can_review").map_err(db)?,
-                    policy_revision: r.try_get("policy_revision").map_err(db)?,
-                })
-            })
-            .collect()
+        let mut result = Vec::new();
+        for r in rows {
+            let product: String = r.try_get("product").map_err(db)?;
+            let restrictions = Self::product_restrictions(&mut tx, actor, &product).await?;
+            result.push(lifecycle::Policy {
+                product,
+                services: r.try_get("services").map_err(db)?,
+                can_review: r.try_get("can_review").map_err(db)?,
+                policy_revision: r.try_get("policy_revision").map_err(db)?,
+                restrictions,
+            });
+        }
+        Ok(result)
     }
 }

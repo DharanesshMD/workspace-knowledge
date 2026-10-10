@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use wk_contracts::CardSubmission;
 pub mod activity;
+pub mod admin;
 pub mod browser;
 pub mod devices;
 pub mod evidence;
@@ -131,6 +132,7 @@ impl Knowledge {
             (7, include_str!("../../../migrations/server/0007.sql")),
             (8, include_str!("../../../migrations/server/0008.sql")),
             (9, include_str!("../../../migrations/server/0009.sql")),
+            (10, include_str!("../../../migrations/server/0010.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
@@ -173,19 +175,28 @@ impl Knowledge {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
+        sqlx::query("SELECT id FROM registered_devices WHERE org=$1 AND product=$2 AND owner=$3 ORDER BY id FOR UPDATE").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("UPDATE registered_devices SET revoked_at=now(),revision=revision+1 WHERE org=$1 AND product=$2 AND owner=$3 AND revoked_at IS NULL AND NOT($4::text[] @> services)").bind(&actor.org).bind(product).bind(&actor.user).bind(services).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("INSERT INTO memberships(org,product,user_id,services,can_review) VALUES($1,$2,$3,$4,$5) ON CONFLICT(org,product,user_id) DO UPDATE SET services=excluded.services,can_review=excluded.can_review,policy_revision=memberships.policy_revision+1").bind(&actor.org).bind(product).bind(&actor.user).bind(services).bind(review).execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("DELETE FROM product_admins WHERE org=$1 AND product=$2 AND user_id=$3 AND NOT($4::text[] @> services)").bind(&actor.org).bind(product).bind(&actor.user).bind(services).execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("INSERT INTO audit_events(org,product,user_id,action,entity_id,target_user) VALUES($1,$2,current_user::text,'operator_member_put','00000000-0000-0000-0000-000000000000',$3)").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)
     }
     pub async fn revoke(&self, actor: &Actor, product: &str) -> Result<(), Error> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        sqlx::query("SELECT id FROM registered_devices WHERE org=$1 AND product=$2 AND owner=$3 ORDER BY id FOR UPDATE").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("UPDATE registered_devices SET revoked_at=now(),revision=revision+1 WHERE org=$1 AND product=$2 AND owner=$3 AND revoked_at IS NULL").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("DELETE FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3")
             .bind(&actor.org)
             .bind(product)
             .bind(&actor.user)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(db)?;
-        Ok(())
+        sqlx::query("INSERT INTO audit_events(org,product,user_id,action,entity_id,target_user) VALUES($1,$2,current_user::text,'operator_member_remove','00000000-0000-0000-0000-000000000000',$3)").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
+        tx.commit().await.map_err(db)
     }
+
     pub async fn submit(
         &self,
         actor: &Actor,

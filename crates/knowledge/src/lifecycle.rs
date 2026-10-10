@@ -6,14 +6,17 @@ pub struct Policy {
     pub services: Vec<String>,
     pub can_review: bool,
     pub policy_revision: i64,
+    pub restrictions: admin::ProductPolicy,
 }
 impl Knowledge {
     pub async fn policy(&self, a: &Actor, product: &str) -> Result<Policy, Error> {
         self.device_scope(product, &[])?;
         let mut tx = self.actor_tx(a).await?;
         let r=sqlx::query("SELECT services,can_review,policy_revision FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3").bind(&a.org).bind(product).bind(&a.user).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
+        let restrictions = Self::product_restrictions(&mut tx, a, product).await?;
         Ok(Policy {
             product: product.into(),
+            restrictions,
             services: if let Some(g) = &self.device_guard {
                 g.services.clone()
             } else {
