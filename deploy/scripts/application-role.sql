@@ -33,3 +33,8 @@ GRANT SELECT ON collector_security_epoch TO wk_app;
 GRANT SELECT ON wk_schema_migrations TO wk_app;
 GRANT SELECT ON code_repositories,code_mappings TO wk_app;
 GRANT SELECT,INSERT,UPDATE ON code_profiles TO wk_app;
+GRANT SELECT,INSERT,UPDATE ON code_contributions,code_rationale_anchors TO wk_app;
+GRANT SELECT ON code_maintainers TO wk_app;
+-- Row-locking reads need column UPDATE privilege. Scoped lock policies have
+-- WITH CHECK(false), so these operator-owned tables still reject mutations.
+GRANT UPDATE(revision) ON code_repositories,code_mappings,code_maintainers TO wk_app;

@@ -6,6 +6,7 @@ use wk_contracts::CardSubmission;
 pub mod activity;
 pub mod admin;
 pub mod browser;
+mod code_anchors;
 pub mod code_provenance;
 pub mod collector_epoch;
 pub mod devices;
@@ -118,7 +119,7 @@ impl Knowledge {
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db)?;
-        if versions != (1..=14).collect::<Vec<_>>() {
+        if versions != (1..=15).collect::<Vec<_>>() {
             return Err(Error::Storage);
         }
         Ok(())
@@ -151,6 +152,7 @@ impl Knowledge {
             (12, include_str!("../../../migrations/server/0012.sql")),
             (13, include_str!("../../../migrations/server/0013.sql")),
             (14, include_str!("../../../migrations/server/0014.sql")),
+            (15, include_str!("../../../migrations/server/0015.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",

@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use std::io::Read;
 use wk_knowledge::{
     admin::{MemberChange, ProductPolicy},
+    code_provenance::{MaintainerInput, MappingInput, RepositoryInput},
     Knowledge,
 };
 #[derive(Deserialize)]
@@ -22,6 +23,9 @@ enum Command {
     MemberRemove { user: String },
     PolicyPut { policy: ProductPolicy },
     DeviceRevoke { id: uuid::Uuid },
+    CodeRepository { repository: RepositoryInput },
+    CodeMapping { mapping: MappingInput },
+    CodeMaintainer { maintainer: MaintainerInput },
 }
 pub fn parse<T: serde::de::DeserializeOwned, R: std::io::Read>(reader: R) -> Result<T, String> {
     let mut bytes = Vec::new();
@@ -41,6 +45,18 @@ pub async fn execute(k: &Knowledge, oidc: &Oidc, input: AdminRequest) -> Result<
         .await
         .map_err(|_| "unauthenticated")?;
     match input.command {
+        Command::CodeRepository { repository } => Ok(
+            json!({"repository":k.configure_repository(&a,&input.product,repository).await.map_err(|e|e.to_string())?}),
+        ),
+        Command::CodeMapping { mapping } => Ok(
+            json!({"mapping":k.configure_code_mapping(&a,&input.product,mapping).await.map_err(|e|e.to_string())?}),
+        ),
+        Command::CodeMaintainer { maintainer } => {
+            k.configure_code_maintainer(&a, &input.product, maintainer)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(json!({"changed":true}))
+        }
         Command::Members {} => Ok(
             json!({"members":k.admin_members(&a,&input.product).await.map_err(|e|e.to_string())?}),
         ),

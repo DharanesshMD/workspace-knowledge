@@ -1,5 +1,8 @@
 //! Explicit repository and contributor metadata; identity mappings never prove authorship.
 use super::*;
+pub use crate::code_anchors::{
+    AnchorInput, AnchorRecord, ContributionInput, ContributionRecord, MaintainerInput,
+};
 use serde_json::Value;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -116,7 +119,7 @@ impl Knowledge {
             .bind(&a.org).bind(p).bind(&a.user).bind(services).fetch_optional(&mut **tx).await.map_err(db)?;
         ok.map(|_| ()).ok_or(Error::Denied)
     }
-    async fn code_operator(
+    pub(crate) async fn code_operator(
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         a: &Actor,
         p: &str,

@@ -86,8 +86,14 @@ pub async fn runtime(f: &Fixture) -> (Knowledge, sqlx::PgPool, String) {
 
 pub async fn cleanup_runtime(f: &Fixture, pool: sqlx::PgPool, role: String) {
     pool.close().await;
-    sqlx::raw_sql(&format!("DROP OWNED BY {role}; DROP ROLE {role}"))
-        .execute(&f.pool)
+    let mut tx = f.pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(733093)")
+        .execute(&mut *tx)
         .await
         .unwrap();
+    sqlx::raw_sql(&format!("DROP OWNED BY {role}; DROP ROLE {role}"))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
 }

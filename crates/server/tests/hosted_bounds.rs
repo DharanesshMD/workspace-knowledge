@@ -141,7 +141,7 @@ async fn readiness_requires_exact_schema_and_runtime_queries_have_timeouts() {
         app.clone().oneshot(request()).await.unwrap().status(),
         StatusCode::OK
     );
-    sqlx::query("INSERT INTO wk_schema_migrations VALUES(14)")
+    sqlx::query("INSERT INTO wk_schema_migrations VALUES(9999)")
         .execute(&pool)
         .await
         .unwrap();
