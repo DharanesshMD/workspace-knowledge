@@ -8,6 +8,7 @@ mod native_login;
 mod network;
 mod personal_sync;
 mod process;
+mod protection;
 #[allow(dead_code)] // Integrated by the following transport task.
 mod repository;
 mod state;
@@ -114,6 +115,18 @@ enum Command {
         files: Vec<String>,
         #[arg(long, default_value = "edit")]
         operation_class: String,
+    },
+    /// Manage the separate pre-edit confirmation gate.
+    Protect {
+        #[command(subcommand)]
+        action: protection::Action,
+    },
+    /// Claude Code pre-tool hook; errors are returned as a blocking decision.
+    ProtectHook {
+        #[arg(long)]
+        client: String,
+        #[arg(long)]
+        version: String,
     },
     ResetCapture {
         #[arg(long)]
@@ -384,6 +397,18 @@ async fn run(cli: Cli) -> Result<Value, String> {
             files,
             operation_class,
         } => team::change_context(&state, &files, &operation_class).await,
+        Command::Protect { action } => match action {
+            protection::Action::Enroll { settings_file, yes } => {
+                protection::enroll(&state, &settings_file, yes)
+            }
+            protection::Action::Status => Ok(protection::status(&state)),
+            protection::Action::Disable { settings_file } => {
+                protection::disable(&state, &settings_file)
+            }
+        },
+        Command::ProtectHook { client, version } => {
+            Ok(protection::run_hook(&state, &client, &version).await)
+        }
         Command::ResetCapture { yes } => {
             if !yes {
                 return Err("--yes closes all pending capture sessions and discards their private drafts; start a genuinely new client session afterward".into());
@@ -420,7 +445,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 .await
                 .unwrap_or(json!({"available":false}));
             Ok(
-                json!({"native_clients":native_capture::status(&state).unwrap_or(json!({"unavailable":true})),"native_cursor":cursor_capture::status(&state).unwrap_or(json!({"unavailable":true})),"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
+                json!({"native_clients":native_capture::status(&state).unwrap_or(json!({"unavailable":true})),"native_cursor":cursor_capture::status(&state).unwrap_or(json!({"unavailable":true})),"code_change_protection":protection::status(&state),"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
             )
         }
         Command::Config { client } => wk_adapters::config(

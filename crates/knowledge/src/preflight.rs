@@ -143,6 +143,12 @@ impl Knowledge {
             return Err(Error::Conflict);
         }
         let mut selected = Self::preflight_selection(&mut tx, a, p, &r, &state).await?;
+        if matches!(
+            selected.brief.decision,
+            Decision::Denied | Decision::Unavailable
+        ) {
+            return Err(Error::Denied);
+        }
         let repo = Self::code_repository(&mut tx, a, p, r.repository_id).await?;
         let brief_id = uuid::Uuid::new_v4();
         let expires: i64 = sqlx::query_scalar(
@@ -207,6 +213,12 @@ impl Knowledge {
         p: &str,
         stored: &Stored,
     ) -> Result<(), Error> {
+        if matches!(
+            stored.brief.decision,
+            Decision::Denied | Decision::Unavailable
+        ) {
+            return Err(Error::Denied);
+        }
         let state = Self::preflight_identity(tx, a, p, &stored.identity).await?;
         if state.policy_revision != stored.policy_revision {
             return Err(Error::Conflict);
