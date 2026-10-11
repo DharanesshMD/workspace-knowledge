@@ -3,6 +3,7 @@ pub mod admin_cli;
 pub mod auth;
 pub mod browser_auth;
 mod browser_routes;
+mod change_routes;
 pub mod decisions;
 pub mod device_routes;
 pub mod environments;
@@ -495,6 +496,7 @@ pub fn portal_router_with_collector(
         .merge(browser_routes::routes())
         .merge(personal_routes::routes())
         .merge(team_routes::routes())
+        .merge(change_routes::routes())
         .merge(device_routes::routes())
         .route(
             "/health",

@@ -174,6 +174,9 @@ pub async fn send_with_key(
         "activity-clear",
         "overlaps",
         "report",
+        "change-context",
+        "preflight-consume",
+        "repository-enroll",
     ]
     .contains(&operation)
     {

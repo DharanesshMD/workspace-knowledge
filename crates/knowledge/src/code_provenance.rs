@@ -277,3 +277,81 @@ impl Knowledge {
         Ok(result)
     }
 }
+
+impl Knowledge {
+    /// Owner/reviewer work queue, not a directory or shared intent feed.
+    pub async fn code_attribution(&self, a: &Actor, p: &str) -> Result<Value, Error> {
+        if !wk_contracts::valid_id(p) {
+            return Err(Error::Invalid);
+        }
+        let mut tx = self.code_tx(a, p).await?;
+        let profile:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(cp)-'org'-'product' FROM code_profiles cp WHERE cp.org=$1 AND cp.product=$2 AND cp.user_id=$3")
+            .bind(&a.org).bind(p).bind(&a.user).fetch_optional(&mut *tx).await.map_err(db)?;
+        let can_review:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3 AND can_review)")
+            .bind(&a.org).bind(p).bind(&a.user).fetch_one(&mut *tx).await.map_err(db)?;
+        let repositories:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(r)-'org'-'product' FROM code_repositories r JOIN memberships m ON m.org=r.org AND m.product=r.product AND m.user_id=$3 WHERE r.org=$1 AND r.product=$2 AND NOT r.revoked AND m.services @> r.services ORDER BY r.id LIMIT 21")
+            .bind(&a.org).bind(p).bind(&a.user).fetch_all(&mut *tx).await.map_err(db)?;
+        // Identity references are candidates, not contributor names. Proof text stays operator-only.
+        let mappings:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',cm.id,'repository_id',cm.repository_id,'user_id',cm.user_id,'revision',cm.revision,'assurance',cm.assurance) FROM code_mappings cm JOIN code_repositories r ON r.org=cm.org AND r.product=cm.product AND r.id=cm.repository_id JOIN memberships m ON m.org=cm.org AND m.product=cm.product AND m.user_id=$3 WHERE cm.org=$1 AND cm.product=$2 AND NOT cm.revoked AND NOT r.revoked AND m.services @> cm.services AND m.services @> r.services ORDER BY cm.id LIMIT 21")
+            .bind(&a.org).bind(p).bind(&a.user).fetch_all(&mut *tx).await.map_err(db)?;
+        let contributions:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(co)-'org'-'product' FROM code_contributions co JOIN code_repositories r ON r.org=co.org AND r.product=co.product AND r.id=co.repository_id JOIN memberships m ON m.org=co.org AND m.product=co.product AND m.user_id=$3 WHERE co.org=$1 AND co.product=$2 AND NOT co.revoked AND NOT r.revoked AND m.services @> co.services AND m.services @> r.services AND (co.owner=$3 OR m.can_review) ORDER BY co.id LIMIT 21")
+            .bind(&a.org).bind(p).bind(&a.user).fetch_all(&mut *tx).await.map_err(db)?;
+        let rows=sqlx::query("SELECT to_jsonb(an)-'org'-'product' AS anchor,c.id,c.revision,c.published,c.author,c.body->>'title' AS title,c.body->>'rationale' AS rationale FROM code_rationale_anchors an JOIN code_repositories r ON r.org=an.org AND r.product=an.product AND r.id=an.repository_id JOIN cards c ON c.org=an.org AND c.product=an.product AND c.id=an.card_id JOIN memberships m ON m.org=an.org AND m.product=an.product AND m.user_id=$3 WHERE an.org=$1 AND an.product=$2 AND NOT an.revoked AND NOT r.revoked AND NOT c.withdrawn AND m.services @> an.services AND m.services @> c.services AND m.services @> r.services AND (an.owner=$3 OR m.can_review) ORDER BY an.id LIMIT 21")
+            .bind(&a.org).bind(p).bind(&a.user).fetch_all(&mut *tx).await.map_err(db)?;
+        let mut anchors = Vec::new();
+        for row in rows {
+            let rationale: String = row.try_get("rationale").map_err(db)?;
+            anchors.push(serde_json::json!({"anchor":row.try_get::<Value,_>("anchor").map_err(db)?,"card":{"id":row.try_get::<uuid::Uuid,_>("id").map_err(db)?,"revision":row.try_get::<i64,_>("revision").map_err(db)?,"published":row.try_get::<bool,_>("published").map_err(db)?,"author":row.try_get::<String,_>("author").map_err(db)?,"title":row.try_get::<String,_>("title").map_err(db)?,"rationale":rationale.chars().take(2000).collect::<String>(),"truncated":rationale.chars().count()>2000}}));
+        }
+        let mut out = serde_json::json!({"profile":profile,"can_review":can_review,"repositories":repositories,"mappings":mappings,"contributions":contributions,"anchors":anchors,"truncated":false});
+        for key in ["repositories", "mappings", "contributions", "anchors"] {
+            let list = out[key].as_array_mut().ok_or(Error::Storage)?;
+            if list.len() > 20 {
+                list.truncate(20);
+                out["truncated"] = true.into();
+            }
+        }
+        while serde_json::to_vec(&out).map_err(|_| Error::Storage)?.len() > 16384 {
+            out["truncated"] = true.into();
+            let mut removed = false;
+            for key in ["anchors", "contributions", "mappings", "repositories"] {
+                if out[key]
+                    .as_array_mut()
+                    .ok_or(Error::Storage)?
+                    .pop()
+                    .is_some()
+                {
+                    removed = true;
+                    break;
+                }
+            }
+            if !removed {
+                return Err(Error::Storage);
+            }
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(out)
+    }
+}
+
+impl Knowledge {
+    pub async fn registered_repository(
+        &self,
+        a: &Actor,
+        p: &str,
+        id: uuid::Uuid,
+    ) -> Result<RepositoryRecord, Error> {
+        if !wk_contracts::valid_id(p) {
+            return Err(Error::Invalid);
+        }
+        let mut tx = self.code_tx(a, p).await?;
+        let record = Self::code_repository(&mut tx, a, p, id).await?;
+        if self.device_guard.as_ref().is_some_and(|g| {
+            g.product != p || record.services.iter().any(|s| !g.services.contains(s))
+        }) {
+            return Err(Error::Denied);
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(record)
+    }
+}

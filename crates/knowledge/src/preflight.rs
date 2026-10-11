@@ -157,7 +157,7 @@ impl Knowledge {
         while serde_json::to_vec(&selected.brief)
             .map_err(|_| Error::Storage)?
             .len()
-            > r.budget_bytes as usize
+            > (r.budget_bytes as usize).saturating_sub(128)
         {
             selected.brief.truncated = true;
             if !selected.brief.gaps.contains(&"context_truncated".into()) {

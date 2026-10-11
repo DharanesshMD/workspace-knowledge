@@ -68,7 +68,10 @@ impl CollectorAuth {
 pub(crate) fn routes() -> Router<Api> {
     Router::new()
         .route("/collector/config", get(config))
-        .route("/collector/{operation}", post(collect))
+        .route(
+            "/collector/{operation}",
+            post(collect).layer(axum::middleware::from_fn(crate::change_routes::deadline)),
+        )
         .route("/v1/products/{product}/devices", get(list))
         .route(
             "/v1/products/{product}/devices/{id}/settings",
@@ -118,6 +121,17 @@ struct Envelope {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Empty {}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Consume {
+    brief_id: uuid::Uuid,
+    operation_handle: uuid::Uuid,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepositoryRegistration {
+    repository_id: uuid::Uuid,
+}
 async fn collect(
     State(api): State<Api>,
     Path(operation): Path<String>,
@@ -260,11 +274,51 @@ async fn collect(
         "cards" => DevicePermission::SharedUpload,
         "personal" => DevicePermission::OwnerUpload,
         "activity" => DevicePermission::ActivityUpload,
-        "policy" | "report" | "overlaps" | "activity-clear" => DevicePermission::Read,
+        "policy" | "report" | "overlaps" | "activity-clear" | "change-context"
+        | "preflight-consume" | "repository-enroll" => DevicePermission::Read,
         _ => return Err(Failure(StatusCode::NOT_FOUND, "not_found")),
     };
     let k = api.knowledge.device_bound(&d, permission);
     let value = match operation.as_str() {
+        "repository-enroll" => {
+            let r: RepositoryRegistration =
+                serde_json::from_value(e.request).map_err(|_| invalid())?;
+            let repo = k
+                .registered_repository(&who, &e.product, r.repository_id)
+                .await?;
+            let policy = k.policy(&who, &e.product).await?;
+            let binding = k
+                .bind_workspace(
+                    &who,
+                    &e.product,
+                    &d.id.to_string(),
+                    &d.approval_hash,
+                    &d.services,
+                    policy.policy_revision,
+                )
+                .await?;
+            json!({"repository_id":repo.id,"repository_revision":repo.revision,"binding_id":binding})
+        }
+        "change-context" => {
+            let r: wk_contracts::change_context::ChangeContextRequest =
+                serde_json::from_value(e.request).map_err(|_| invalid())?;
+            r.validate().map_err(|_| invalid())?;
+            if r.operation_handle.is_some() {
+                let identity = k.protected_identity(&who, &e.product, d.id).await?;
+                serde_json::to_value(k.create_preflight(&who, &e.product, identity, r).await?)
+                    .map_err(|_| invalid())?
+            } else {
+                serde_json::to_value(k.change_context(&who, &e.product, r).await?)
+                    .map_err(|_| invalid())?
+            }
+        }
+        "preflight-consume" => {
+            let r: Consume = serde_json::from_value(e.request).map_err(|_| invalid())?;
+            let identity = k.protected_identity(&who, &e.product, d.id).await?;
+            k.consume_preflight(&who, &e.product, identity, r.brief_id, r.operation_handle)
+                .await?;
+            json!({"consumed":true})
+        }
         "policy" => {
             let _: Empty = serde_json::from_value(e.request).map_err(|_| invalid())?;
             json!({"policy":k.policy(&who,&e.product).await?,"device":d})
@@ -315,6 +369,13 @@ async fn collect(
         }
         _ => unreachable!(),
     };
+    if matches!(
+        operation.as_str(),
+        "change-context" | "preflight-consume" | "repository-enroll"
+    ) && serde_json::to_vec(&value).map_err(|_| invalid())?.len() > 16384
+    {
+        return Err(Failure(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    }
     Ok(Json(value))
 }
 #[derive(Deserialize)]

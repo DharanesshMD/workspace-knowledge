@@ -6,9 +6,11 @@ import {Session,type Membership} from './Session';
 import {MyContext} from './MyContext';
 import {TeamContext} from './TeamContext';
 import {Devices} from './Devices';
+import {CodeContext} from './CodeContext';
+import {CodeAttribution} from './CodeAttribution';
 import type {Card, Status, Profile, Edge} from './types';
 
-type View = 'Devices'|'My context'|'Team context'|'Knowledge'|'Review queue'|'Relationships'|'Workspace'|'Environments';
+type View = 'Devices'|'My context'|'Team context'|'Code attribution'|'Knowledge'|'Review queue'|'Relationships'|'Workspace'|'Environments';
 const views:View[] = ['Knowledge','Review queue','Relationships','Workspace','Environments'];
 const readable = (value:string) => value.replaceAll('_',' ');
 
@@ -26,8 +28,11 @@ function DevelopmentApp() {
 }
 function HostedWorkbench({user,product,onLogout,policy}:{user:string;product:string;onLogout:()=>void;policy:Membership}) {
  const [view,setView]=useState<View>('My context');
- const hostedViews:View[]=['My context','Team context','Devices',...views.filter(v=>v!=='Review queue'||policy.can_review)];
- return <><a className="skip" href="#main">Skip to content</a><div className="shell"><aside className="sidebar"><a className="brand" href="#main"><span className="mark" aria-hidden="true">W</span><span>Workspace Knowledge</span></a><p className="sidebar-copy">Shared decisions.<br/>Private conversations.</p><nav aria-label="Main navigation">{hostedViews.map(item=><button key={item} aria-current={view===item?'page':undefined} onClick={()=>setView(item)}>{item}</button>)}</nav><div className="connection-note"><span>Signed in as</span><strong>{user}</strong><span>Product</span><strong>{product}</strong><button onClick={onLogout}>Sign out</button></div></aside><main id="main" tabIndex={-1}><header className="page-header"><div><p className="context">Developer workbench</p><h1>{view}</h1></div><span className="privacy-label">{view==='Devices'?'Private device reports':view==='My context'?'Owner-only':'Summaries only'}</span></header>{view==='My context'?<MyContext key={product} product={product} policy={policy}/>:view==='Team context'?<TeamContext key={product} product={product} policy={policy}/>:view==='Devices'?<Devices key={product} product={product}/>:<Workspace key={product+view} view={view} product={product} token=""/>}</main></div></>;
+ const hostedViews:View[]=['My context','Team context','Code attribution','Devices',...views.filter(v=>v!=='Review queue'||policy.can_review)];
+ const briefId=new URLSearchParams(window.location.search).get('brief');
+ const currentView=briefId?'Change review':view;
+ const navigate=(item:View)=>{if(briefId){const url=new URL(window.location.href);url.searchParams.delete('brief');window.history.replaceState(null,'',url.pathname+url.search+url.hash);}setView(item);};
+ return <><a className="skip" href="#main">Skip to content</a><div className="shell"><aside className="sidebar"><a className="brand" href="#main"><span className="mark" aria-hidden="true">W</span><span>Workspace Knowledge</span></a><p className="sidebar-copy">Shared decisions.<br/>Private conversations.</p><nav aria-label="Main navigation">{hostedViews.map(item=><button key={item} aria-current={view===item?'page':undefined} onClick={()=>navigate(item)}>{item}</button>)}</nav><div className="connection-note"><span>Signed in as</span><strong>{user}</strong><span>Product</span><strong>{product}</strong><button onClick={onLogout}>Sign out</button></div></aside><main id="main" tabIndex={-1}><header className="page-header"><div><p className="context">Developer workbench</p><h1>{currentView}</h1></div><span className="privacy-label">{briefId?'One operation only':view==='Devices'?'Private device reports':view==='My context'?'Owner-only':'Summaries only'}</span></header>{briefId?<CodeContext key={`${product}-${briefId}`} product={product} briefId={briefId}/>:view==='My context'?<MyContext key={product} product={product} policy={policy}/>:view==='Team context'?<TeamContext key={product} product={product} policy={policy}/>:view==='Code attribution'?<CodeAttribution key={product} product={product} policy={policy} user={user}/>:view==='Devices'?<Devices key={product} product={product}/>:<Workspace key={product+view} view={view} product={product} token=""/>}</main></div></>;
 }
 function Workspace({token,product,view}:{token:string;product:string;view:View}) {
   const [query,setQuery]=useState(''); const [cards,setCards]=useState<Card[]>([]); const [selected,setSelected]=useState<Card|null>(null);

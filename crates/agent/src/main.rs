@@ -99,6 +99,22 @@ enum Command {
         /// pause | resume | status
         action: String,
     },
+    /// Bind an operator-approved server repository ID to this approved workspace.
+    RepositoryEnroll {
+        #[arg(long)]
+        repository_id: String,
+        #[arg(long)]
+        git_dir: Option<PathBuf>,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Show source-backed contributor and rationale context for repository files.
+    Context {
+        #[arg(long = "file", required = true)]
+        files: Vec<String>,
+        #[arg(long, default_value = "edit")]
+        operation_class: String,
+    },
     ResetCapture {
         #[arg(long)]
         yes: bool,
@@ -359,6 +375,15 @@ async fn run(cli: Cli) -> Result<Value, String> {
             Ok(json!({"credential_updated":true}))
         }
         Command::Activity { action } => team::activity(&state, &action).await,
+        Command::RepositoryEnroll {
+            repository_id,
+            git_dir,
+            yes,
+        } => team::enroll_repository(&state, &repository_id, git_dir.as_deref(), yes).await,
+        Command::Context {
+            files,
+            operation_class,
+        } => team::change_context(&state, &files, &operation_class).await,
         Command::ResetCapture { yes } => {
             if !yes {
                 return Err("--yes closes all pending capture sessions and discards their private drafts; start a genuinely new client session afterward".into());
@@ -484,3 +509,31 @@ mod antigravity_source;
 mod native_capture;
 
 mod native_process;
+
+#[cfg(test)]
+mod cli_tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn context_command_requires_explicit_files_and_parses_operation_class() {
+        let cli = Cli::try_parse_from([
+            "wk-agent",
+            "--state-dir",
+            "/private/wk",
+            "context",
+            "--file",
+            "backend/retry.rs",
+            "--operation-class",
+            "multi_edit",
+        ])
+        .unwrap();
+        assert!(
+            matches!(cli.command, Command::Context { files, operation_class }
+            if files == ["backend/retry.rs"] && operation_class == "multi_edit")
+        );
+        assert!(
+            Cli::try_parse_from(["wk-agent", "--state-dir", "/private/wk", "context"]).is_err()
+        );
+    }
+}
