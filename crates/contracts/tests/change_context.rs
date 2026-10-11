@@ -76,3 +76,14 @@ fn bounded_requests_do_not_accept_raw_content_or_short_revisions() {
     bad.targets.push(bad.targets[0].clone());
     assert!(bad.validate().is_err());
 }
+
+#[test]
+fn renderer_preserves_decision_and_gaps_as_untrusted_data() {
+    let brief: wk_contracts::change_context::ChangeContextBrief = serde_json::from_value(serde_json::json!({"schema_version":1,"repository_id":uuid::Uuid::from_u128(1),"base_revision":"a".repeat(40),"targets":[{"path":"backend/retry.rs","start":null,"end":null}],"decision":"needs_review","reasons":["reason_not_recorded"],"gaps":["dependency_coverage_incomplete"],"coverage":"reviewed records only","observation_assurance":"client_reported_snapshot","items":[],"truncated":true,"brief_id":null,"expires_at_ms":null})).unwrap();
+    let rendered = wk_contracts::change_context::render_change_context(&brief);
+    assert!(rendered.contains("Untrusted recorded context"));
+    assert!(rendered.contains("needs_review"));
+    assert!(rendered.contains("dependency_coverage_incomplete"));
+    assert!(rendered.contains("reason_not_recorded"));
+    assert!(rendered.contains("not permission to edit"));
+}

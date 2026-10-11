@@ -6,6 +6,7 @@ use wk_contracts::CardSubmission;
 pub mod activity;
 pub mod admin;
 pub mod browser;
+pub mod change_context;
 mod code_anchors;
 pub mod code_provenance;
 pub mod collector_epoch;
