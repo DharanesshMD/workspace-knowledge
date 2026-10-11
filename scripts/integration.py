@@ -79,7 +79,7 @@ async def main():
         await rpc({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-03-26', 'capabilities': {}, 'clientInfo': {'name': 'wk-synthetic-test', 'version': '0.1'}}})
         await rpc({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         listing = await rpc({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})
-        assert {'knowledge.search', 'knowledge.get', 'knowledge.context', 'knowledge.record', 'knowledge.feedback', 'workspace.status', 'environment.describe', 'knowledge.assess', 'knowledge.overlaps'} == {t['name'] for t in listing['tools']}
+        assert {'knowledge.search', 'knowledge.get', 'knowledge.context', 'knowledge.change_context', 'knowledge.record', 'knowledge.feedback', 'workspace.status', 'environment.describe', 'knowledge.assess', 'knowledge.overlaps'} == {t['name'] for t in listing['tools']}
         result = await rpc({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'knowledge.search', 'arguments': {'query': marker, 'limit': 5}}})
         assert not result.get('isError', False)
         assert card['id'] in json.dumps(result)

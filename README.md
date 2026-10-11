@@ -17,6 +17,7 @@ Git shares the code. Workspace Knowledge helps explain why it changed, what was 
 - **Coding-agent retrieval:** scoped search, context, overlap notices and other knowledge tools through MCP.
 - **Device controls:** connection reports, requested permissions, pause and revocation, with pending and stale states shown explicitly.
 - **Review and provenance:** revision history, withdrawal, reviewed relationships and separately verified evidence. A proposed decision does not become an implemented fact.
+- **Code-change context:** source-backed contributor names and rationale before a teammate or coding agent edits enrolled code; an optional, version-pinned Claude Code hook can require browser confirmation for covered file edits.
 - **On-premises operations:** PostgreSQL storage, scoped administration, retention controls and encrypted backup/restore tooling. Environment secrets use a separately authorized OpenBao broker.
 
 <img src="docs/reviews/team-context/live-desktop.png" alt="Hosted Team context showing a published synthetic summary, service and file filters, and revision details" width="760" />
@@ -70,6 +71,8 @@ The hosted portal uses the team's configured OIDC sign-in. Each developer approv
 5. **Retrieve relevant context.** Teammates use the portal, CLI or MCP to find authorized shared summaries and inspect their status and evidence.
 
 Raw conversation messages are not uploaded to the knowledge service or exposed through the portal, shared search or MCP. Missing consent, membership or secure local storage blocks the relevant collector work. Publication is reviewed; automatic policy publication remains disabled. Summary screening has limits, so [privacy boundaries and retention](docs/architecture/private-capture-journal.md) are part of setup, not a claim of perfect redaction.
+
+Code-change context is a separate provenance feature: contributor identity requires confirmation, rationale links require review, and ordinary CLI/API/MCP retrieval is advisory. The optional Claude Code protection hook covers only enrolled `Edit`, `Write` and `MultiEdit` calls on supported versions; it is labeled unverified until host acceptance. See [code-change context setup, trust boundaries and limits](docs/architecture/code-change-context.md) and [acceptance evidence](docs/reviews/2026-10-11-code-change-context-acceptance.md).
 
 ## Client coverage
 

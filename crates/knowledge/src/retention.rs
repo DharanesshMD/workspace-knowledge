@@ -4,6 +4,7 @@ use super::*;
 pub struct RetentionCounts {
     pub busy: bool,
     pub personal: u64,
+    pub preflights: u64,
     pub reports: u64,
     pub activity: u64,
     pub sessions: u64,
@@ -39,6 +40,7 @@ impl Knowledge {
         }
         let mut result = RetentionCounts::default();
         result.personal=sqlx::query("WITH expired AS (SELECT id FROM personal_summaries WHERE NOT deleted AND expires_at<=now() ORDER BY expires_at,id LIMIT $1 FOR UPDATE SKIP LOCKED) UPDATE personal_summaries s SET body=NULL,deleted=true,revision=revision+1 FROM expired e WHERE s.id=e.id").bind(i64::from(limit)).execute(&mut *tx).await.map_err(db)?.rows_affected();
+        result.preflights=sqlx::query("WITH expired AS (SELECT id FROM code_preflights WHERE cleanup_at<=now() ORDER BY cleanup_at,id LIMIT $1 FOR UPDATE SKIP LOCKED) DELETE FROM code_preflights p USING expired e WHERE p.id=e.id").bind(i64::from(limit)).execute(&mut *tx).await.map_err(db)?.rows_affected();
         // Names/predicates are fixed code, not user-controlled SQL or identifiers.
         for (table, predicate, order, target) in [
             (

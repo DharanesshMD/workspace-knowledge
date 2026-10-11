@@ -155,6 +155,50 @@ async fn cleanup_is_bounded_clears_expired_text_and_preserves_unexpired_data() {
         .unwrap();
     assert_eq!(count, 2);
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn retention_removes_only_preflights_past_their_cleanup_deadline() {
+    let _guard = LOCK.lock().await;
+    let (k, a, pool) = setup().await;
+    let repository = uuid::Uuid::new_v4();
+    let device = uuid::Uuid::new_v4();
+    let binding = uuid::Uuid::new_v4();
+    sqlx::query("DELETE FROM code_preflights WHERE org=$1")
+        .bind(&a.org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO code_repositories(org,product,id,services) VALUES($1,'demo',$2,ARRAY['backend'])").bind(&a.org).bind(repository).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO registered_devices(id,org,product,owner,public_key,approval_hash,services) VALUES($1,$2,'demo',$3,$4,$5,ARRAY['backend'])").bind(device).bind(&a.org).bind(&a.user).bind("11".repeat(32)).bind("22".repeat(32)).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO workspace_bindings(id,org,product,user_id,device_id,approval_hash,services,policy_revision) VALUES($1,$2,'demo',$3,$4,$5,ARRAY['backend'],1)").bind(binding).bind(&a.org).bind(&a.user).bind(device.to_string()).bind("22".repeat(32)).execute(&pool).await.unwrap();
+    let expired_id = uuid::Uuid::new_v4();
+    let live_id = uuid::Uuid::new_v4();
+    for (id, handle, cleanup_offset) in [
+        (expired_id, uuid::Uuid::new_v4(), -1i64),
+        (live_id, uuid::Uuid::new_v4(), 43_200i64),
+    ] {
+        sqlx::query("INSERT INTO code_preflights(id,org,product,owner,device_id,binding_id,security_epoch,services,policy_revision,repository_id,repository_revision,operation_handle,request,source_versions,brief,expires_at,cleanup_at) VALUES($1,$2,'demo',$3,$4,$5,1,ARRAY['backend'],1,$6,1,$7,'{}','{}','{}',now()+interval '5 minutes',now()+($8 * interval '1 second'))").bind(id).bind(&a.org).bind(&a.user).bind(device).bind(binding).bind(repository).bind(handle).bind(cleanup_offset as f64).execute(&pool).await.unwrap();
+    }
+    let result = k.retention_batch(1000).await.unwrap();
+    assert!(result.preflights >= 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM code_preflights WHERE id=$1")
+            .bind(expired_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM code_preflights WHERE id=$1")
+            .bind(live_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+}
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
 async fn runtime_cannot_clean_or_replay_or_read_deletion_journal() {

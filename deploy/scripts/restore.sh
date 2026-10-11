@@ -28,6 +28,7 @@ DO $$ BEGIN
 END $$;
 UPDATE public.workspace_bindings SET revoked=true;
 UPDATE public.registered_devices SET revoked_at=COALESCE(revoked_at,now()),revision=revision+CASE WHEN revoked_at IS NULL THEN 1 ELSE 0 END;
+DELETE FROM public.code_preflights;
 DELETE FROM public.browser_sessions;
 DELETE FROM public.product_admins;
 DELETE FROM public.memberships;
