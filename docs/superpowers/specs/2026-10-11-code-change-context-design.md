@@ -1,7 +1,7 @@
 # Code change context: who, why, and what may be affected
 
 Date: 2026-10-11
-Status: proposed design for user review; not implemented or certified.
+Status: approved by the user on 2026-10-11; not implemented or certified.
 
 ## Purpose and agreed behavior
 
