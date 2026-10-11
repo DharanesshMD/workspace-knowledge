@@ -16,7 +16,7 @@ Git brings the code into your checkout. Workspace Knowledge brings the recorded 
 
 > **Pre-release:** local acceptance covers the hosted portal and bounded workflows. Capture is client- and version-specific, and the optional edit-protection hook still needs supported-host live acceptance. Production identity, native packaging and security gates remain open. Read the [limitations](#limitations-and-release-status) before choosing a deployment.
 
-<img src="https://raw.githubusercontent.com/DharanesshMD/workspace-knowledge/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/reviews/team-context/live-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
+<img src="docs/assets/team-context-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
 
 *The hosted Team context page with synthetic data from local acceptance testing.*
 
