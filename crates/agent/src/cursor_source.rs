@@ -269,6 +269,8 @@ mod tests {
             account: "test".into(),
             device_id: "test".into(),
 
+            repository: None,
+
             device: None,
         };
         let consent = CursorConsent {

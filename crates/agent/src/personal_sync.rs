@@ -223,6 +223,8 @@ mod tests {
             account: "test".into(),
             device_id: "test-device".into(),
 
+            repository: None,
+
             device: None,
         };
         state::save(&c.binding_file, &binding).unwrap();

@@ -19,6 +19,8 @@ pub struct Config {
     pub device_id: String,
     #[serde(default)]
     pub device: Option<crate::device::Connection>,
+    #[serde(default)]
+    pub repository: Option<crate::repository::RepositoryEnrollment>,
 }
 pub fn private_dir(path: &Path, create: bool) -> Result<PathBuf, String> {
     if !path.is_absolute()

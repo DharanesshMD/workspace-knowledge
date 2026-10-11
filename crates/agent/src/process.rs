@@ -606,6 +606,7 @@ mod pause_regression {
             port: 4319,
             account: "workspace".into(),
             device_id: uuid::Uuid::new_v4().to_string(),
+            repository: None,
             device: Some(crate::device::Connection {
                 state_dir: dir.clone(),
             }),

@@ -468,6 +468,7 @@ pub async fn connect(dir: &std::path::Path, args: ConnectArgs) -> Result<Value, 
         port: args.port,
         account: "workspace".into(),
         device_id: uuid::Uuid::new_v4().to_string(),
+        repository: None,
         device: Some(Connection {
             state_dir: dir.to_path_buf(),
         }),
@@ -583,6 +584,7 @@ mod tests {
             port: 4319,
             account: "workspace".into(),
             device_id: uuid::Uuid::new_v4().to_string(),
+            repository: None,
             device: Some(Connection {
                 state_dir: local.clone(),
             }),

@@ -8,6 +8,8 @@ mod native_login;
 mod network;
 mod personal_sync;
 mod process;
+#[allow(dead_code)] // Integrated by the following transport task.
+mod repository;
 mod state;
 mod team;
 use clap::{Parser, Subcommand};
@@ -226,6 +228,8 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 port,
                 account: "workspace".into(),
                 device_id: uuid::Uuid::new_v4().to_string(),
+
+                repository: None,
 
                 device: None,
             };

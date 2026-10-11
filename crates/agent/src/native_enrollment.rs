@@ -266,6 +266,8 @@ mod tests {
             account: "test".into(),
             device_id: "d".into(),
 
+            repository: None,
+
             device: None,
         };
         std::fs::create_dir(root.join("app")).unwrap();
