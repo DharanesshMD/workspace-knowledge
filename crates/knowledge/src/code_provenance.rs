@@ -156,7 +156,7 @@ impl Knowledge {
         {
             return Err(Error::Invalid);
         }
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, p).await?;
         Self::lock_administration(&mut tx, a, p).await?;
         Self::code_operator(&mut tx, a, p, &input.services).await?;
         let old:Option<Vec<String>>=sqlx::query_scalar("SELECT services FROM code_repositories WHERE org=$1 AND product=$2 AND id=$3 FOR UPDATE")
@@ -188,7 +188,15 @@ impl Knowledge {
         {
             return Err(Error::Invalid);
         }
-        let mut tx = self.actor_tx(a).await?;
+        if input.display_name.is_none() && input.base_revision.is_some() {
+            let mut tx = self.code_tx(a, p).await?;
+            let v:Option<Value>=sqlx::query_scalar("UPDATE code_profiles SET display_name=NULL,contact_url=NULL,revoked=true,revision=revision+1 WHERE org=$1 AND product=$2 AND user_id=$3 AND revision=$4 RETURNING to_jsonb(code_profiles)-'org'-'product'")
+                .bind(&a.org).bind(p).bind(&a.user).bind(input.base_revision).fetch_optional(&mut *tx).await.map_err(write_failure)?;
+            let result = decode_value(v.ok_or(Error::Conflict)?)?;
+            tx.commit().await.map_err(db)?;
+            return Ok(result);
+        }
+        let mut tx = self.code_tx(a, p).await?;
         Self::lock_administration(&mut tx, a, p).await?;
         Self::code_member(&mut tx, a, p, &input.services).await?;
         if let Some(ref contact) = input.contact_url {
@@ -243,7 +251,7 @@ impl Knowledge {
         {
             return Err(Error::Invalid);
         }
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, p).await?;
         Self::lock_administration(&mut tx, a, p).await?;
         Self::code_operator(&mut tx, a, p, &input.services).await?;
         let member = Actor {

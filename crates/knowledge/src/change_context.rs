@@ -8,7 +8,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use wk_contracts::change_context::*;
 pub(crate) struct Selection {
     pub brief: ChangeContextBrief,
-    #[allow(dead_code)] // Consumed by the following preflight task.
     pub versions: BTreeMap<String, serde_json::Value>,
 }
 fn overlaps(a: &CodeTarget, b: &CodeTarget) -> bool {
@@ -56,8 +55,15 @@ impl Knowledge {
         p: &str,
         r: ChangeContextRequest,
     ) -> Result<ChangeContextBrief, Error> {
-        let mut tx = self.actor_tx(a).await?;
-        let result = Self::select_context(&mut tx, a, p, &r).await?;
+        let mut tx = self.code_tx(a, p).await?;
+        let result = Self::select_context(
+            &mut tx,
+            a,
+            p,
+            &r,
+            self.device_guard.as_ref().map(|g| g.services.as_slice()),
+        )
+        .await?;
         tx.commit().await.map_err(db)?;
         Ok(result.brief)
     }
@@ -66,12 +72,16 @@ impl Knowledge {
         a: &Actor,
         p: &str,
         r: &ChangeContextRequest,
+        ceiling: Option<&[String]>,
     ) -> Result<Selection, Error> {
         r.validate().map_err(|_| Error::Invalid)?;
         if !wk_contracts::valid_id(p) {
             return Err(Error::Invalid);
         }
         let repo = Self::code_repository(tx, a, p, r.repository_id).await?;
+        if ceiling.is_some_and(|services| !repo.services.iter().all(|s| services.contains(s))) {
+            return Err(Error::Denied);
+        }
         let now: i64 =
             sqlx::query_scalar("SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint")
                 .fetch_one(&mut **tx)
@@ -118,8 +128,8 @@ impl Knowledge {
         );
         let paths: Vec<String> = r.targets.iter().map(|t| t.path.clone()).collect();
         // All scope checks are explicit as well as RLS: owner test connections must not bypass filtering.
-        let contributions=sqlx::query("SELECT to_jsonb(c)-'org'-'product' AS record,cm.revision AS map_revision FROM code_contributions c JOIN code_mappings cm ON cm.org=c.org AND cm.product=c.product AND cm.id=c.mapping_id AND cm.repository_id=c.repository_id AND cm.revision=c.mapping_revision AND cm.user_id=c.owner AND NOT cm.revoked JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$3 WHERE c.org=$1 AND c.product=$2 AND c.repository_id=$4 AND c.repository_revision=$5 AND NOT c.revoked AND c.confirmed_by=c.owner AND c.reviewed_by IS NOT NULL AND m.services @> c.services AND m.services @> cm.services AND EXISTS(SELECT 1 FROM jsonb_array_elements(c.targets) t WHERE t->>'path'=ANY($6)) ORDER BY (c.code_revision=$7) DESC,c.id LIMIT 21")
-            .bind(&a.org).bind(p).bind(&a.user).bind(repo.id).bind(repo.revision).bind(&paths).bind(&r.base_revision).fetch_all(&mut **tx).await.map_err(db)?;
+        let contributions=sqlx::query("SELECT to_jsonb(c)-'org'-'product' AS record,cm.revision AS map_revision FROM code_contributions c JOIN code_mappings cm ON cm.org=c.org AND cm.product=c.product AND cm.id=c.mapping_id AND cm.repository_id=c.repository_id AND cm.revision=c.mapping_revision AND cm.user_id=c.owner AND NOT cm.revoked JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$3 WHERE c.org=$1 AND c.product=$2 AND c.repository_id=$4 AND c.repository_revision=$5 AND NOT c.revoked AND c.confirmed_by=c.owner AND c.reviewed_by IS NOT NULL AND m.services @> c.services AND m.services @> cm.services AND EXISTS(SELECT 1 FROM jsonb_array_elements(c.targets) t WHERE t->>'path'=ANY($6)) AND ($8::text[] IS NULL OR ($8 @> c.services AND $8 @> cm.services)) ORDER BY (c.code_revision=$7) DESC,c.id LIMIT 21")
+            .bind(&a.org).bind(p).bind(&a.user).bind(repo.id).bind(repo.revision).bind(&paths).bind(&r.base_revision).bind(ceiling).fetch_all(&mut **tx).await.map_err(db)?;
         if contributions.len() > 20 {
             brief.truncated = true;
         }
@@ -151,7 +161,8 @@ impl Knowledge {
                     now,
                 ),
             ];
-            let profile = Self::context_profile(tx, a, p, &c.owner, &repo.contact_hosts).await?;
+            let profile =
+                Self::context_profile(tx, a, p, &c.owner, &repo.contact_hosts, ceiling).await?;
             if let Some(profile) = &profile {
                 sources.push(source(
                     "profile",
@@ -179,8 +190,8 @@ impl Knowledge {
                 sources,
             });
         }
-        let anchors=sqlx::query("SELECT to_jsonb(an)-'org'-'product' AS record,c.body FROM code_rationale_anchors an JOIN cards c ON c.org=an.org AND c.product=an.product AND c.id=an.card_id AND c.revision=an.card_revision AND c.author=an.owner JOIN memberships m ON m.org=an.org AND m.product=an.product AND m.user_id=$3 WHERE an.org=$1 AND an.product=$2 AND an.repository_id=$4 AND an.repository_revision=$5 AND NOT an.revoked AND an.confirmed_by=c.author AND an.reviewed_by IS NOT NULL AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND m.services @> an.services AND m.services @> c.services AND EXISTS(SELECT 1 FROM jsonb_array_elements(an.targets) t WHERE t->>'path'=ANY($6)) AND (an.contribution_id IS NULL OR EXISTS(SELECT 1 FROM code_contributions co JOIN code_mappings cm ON cm.org=co.org AND cm.product=co.product AND cm.id=co.mapping_id AND cm.revision=co.mapping_revision AND cm.user_id=co.owner AND NOT cm.revoked WHERE co.org=an.org AND co.product=an.product AND co.id=an.contribution_id AND co.revision=an.contribution_revision AND co.repository_revision=$5 AND co.repository_id=an.repository_id AND co.code_revision=an.code_revision AND co.confirmed_by=co.owner AND co.reviewed_by IS NOT NULL AND NOT co.revoked AND m.services @> co.services AND m.services @> cm.services)) ORDER BY (an.code_revision=$7) DESC,an.id LIMIT 21")
-            .bind(&a.org).bind(p).bind(&a.user).bind(repo.id).bind(repo.revision).bind(&paths).bind(&r.base_revision).fetch_all(&mut **tx).await.map_err(db)?;
+        let anchors=sqlx::query("SELECT to_jsonb(an)-'org'-'product' AS record,c.body FROM code_rationale_anchors an JOIN cards c ON c.org=an.org AND c.product=an.product AND c.id=an.card_id AND c.revision=an.card_revision AND c.author=an.owner JOIN memberships m ON m.org=an.org AND m.product=an.product AND m.user_id=$3 WHERE an.org=$1 AND an.product=$2 AND an.repository_id=$4 AND an.repository_revision=$5 AND NOT an.revoked AND an.confirmed_by=c.author AND an.reviewed_by IS NOT NULL AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND m.services @> an.services AND m.services @> c.services AND EXISTS(SELECT 1 FROM jsonb_array_elements(an.targets) t WHERE t->>'path'=ANY($6)) AND (an.contribution_id IS NULL OR EXISTS(SELECT 1 FROM code_contributions co JOIN code_mappings cm ON cm.org=co.org AND cm.product=co.product AND cm.id=co.mapping_id AND cm.revision=co.mapping_revision AND cm.user_id=co.owner AND NOT cm.revoked WHERE co.org=an.org AND co.product=an.product AND co.id=an.contribution_id AND co.revision=an.contribution_revision AND co.repository_revision=$5 AND co.repository_id=an.repository_id AND co.code_revision=an.code_revision AND co.confirmed_by=co.owner AND co.reviewed_by IS NOT NULL AND NOT co.revoked AND m.services @> co.services AND m.services @> cm.services AND ($8::text[] IS NULL OR ($8 @> co.services AND $8 @> cm.services)))) AND ($8::text[] IS NULL OR ($8 @> an.services AND $8 @> c.services)) ORDER BY (an.code_revision=$7) DESC,an.id LIMIT 21")
+            .bind(&a.org).bind(p).bind(&a.user).bind(repo.id).bind(repo.revision).bind(&paths).bind(&r.base_revision).bind(ceiling).fetch_all(&mut **tx).await.map_err(db)?;
         if anchors.len() > 20 {
             brief.truncated = true;
         }
@@ -210,7 +221,8 @@ impl Knowledge {
                 brief.gaps.push("target_scope_partial".into());
             }
             let profile =
-                Self::context_profile(tx, a, p, &anchor.owner, &repo.contact_hosts).await?;
+                Self::context_profile(tx, a, p, &anchor.owner, &repo.contact_hosts, ceiling)
+                    .await?;
             let mut sources = vec![
                 repo_source.clone(),
                 source(
@@ -261,8 +273,8 @@ impl Knowledge {
         if !has_reason {
             brief.reasons.push("reason_not_recorded".into());
         }
-        let maintainers=sqlx::query("SELECT cm.id,cm.user_id,cm.targets,cm.revision FROM code_maintainers cm JOIN memberships m ON m.org=cm.org AND m.product=cm.product AND m.user_id=$3 WHERE cm.org=$1 AND cm.product=$2 AND cm.repository_id=$4 AND NOT cm.revoked AND m.services @> cm.services AND EXISTS(SELECT 1 FROM jsonb_array_elements(cm.targets) t WHERE t->>'path'=ANY($5)) ORDER BY cm.id LIMIT 21")
-            .bind(&a.org).bind(p).bind(&a.user).bind(repo.id).bind(&paths).fetch_all(&mut **tx).await.map_err(db)?;
+        let maintainers=sqlx::query("SELECT cm.id,cm.user_id,cm.targets,cm.revision FROM code_maintainers cm JOIN memberships m ON m.org=cm.org AND m.product=cm.product AND m.user_id=$3 WHERE cm.org=$1 AND cm.product=$2 AND cm.repository_id=$4 AND NOT cm.revoked AND m.services @> cm.services AND EXISTS(SELECT 1 FROM jsonb_array_elements(cm.targets) t WHERE t->>'path'=ANY($5)) AND ($6::text[] IS NULL OR $6 @> cm.services) ORDER BY cm.id LIMIT 21")
+            .bind(&a.org).bind(p).bind(&a.user).bind(repo.id).bind(&paths).bind(ceiling).fetch_all(&mut **tx).await.map_err(db)?;
         if maintainers.len() > 20 {
             brief.truncated = true;
         }
@@ -272,7 +284,8 @@ impl Knowledge {
                 continue;
             }
             let user: String = row.try_get("user_id").map_err(db)?;
-            let profile = Self::context_profile(tx, a, p, &user, &repo.contact_hosts).await?;
+            let profile =
+                Self::context_profile(tx, a, p, &user, &repo.contact_hosts, ceiling).await?;
             let mut sources = vec![
                 repo_source.clone(),
                 source(
@@ -307,8 +320,8 @@ impl Knowledge {
             });
         }
         // One reviewed relationship hop. Both endpoints require current approved anchors in this repository.
-        let edges=sqlx::query("SELECT e.source,e.target,e.kind,sc.id AS source_card,sc.revision AS source_revision,tc.id AS target_card,tc.revision AS target_revision,sc.body->>'title' AS source_title,tc.body->>'title' AS target_title FROM graph_edges e JOIN graph_nodes sn ON sn.org=e.org AND sn.product=e.product AND sn.id=e.source AND sn.kind='feature' JOIN graph_nodes tn ON tn.org=e.org AND tn.product=e.product AND tn.id=e.target AND tn.kind='feature' JOIN cards sc ON sc.org=sn.org AND sc.product=sn.product AND sc.id=sn.card_id JOIN cards tc ON tc.org=tn.org AND tc.product=tn.product AND tc.id=tn.card_id JOIN memberships m ON m.org=e.org AND m.product=e.product AND m.user_id=$3 WHERE e.org=$1 AND e.product=$2 AND e.kind IN ('depends_on','contradicts') AND (sc.id=ANY($4) OR tc.id=ANY($4)) AND sc.published AND tc.published AND NOT sc.withdrawn AND NOT tc.withdrawn AND sc.body->>'lifecycle' NOT IN ('superseded','deprecated') AND tc.body->>'lifecycle' NOT IN ('superseded','deprecated') AND sn.provenance->>'card_revision'=sc.revision::text AND tn.provenance->>'card_revision'=tc.revision::text AND m.services @> sc.services AND m.services @> tc.services AND NOT EXISTS(SELECT 1 FROM (VALUES(sc.id,sc.revision),(tc.id,tc.revision)) endpoint(id,revision) WHERE NOT EXISTS(SELECT 1 FROM code_rationale_anchors an WHERE an.org=e.org AND an.product=e.product AND an.card_id=endpoint.id AND an.card_revision=endpoint.revision AND an.repository_id=$5 AND an.repository_revision=$6 AND an.code_revision=$7 AND an.confirmed_by=an.owner AND an.reviewed_by IS NOT NULL AND NOT an.revoked AND m.services @> an.services AND (an.contribution_id IS NULL OR EXISTS(SELECT 1 FROM code_contributions co JOIN code_mappings cm ON cm.org=co.org AND cm.product=co.product AND cm.id=co.mapping_id AND cm.revision=co.mapping_revision AND NOT cm.revoked AND cm.user_id=co.owner WHERE co.org=an.org AND co.product=an.product AND co.id=an.contribution_id AND co.revision=an.contribution_revision AND co.confirmed_by=co.owner AND co.reviewed_by IS NOT NULL AND NOT co.revoked AND m.services @> co.services AND m.services @> cm.services)))) ORDER BY e.source,e.target,e.kind LIMIT 21")
-            .bind(&a.org).bind(p).bind(&a.user).bind(&card_ids).bind(repo.id).bind(repo.revision).bind(&r.base_revision).fetch_all(&mut **tx).await.map_err(db)?;
+        let edges=sqlx::query("SELECT e.source,e.target,e.kind,sc.id AS source_card,sc.revision AS source_revision,tc.id AS target_card,tc.revision AS target_revision,sc.body->>'title' AS source_title,tc.body->>'title' AS target_title FROM graph_edges e JOIN graph_nodes sn ON sn.org=e.org AND sn.product=e.product AND sn.id=e.source AND sn.kind='feature' JOIN graph_nodes tn ON tn.org=e.org AND tn.product=e.product AND tn.id=e.target AND tn.kind='feature' JOIN cards sc ON sc.org=sn.org AND sc.product=sn.product AND sc.id=sn.card_id JOIN cards tc ON tc.org=tn.org AND tc.product=tn.product AND tc.id=tn.card_id JOIN memberships m ON m.org=e.org AND m.product=e.product AND m.user_id=$3 WHERE e.org=$1 AND e.product=$2 AND e.kind IN ('depends_on','contradicts') AND (sc.id=ANY($4) OR tc.id=ANY($4)) AND sc.published AND tc.published AND NOT sc.withdrawn AND NOT tc.withdrawn AND sc.body->>'lifecycle' NOT IN ('superseded','deprecated') AND tc.body->>'lifecycle' NOT IN ('superseded','deprecated') AND sn.provenance->>'card_revision'=sc.revision::text AND tn.provenance->>'card_revision'=tc.revision::text AND m.services @> sc.services AND m.services @> tc.services AND ($8::text[] IS NULL OR ($8 @> sc.services AND $8 @> tc.services)) AND NOT EXISTS(SELECT 1 FROM (VALUES(sc.id,sc.revision),(tc.id,tc.revision)) endpoint(id,revision) WHERE NOT EXISTS(SELECT 1 FROM code_rationale_anchors an WHERE an.org=e.org AND an.product=e.product AND an.card_id=endpoint.id AND an.card_revision=endpoint.revision AND an.repository_id=$5 AND an.repository_revision=$6 AND an.code_revision=$7 AND an.confirmed_by=an.owner AND an.reviewed_by IS NOT NULL AND NOT an.revoked AND m.services @> an.services AND ($8::text[] IS NULL OR $8 @> an.services) AND (an.contribution_id IS NULL OR EXISTS(SELECT 1 FROM code_contributions co JOIN code_mappings cm ON cm.org=co.org AND cm.product=co.product AND cm.id=co.mapping_id AND cm.revision=co.mapping_revision AND NOT cm.revoked AND cm.user_id=co.owner WHERE co.org=an.org AND co.product=an.product AND co.id=an.contribution_id AND co.revision=an.contribution_revision AND co.confirmed_by=co.owner AND co.reviewed_by IS NOT NULL AND NOT co.revoked AND m.services @> co.services AND m.services @> cm.services AND ($8::text[] IS NULL OR ($8 @> co.services AND $8 @> cm.services)))))) ORDER BY e.source,e.target,e.kind LIMIT 21")
+            .bind(&a.org).bind(p).bind(&a.user).bind(&card_ids).bind(repo.id).bind(repo.revision).bind(&r.base_revision).bind(ceiling).fetch_all(&mut **tx).await.map_err(db)?;
         if edges.len() > 20 {
             brief.truncated = true;
         }
@@ -367,8 +380,8 @@ impl Knowledge {
                 ],
             });
         }
-        let evidence=sqlx::query("SELECT te.id,te.card_revision,te.code_revision,te.reference,te.stale FROM trusted_evidence te JOIN cards c ON c.org=te.org AND c.product=te.product AND c.id=te.card_id JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$3 WHERE te.org=$1 AND te.product=$2 AND te.card_id=ANY($4) AND te.kind='tests_verified' AND c.published AND NOT c.withdrawn AND m.services @> c.services AND te.card_revision=c.revision ORDER BY (te.code_revision=$5 AND NOT te.stale) DESC,te.id LIMIT 21")
-            .bind(&a.org).bind(p).bind(&a.user).bind(&card_ids).bind(&r.base_revision).fetch_all(&mut **tx).await.map_err(db)?;
+        let evidence=sqlx::query("SELECT te.id,te.card_revision,te.code_revision,te.reference,te.stale FROM trusted_evidence te JOIN cards c ON c.org=te.org AND c.product=te.product AND c.id=te.card_id JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$3 WHERE te.org=$1 AND te.product=$2 AND te.card_id=ANY($4) AND te.kind='tests_verified' AND c.published AND NOT c.withdrawn AND m.services @> c.services AND te.card_revision=c.revision AND ($6::text[] IS NULL OR $6 @> c.services) ORDER BY (te.code_revision=$5 AND NOT te.stale) DESC,te.id LIMIT 21")
+            .bind(&a.org).bind(p).bind(&a.user).bind(&card_ids).bind(&r.base_revision).bind(ceiling).fetch_all(&mut **tx).await.map_err(db)?;
         if evidence.len() > 20 {
             brief.truncated = true;
         }
@@ -452,9 +465,10 @@ impl Knowledge {
         p: &str,
         user: &str,
         hosts: &[String],
+        ceiling: Option<&[String]>,
     ) -> Result<Option<ProfileRecord>, Error> {
-        let value:Option<serde_json::Value>=sqlx::query_scalar("SELECT to_jsonb(cp)-'org'-'product' FROM code_profiles cp JOIN memberships m ON m.org=cp.org AND m.product=cp.product AND m.user_id=$3 WHERE cp.org=$1 AND cp.product=$2 AND cp.user_id=$4 AND NOT cp.revoked AND cp.display_name IS NOT NULL AND m.services @> cp.services")
-            .bind(&a.org).bind(p).bind(&a.user).bind(user).fetch_optional(&mut **tx).await.map_err(db)?;
+        let value:Option<serde_json::Value>=sqlx::query_scalar("SELECT to_jsonb(cp)-'org'-'product' FROM code_profiles cp JOIN memberships m ON m.org=cp.org AND m.product=cp.product AND m.user_id=$3 WHERE cp.org=$1 AND cp.product=$2 AND cp.user_id=$4 AND NOT cp.revoked AND cp.display_name IS NOT NULL AND m.services @> cp.services AND ($5::text[] IS NULL OR $5 @> cp.services)")
+            .bind(&a.org).bind(p).bind(&a.user).bind(user).bind(ceiling).fetch_optional(&mut **tx).await.map_err(db)?;
         let Some(value) = value else {
             return Ok(None);
         };

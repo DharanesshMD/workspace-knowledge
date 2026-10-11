@@ -229,3 +229,43 @@ async fn identity_mapping_cannot_grant_access_or_accept_email_matching() {
         Error::Denied
     );
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn profile_owner_can_withdraw_opt_in_after_membership_narrows() {
+    let f = common::setup().await;
+    f.k.put_code_profile(
+        &f.alice,
+        "demo",
+        ProfileInput {
+            display_name: Some("Alice".into()),
+            contact_url: None,
+            services: vec!["backend".into()],
+            base_revision: None,
+        },
+    )
+    .await
+    .unwrap();
+    f.k.grant(&f.alice, "demo", &["frontend".into()], false)
+        .await
+        .unwrap();
+    let (k, pool, role) = common::runtime(&f).await;
+    let p = k
+        .put_code_profile(
+            &f.alice,
+            "demo",
+            ProfileInput {
+                display_name: None,
+                contact_url: None,
+                services: vec!["frontend".into()],
+                base_revision: Some(1),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(p.revoked);
+    assert!(p.display_name.is_none());
+    assert_eq!(p.revision, 2);
+    drop(k);
+    common::cleanup_runtime(&f, pool, role).await;
+}

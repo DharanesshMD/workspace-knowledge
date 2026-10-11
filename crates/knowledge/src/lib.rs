@@ -16,6 +16,7 @@ pub mod graph;
 pub mod lifecycle;
 pub mod personal;
 mod pool;
+pub mod preflight;
 pub use pool::PoolConfig;
 pub mod retention;
 pub mod signed_evidence;
@@ -74,6 +75,22 @@ impl Knowledge {
         &self,
         actor: &Actor,
     ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, Error> {
+        self.actor_tx_scoped(actor, None).await
+    }
+    // One product gate before any device/membership/source row lock. Writers and
+    // preflight validation share it, including relationship insertion/removal.
+    async fn code_tx(
+        &self,
+        actor: &Actor,
+        product: &str,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, Error> {
+        self.actor_tx_scoped(actor, Some(product)).await
+    }
+    async fn actor_tx_scoped(
+        &self,
+        actor: &Actor,
+        product: Option<&str>,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, Error> {
         let mut tx = self.pool.begin().await.map_err(db)?;
         sqlx::query("SELECT set_config('wk.org',$1,true),set_config('wk.user',$2,true)")
             .bind(&actor.org)
@@ -81,6 +98,9 @@ impl Knowledge {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
+        if let Some(p) = product {
+            Self::lock_administration(&mut tx, actor, p).await?;
+        }
         self.lock_device(&mut tx, actor).await?;
         Ok(tx)
     }
@@ -120,7 +140,7 @@ impl Knowledge {
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db)?;
-        if versions != (1..=15).collect::<Vec<_>>() {
+        if versions != (1..=16).collect::<Vec<_>>() {
             return Err(Error::Storage);
         }
         Ok(())
@@ -154,6 +174,7 @@ impl Knowledge {
             (13, include_str!("../../../migrations/server/0013.sql")),
             (14, include_str!("../../../migrations/server/0014.sql")),
             (15, include_str!("../../../migrations/server/0015.sql")),
+            (16, include_str!("../../../migrations/server/0016.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
@@ -229,7 +250,7 @@ impl Knowledge {
         body: CardSubmission,
     ) -> Result<Card, Error> {
         self.device_scope(product, &body.service_ids)?;
-        let mut tx = self.actor_tx(actor).await?;
+        let mut tx = self.code_tx(actor, product).await?;
         let result = Self::submit_in_transaction(&mut tx, actor, product, body).await?;
         tx.commit().await.map_err(db)?;
         Ok(result)
@@ -268,7 +289,7 @@ impl Knowledge {
         Ok(result)
     }
     pub async fn publish(&self, actor: &Actor, product: &str, id: uuid::Uuid) -> Result<(), Error> {
-        let mut tx = self.actor_tx(actor).await?;
+        let mut tx = self.code_tx(actor, product).await?;
         let row = sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$4 WHERE c.id=$1 AND c.org=$2 AND c.product=$3 AND NOT c.withdrawn AND c.body->>'capture_completeness'='complete' AND m.can_review AND m.services @> c.services AND m.policy_revision=(c.body->>'policy_revision')::bigint FOR UPDATE OF c FOR SHARE OF m")
             .bind(id).bind(&actor.org).bind(product).bind(&actor.user)
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::Denied)?;

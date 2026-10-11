@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use wk_knowledge::{Actor, Knowledge};
+pub mod code;
 
 pub struct Fixture {
     pub k: Knowledge,

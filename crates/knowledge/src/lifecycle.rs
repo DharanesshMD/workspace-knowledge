@@ -60,7 +60,7 @@ impl Knowledge {
         services: &[String],
         revision: i64,
     ) -> Result<uuid::Uuid, Error> {
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         if !wk_contracts::valid_id(device)
             || approval.len() != 64
             || !approval.bytes().all(|b| b.is_ascii_hexdigit())
@@ -75,7 +75,7 @@ impl Knowledge {
         Ok(id)
     }
     pub async fn review_queue(&self, a: &Actor, product: &str) -> Result<Vec<Card>, Error> {
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.can_review AND m.services @> c.services AND NOT c.published AND NOT c.withdrawn ORDER BY c.id LIMIT 100").bind(&a.user).bind(&a.org).bind(product).fetch_all(&mut *tx).await.map_err(db)?;
         rows.into_iter().map(decode).collect()
     }
@@ -91,7 +91,7 @@ impl Knowledge {
         validate_shared_body(&v)?;
         let base =
             i64::try_from(body.base_revision.ok_or(Error::Invalid)?).map_err(|_| Error::Invalid)?;
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         let r=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND c.id=$4 AND NOT c.withdrawn AND m.services @> c.services AND m.services @> $5::text[] AND (c.author=$1 OR m.can_review) AND m.policy_revision=$6 FOR UPDATE OF c FOR SHARE OF m").bind(&a.user).bind(&a.org).bind(product).bind(id).bind(&body.service_ids).bind(i64::try_from(body.policy_revision).map_err(|_|Error::Invalid)?).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
         let old = decode(r)?;
         if old.revision != base {
@@ -126,7 +126,7 @@ impl Knowledge {
         id: uuid::Uuid,
         revision: i64,
     ) -> Result<(), Error> {
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         let r=sqlx::query("SELECT c.revision FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND c.id=$4 AND m.services @> c.services AND (c.author=$1 OR m.can_review) AND NOT c.withdrawn FOR UPDATE OF c FOR SHARE OF m").bind(&a.user).bind(&a.org).bind(product).bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
         if r.try_get::<i64, _>("revision").map_err(db)? != revision {
             return Err(Error::Conflict);

@@ -10,7 +10,7 @@ age -d -i "$1" -o "$work/backup.tar" "$2"
 # Extract only the single known data file, ignoring arbitrary archive paths.
 tar -xOf "$work/backup.tar" database.dump > "$work/database.dump"
 tar -xOf "$work/backup.tar" manifest.txt > "$work/manifest.txt"
-printf '%s\n' 'wk-backup-v2' 'schema_version=15' > "$work/expected.txt"
+printf '%s\n' 'wk-backup-v2' 'schema_version=16' > "$work/expected.txt"
 cmp -s "$work/manifest.txt" "$work/expected.txt" || { echo 'Incompatible backup version; use a version-specific offline migration' >&2; exit 1; }
 count=$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_tables WHERE schemaname='public'")
 [ "$count" = 0 ] || { echo 'Target is not empty' >&2; exit 1; }
@@ -22,7 +22,7 @@ pg_restore --exit-on-error --no-owner --no-privileges --file="$work/restore.sql"
   cat "$work/restore.sql"
   cat <<'SQL'
 DO $$ BEGIN
- IF (SELECT array_agg(version ORDER BY version) FROM public.wk_schema_migrations) IS DISTINCT FROM ARRAY[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]::integer[] THEN
+ IF (SELECT array_agg(version ORDER BY version) FROM public.wk_schema_migrations) IS DISTINCT FROM ARRAY[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]::integer[] THEN
   RAISE EXCEPTION 'incompatible restored schema';
  END IF;
 END $$;

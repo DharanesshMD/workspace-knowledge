@@ -141,7 +141,7 @@ impl Knowledge {
         {
             return Err(Error::Invalid);
         }
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, p).await?;
         Self::lock_administration(&mut tx, a, p).await?;
         let repo = Self::code_repository(&mut tx, a, p, input.repository_id).await?;
         let mapping = Self::code_mapping(&mut tx, a, p, input.mapping_id).await?;
@@ -192,7 +192,7 @@ impl Knowledge {
         revision: i64,
         review: bool,
     ) -> Result<ContributionRecord, Error> {
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, p).await?;
         Self::lock_administration(&mut tx, a, p).await?;
         if review {
             Self::code_reviewer(&mut tx, a, p).await?;
@@ -248,7 +248,7 @@ impl Knowledge {
         {
             return Err(Error::Invalid);
         }
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, p).await?;
         Self::lock_administration(&mut tx, a, p).await?;
         let repo = Self::code_repository(&mut tx, a, p, input.repository_id).await?;
         let (card, owner) = Self::anchor_card(&mut tx, a, p, input.card_id).await?;
@@ -307,7 +307,7 @@ impl Knowledge {
         revision: i64,
         review: bool,
     ) -> Result<AnchorRecord, Error> {
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, p).await?;
         Self::lock_administration(&mut tx, a, p).await?;
         if review {
             Self::code_reviewer(&mut tx, a, p).await?;
@@ -366,7 +366,7 @@ impl Knowledge {
         if !valid_targets(&input.targets) || !wk_contracts::valid_id(&input.user_id) {
             return Err(Error::Invalid);
         }
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, p).await?;
         Self::lock_administration(&mut tx, a, p).await?;
         Self::code_operator(&mut tx, a, p, &input.services).await?;
         let repo = Self::code_repository(&mut tx, a, p, input.repository_id).await?;
