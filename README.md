@@ -1,6 +1,8 @@
-# Workspace Knowledge
+# <img src="docs/assets/workspace-knowledge-avatar.png" alt="Workspace Knowledge profile icon" width="56" height="56" /> Workspace Knowledge
 
 <img src="docs/assets/workspace-knowledge-cover.png" alt="Workspace Knowledge: connected mint W mark on navy, with the tagline Know why the code exists before you change it" width="900" />
+
+[Repository cover](docs/assets/workspace-knowledge-cover.png) · [Profile icon](docs/assets/workspace-knowledge-avatar.png) · [Brand assets](docs/assets/README.md)
 
 **Know why the code exists before you change it.**
 
