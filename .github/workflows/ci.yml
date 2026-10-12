@@ -27,6 +27,16 @@ jobs:
       - run: cargo build --workspace --locked
       - if: runner.os != 'Windows'
         run: python3 -m unittest discover -s scripts/tests -v
+      - if: runner.os == 'macOS'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install isolated supported Claude host fixture
+        if: runner.os == 'macOS'
+        run: npm install --prefix "$RUNNER_TEMP/wk-claude-host" @anthropic-ai/claude-code@2.1.296 --no-audit --no-fund
+      - name: Verify native Edit denial, hook crash and timeout
+        if: runner.os == 'macOS'
+        run: python3 scripts/code-context-host.py --claude "$RUNNER_TEMP/wk-claude-host/node_modules/.bin/claude" --agent target/debug/wk-agent
 
   postgres:
     runs-on: ubuntu-latest
@@ -71,6 +81,26 @@ jobs:
         working-directory: web
       - run: npm run build && npm test
         working-directory: web
+
+  linux-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Linux amd64 runtime candidate
+        run: docker build --platform linux/amd64 --target runtime -f deploy/Dockerfile -t wk-candidate:${{ github.sha }} .
+      - name: Check non-root assets and fail-closed production startup
+        run: |
+          set -euo pipefail
+          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            --entrypoint /bin/sh wk-candidate:${{ github.sha }} \
+            -c 'test "$(id -u)" = 10001 && test -r /opt/wk/web/index.html && test -x /usr/local/bin/wk-server'
+          if docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            wk-candidate:${{ github.sha }} --production 2> "$RUNNER_TEMP/missing-config.log"; then
+            echo '::error::Production startup unexpectedly accepted missing configuration.'
+            exit 1
+          fi
+          rg --line-regexp 'WK_DATABASE_URL required' "$RUNNER_TEMP/missing-config.log"
 
   environments:
     runs-on: ubuntu-latest

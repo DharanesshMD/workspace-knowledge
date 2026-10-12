@@ -1,0 +1,14 @@
+# Extend every default rule. This one exception requires BOTH an exact test
+# file and the entire reviewed synthetic source line; other values still fail.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Exact reviewed synthetic private-note rejection canary across merges"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^crates/knowledge/tests/personal\.rs$''']
+regexes = ['''^\s*\+?\s*secret\.body\.intent\ =\ "sk\-proj\-THIS_IS_A_SYNTHETIC_SECRET_CANARY_012345678901234567890"\.into\(\);\s*$''']

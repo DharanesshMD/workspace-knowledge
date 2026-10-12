@@ -58,3 +58,9 @@ Production migration and identity provisioning are described in [server setup](d
 ## Contribution policy
 
 Contributions are Apache-2.0. Sign each commit with `git commit -s`, agreeing to the [Developer Certificate of Origin](https://developercertificate.org/). Do not use another person's identity. Dependency changes must preserve license notices and update lockfiles/SBOM. Public release requires separate maintainer authorization; a successful CI build is not authorization to publish.
+
+## Release-readiness checks
+
+See the [bounded v0.1 checklist](docs/operations/v0.1-release.md). Candidate CI scans full Git history with redacted Gitleaks findings, checks normal-runtime dependencies without hiding resolution errors, and builds a restricted Linux container. Exact historical and path-plus-literal synthetic-fixture exceptions are documented in [the readiness record](docs/reviews/2026-10-12-v0.1-readiness.md); do not add broad directory allowlists.
+
+For actual native Claude hook failure checks without a real account or cloud model, pass an explicitly installed supported executable to `python3 scripts/code-context-host.py --claude ABS_CLAUDE --agent ABS_WK_AGENT`. The harness uses only owned temporary files and an isolated loopback model fixture. This does not certify the complete browser acknowledgement flow.

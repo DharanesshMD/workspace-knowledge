@@ -8,7 +8,7 @@ deploy/scripts/tombstones.sh merge AGE_IDENTITY SHARED_LATEST.age
 deploy/scripts/personal-deletions.sh merge AGE_IDENTITY PERSONAL_LATEST.age
 ```
 
-Version2 requires manifest schema13 and actual migrations1–13. Populated targets, unknown versions and incompatible dumps are rejected. Version2/schema12 snapshots and older version1 archives need a version-specific **offline** upgrade in another isolated database; migrate with the matching trusted release, validate deletion/access metadata and create a version2 snapshot. Do not edit a manifest to bypass compatibility.
+Version2 requires manifest schema16 and actual migrations1–16. Populated targets, unknown versions and incompatible dumps are rejected. Earlier version2/schema12–15 snapshots and older version1 archives need a version-specific **offline** upgrade in another isolated database; migrate with the matching trusted release, validate deletion/access metadata and create a version2 snapshot. Do not edit a manifest to bypass compatibility.
 
 Restore runs schema/data, access quarantine and embedded deletion replay in one transaction. It removes memberships, product-admin assignments and browser sessions; revokes every installation and workspace binding; preserves credential/key tombstones; and denies PUBLIC function execution/schema access. `--no-privileges` drops the dump's original REVOKEs, so explicit denial is necessary. Any SQL failure rolls the transaction back. Never start an application after a failed operation.
 

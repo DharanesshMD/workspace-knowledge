@@ -1,0 +1,25 @@
+{
+  "passed": {
+    "encrypted_snapshot": true,
+    "atomic_authority_quarantine": true,
+    "collector_auth_cutoff": true,
+    "preflight_receipts_invalidated": true,
+    "no_public_definer_execution": true,
+    "latest_shared_and_private_replay": true,
+    "orphan_deleted_key_protected": true,
+    "unrelated_private_note_preserved": true,
+    "repeat_merge_idempotent": true,
+    "nonempty_restore_refused": true,
+    "invalid_ledger_rejected": true,
+    "interrupted_restore_rolls_back": true,
+    "tampered_ciphertext_rejected": true,
+    "incompatible_manifest_refused": true
+  },
+  "versions": {
+    "age": "1.1.1",
+    "pg_dump": "pg_dump (PostgreSQL) 17.11 (Debian 17.11-1.pgdg12+2)",
+    "pg_restore": "pg_restore (PostgreSQL) 17.11 (Debian 17.11-1.pgdg12+2)"
+  },
+  "elapsed_seconds": 6.07,
+  "source_and_target": "new disposable synthetic databases only"
+}

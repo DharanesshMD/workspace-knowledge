@@ -281,7 +281,7 @@ The first covered attempt is denied and opens a hosted brief. Only the developer
 
 This hook **does not cover** shell commands, `NotebookEdit`, manual/external writes, other AI clients or a disabled hook. A concurrent writer can still change a file after the hook returns. Keep code review, tests and branch protection in place.
 
-Configuration is labeled `configured_unverified` until supported-host acceptance passes. The tested installation was older than the required version and was correctly refused; the complete live edit/acknowledgement/retry flow remains unverified. Read [setup and trust boundaries](docs/architecture/code-change-context.md) and [acceptance evidence](docs/reviews/2026-10-11-code-change-context-acceptance.md).
+Configuration is labeled `configured_unverified` until full supported-host acceptance passes. The existing older installation was correctly refused. An isolated Claude Code 2.1.296 passed native `Edit` denial, crash and timeout checks against a synthetic loopback model; the complete enrolled browser acknowledgement/retry flow remains unverified. Read [setup and trust boundaries](docs/architecture/code-change-context.md) and [acceptance evidence](docs/reviews/2026-10-11-code-change-context-acceptance.md).
 
 ## Coding-agent integration
 
@@ -436,6 +436,8 @@ The repository includes implementation and synthetic/local acceptance records. I
 | Security | Known runtime RSA advisory, privacy-corpus work and production security assessment remain |
 | Capacity | Local synthetic pilot evidence only; target-server soak testing and protected-edit workload measurement remain |
 | Optional components | Semantic retrieval needs an approved embedding endpoint/evaluation; advisory assessment needs an approved endpoint; Enterprise capture needs entitlement and live acceptance |
+
+The first candidate targets a Linux Docker server and macOS developers. See the [bounded v0.1 checklist](docs/operations/v0.1-release.md) and [fresh readiness evidence](docs/reviews/2026-10-12-v0.1-readiness.md). Production identity testing is deferred; the runtime dependency audit remains a release blocker.
 
 Release work should prioritize these gates before broader support claims. The [completion matrix](docs/architecture/completion-matrix.md) and dated acceptance records distinguish implemented paths from externally verified behavior.
 

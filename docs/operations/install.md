@@ -101,7 +101,7 @@ After provisioning:
 docker compose -f deploy/compose/compose.yaml up -d app
 ```
 
-Place the HTTPS reverse proxy in front of host-loopback port 8080. Preserve Origin headers and cookies; do not log callback queries, cookies or Authorization headers. Configure proxy deadlines, request-size/rate limits and backup retention. Run the separately authorized retention worker and rehearse deletion-safe encrypted restore using the [hosted operations](hosted-portal.md), [backup](backup.md) and [restore](restore.md) guides. `/health/ready` checks runtime database access and schema migrations 1–13; it does not certify capture, identity-provider health or backups.
+Place the HTTPS reverse proxy in front of host-loopback port 8080. Preserve Origin headers and cookies; do not log callback queries, cookies or Authorization headers. Configure proxy deadlines, request-size/rate limits and backup retention. Run the separately authorized retention worker and rehearse deletion-safe encrypted restore using the [hosted operations](hosted-portal.md), [backup](backup.md) and [restore](restore.md) guides. `/health/ready` checks runtime database access and schema migrations 1–16; it does not certify capture, identity-provider health or backups.
 
 For a source-hosted server, build the console with `cd web && npm ci && npm run build`, then set `WK_WEB_DIR` to the absolute `web/dist` directory when starting `wk-server --production`. Assets are served from that directory; they are not embedded in the executable.
 

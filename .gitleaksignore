@@ -1,0 +1,8 @@
+# Reviewed synthetic fixtures only. Each exception is bound to the exact commit,
+# file, rule and line: newly introduced or replaced credentials still fail.
+# Review rationale: docs/reviews/2026-10-12-v0.1-readiness.md
+f03a474a15705aa161ad4404943206fea2721f4b:crates/knowledge/tests/personal.rs:generic-api-key:124
+e982700df2adf755ad13c35bfcf5da9d7f72eb49:crates/adapters/tests/cursor_history.rs:generic-api-key:67
+e982700df2adf755ad13c35bfcf5da9d7f72eb49:crates/adapters/tests/support/cursor_fixture.rs:generic-api-key:74
+35c7605bbea57499d71a71c483e6c0ebc8a16a3a:crates/server/tests/fixtures/synthetic-rsa-a.json:private-key:3
+35c7605bbea57499d71a71c483e6c0ebc8a16a3a:crates/server/tests/fixtures/synthetic-rsa-b.json:private-key:3
