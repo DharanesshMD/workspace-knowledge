@@ -143,6 +143,7 @@ pub fn bind(
         policy_hash: consent.policy_hash.clone(),
     }))
 }
+#[cfg(unix)]
 fn owned(uid: u32, current: u32) -> bool {
     uid == current
 }

@@ -25,7 +25,7 @@ jobs:
           curl --fail --silent --show-error --location "$base/$archive" -o "$RUNNER_TEMP/$archive"
           curl --fail --silent --show-error --location "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o "$RUNNER_TEMP/checksums.txt"
           cd "$RUNNER_TEMP"
-          rg " ${archive}$" checksums.txt | sha256sum --check --strict -
+          awk -v archive="$archive" '$2 == archive' checksums.txt | sha256sum --check --strict -
           tar -xzf "$archive" gitleaks
       - name: Scan full Git history with secret values redacted
         run: |
@@ -44,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo tree --locked --workspace --target all -e normal --prefix none --format '{p}' > "$RUNNER_TEMP/runtime-dependencies.txt"
-          if rg --quiet '^rsa v' "$RUNNER_TEMP/runtime-dependencies.txt"; then
+          if grep -q '^rsa v' "$RUNNER_TEMP/runtime-dependencies.txt"; then
             echo '::error::RUSTSEC-2023-0071 remains in normal runtime dependencies; release is blocked.'
             exit 1
           fi

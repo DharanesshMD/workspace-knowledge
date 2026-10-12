@@ -100,7 +100,7 @@ jobs:
             echo '::error::Production startup unexpectedly accepted missing configuration.'
             exit 1
           fi
-          rg --line-regexp 'WK_DATABASE_URL required' "$RUNNER_TEMP/missing-config.log"
+          grep -Fx 'WK_DATABASE_URL required' "$RUNNER_TEMP/missing-config.log"
 
   environments:
     runs-on: ubuntu-latest

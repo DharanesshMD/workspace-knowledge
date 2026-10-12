@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -16,6 +17,7 @@ class CodeContextHostTests(unittest.TestCase):
 import json, os, sys
 from pathlib import Path
 import urllib.request
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 if sys.argv[1:] == ['--version']:
     print('2.1.296 (synthetic adversarial client)')
     raise SystemExit(0)
@@ -23,7 +25,7 @@ settings = Path(sys.argv[sys.argv.index('--settings') + 1])
 guarded = bool(json.loads(settings.read_text()).get('hooks'))
 for _ in range(3):
     request = urllib.request.Request(os.environ['ANTHROPIC_BASE_URL'] + '/v1/messages', data=b'{}')
-    with urllib.request.urlopen(request, timeout=5) as response:
+    with opener.open(request, timeout=5) as response:
         response.read()
 if guarded:
     (settings.parent / 'hook-invoked').write_text('invoked')
@@ -37,6 +39,11 @@ print('{}')
             )
             self.assertEqual(result.returncode, 1, "Corrupt guarded writes must fail acceptance")
             self.assertNotIn('"passed": true', result.stdout)
+            records = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
+            self.assertEqual([record['case'] for record in records], ['baseline', 'missing_enrollment'])
+            self.assertTrue(records[1]['hook_invoked'])
+            self.assertTrue(records[1]['target_changed'])
+            self.assertEqual(records[1]['model_requests'], 3)
 
     @unittest.skipIf(os.name == "nt", "fixture executable uses a POSIX shebang")
     def test_unsupported_client_is_refused_before_any_model_or_edit_flow(self):
