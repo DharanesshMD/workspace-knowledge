@@ -75,13 +75,38 @@ fn windows_acl(path: &Path, create: bool) -> Result<(), String> {
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .env("WK_STATE_PATH", path)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(if cfg!(test) {
+            std::process::Stdio::inherit()
+        } else {
+            std::process::Stdio::null()
+        })
         .status()
         .map_err(|_| "private ACL unavailable")?;
     if !status.success() {
         return Err("state directory ACL is not private".into());
     }
     Ok(())
+}
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn new_private_state_can_be_reopened_at_its_canonical_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state");
+        let canonical = private_dir(&path, true).unwrap();
+        assert_eq!(private_dir(&canonical, false).unwrap(), canonical);
+    }
+
+    #[test]
+    fn existing_inherited_state_is_rejected_without_rewriting_its_acl() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state");
+        std::fs::create_dir(&path).unwrap();
+        assert!(private_dir(&path, true).is_err());
+        assert!(private_dir(&path, false).is_err());
+    }
 }
 pub fn read(path: &Path, max: u64) -> Result<String, String> {
     if std::fs::symlink_metadata(path)
