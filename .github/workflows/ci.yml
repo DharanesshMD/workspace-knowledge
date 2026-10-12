@@ -19,25 +19,6 @@ jobs:
       - uses: actions/checkout@v4
       - if: runner.os != 'Windows'
         run: python3 -m unittest discover -s scripts/tests -v
-      - name: Diagnose private Windows fixture ACL
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $env:WK_STATE_PATH = Join-Path $env:RUNNER_TEMP ('wk-acl-fixture-' + [guid]::NewGuid())
-          New-Item -ItemType Directory -Path $env:WK_STATE_PATH | Out-Null
-          try {
-            $source = Get-Content -Raw crates/agent/src/state.rs
-            $commands = [regex]::Matches($source, '"(\$ErrorActionPreference[^"\r\n]+)"')
-            foreach ($command in $commands) {
-              & powershell.exe -NoProfile -NonInteractive -Command $command.Groups[1].Value
-              Write-Host ('Private ACL command exit: ' + $LASTEXITCODE)
-            }
-            $acl = Get-Acl -LiteralPath $env:WK_STATE_PATH
-            Write-Host ('Rules protected: ' + $acl.AreAccessRulesProtected)
-            Write-Host ('Rule count: ' + $acl.Access.Count)
-          } finally {
-            Remove-Item -Recurse -Force -LiteralPath $env:WK_STATE_PATH
-          }
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Install pinned Rust toolchain
@@ -45,6 +26,8 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked --no-fail-fast
+      - run: cargo test --locked -p wk-summarize --example privacy_acceptance
+      - run: cargo test --locked -p wk-server --example hosted_pilot
       - run: cargo build --workspace --locked
       - if: runner.os == 'macOS'
         uses: actions/setup-node@v4
@@ -53,9 +36,11 @@ jobs:
       - name: Install isolated supported Claude host fixture
         if: runner.os == 'macOS'
         run: npm install --prefix "$RUNNER_TEMP/wk-claude-host" @anthropic-ai/claude-code@2.1.296 --no-audit --no-fund
-      - name: Verify native Edit denial, hook crash and timeout
+      - name: Verify native Edit and Write denial, hook crash and timeout
         if: runner.os == 'macOS'
-        run: python3 scripts/code-context-host.py --claude "$RUNNER_TEMP/wk-claude-host/node_modules/.bin/claude" --agent target/debug/wk-agent
+        run: |
+          python3 scripts/code-context-host.py --claude "$RUNNER_TEMP/wk-claude-host/node_modules/.bin/claude" --agent target/debug/wk-agent --tool Edit
+          python3 scripts/code-context-host.py --claude "$RUNNER_TEMP/wk-claude-host/node_modules/.bin/claude" --agent target/debug/wk-agent --tool Write
 
   postgres:
     runs-on: ubuntu-latest

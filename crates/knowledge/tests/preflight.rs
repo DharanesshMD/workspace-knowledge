@@ -41,6 +41,51 @@ fn protected_request(repo: uuid::Uuid) -> wk_contracts::change_context::ChangeCo
 }
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
+async fn removing_membership_with_acknowledged_preflights_invalidates_receipts_atomically() {
+    for operator in [true, false] {
+        let f = common::setup().await;
+        let (repo, m) = repository(&f).await;
+        confirmed(&f, repo, &m).await;
+        let who = device(&f).await;
+        let request = protected_request(repo);
+        let handle = request.operation_handle.unwrap();
+        let (k, pool, role) = common::runtime(&f).await;
+        let brief = k
+            .create_preflight(&f.bob, "demo", who.clone(), request)
+            .await
+            .unwrap();
+        let id = brief.brief_id.unwrap();
+        k.acknowledge_preflight(&f.bob, "demo", id).await.unwrap();
+        if operator {
+            f.k.revoke(&f.bob, "demo").await.unwrap();
+        } else {
+            k.admin_member_remove(&f.admin, "demo", "bob")
+                .await
+                .unwrap();
+        }
+        let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM code_preflights WHERE id=$1")
+            .bind(id)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 0);
+        assert!(k
+            .consume_preflight(&f.bob, "demo", who.clone(), id, handle)
+            .await
+            .is_err());
+        f.k.grant(&f.bob, "demo", &["backend".into(), "frontend".into()], true)
+            .await
+            .unwrap();
+        assert!(k
+            .consume_preflight(&f.bob, "demo", who, id, handle)
+            .await
+            .is_err());
+        drop(k);
+        common::cleanup_runtime(&f, pool, role).await;
+    }
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
 async fn acknowledgement_is_owner_device_operation_bound_and_single_use() {
     let f = common::setup().await;
     let (repo, m) = repository(&f).await;

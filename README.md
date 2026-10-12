@@ -269,7 +269,7 @@ The brief can include confirmed contributor details, reviewed reasons, revision 
 
 ### Optional before-edit confirmation
 
-The separate Claude Code hook covers `Edit`, `Write` and `MultiEdit`. Enrollment requires **Claude Code 2.1.295 or later**, device/repository enrollment and the fail-closed hook behavior used by this adapter.
+The separate Claude Code hook has local acceptance for `Edit` and `Write`. It also configures a defensive `MultiEdit` matcher, but that tool was not offered by the tested host and remains unverified. Enrollment requires **Claude Code 2.1.295 or later**, device/repository enrollment and the fail-closed hook behavior used by this adapter.
 
 ```sh
 wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" protect status
@@ -281,7 +281,7 @@ The first covered attempt is denied and opens a hosted brief. Only the developer
 
 This hook **does not cover** shell commands, `NotebookEdit`, manual/external writes, other AI clients or a disabled hook. A concurrent writer can still change a file after the hook returns. Keep code review, tests and branch protection in place.
 
-Configuration is labeled `configured_unverified` until full supported-host acceptance passes. The existing older installation was correctly refused. An isolated Claude Code 2.1.296 passed native `Edit` denial, crash and timeout checks against a synthetic loopback model; the complete enrolled browser acknowledgement/retry flow remains unverified. Read [setup and trust boundaries](docs/architecture/code-change-context.md) and [acceptance evidence](docs/reviews/2026-10-11-code-change-context-acceptance.md).
+Configuration remains labeled `configured_unverified` for each installation. An isolated Claude Code **2.1.296** on macOS passed actual `Edit`/`Write` denial, crash, timeout and enrolled browser acknowledgement/retry tests against a synthetic loopback model. Changed input/source, local receipt expiry and revoked access blocked writes. This does not certify cloud-backed behavior or every installation. Read [setup and trust boundaries](docs/architecture/code-change-context.md) and [current local acceptance](docs/reviews/2026-10-12-v0.1-continuation.md).
 
 ## Coding-agent integration
 
@@ -429,7 +429,7 @@ The repository includes implementation and synthetic/local acceptance records. I
 | Area | Remaining work or boundary |
 |---|---|
 | Capture | Partial and version-pinned adapters; held Antigravity turns; unsupported surfaces and mixed context remain uncovered |
-| Edit protection | Supported Claude Code host acceptance is pending; shell, external/manual writes and other clients are uncovered |
+| Edit protection | Claude Code 2.1.296 local Edit/Write flow passed; MultiEdit/cloud behavior, shell, external/manual writes and other clients remain uncovered |
 | Knowledge completeness | Undocumented rationale and dependencies remain gaps; source-backed briefs cannot guarantee a safe change |
 | Identity/deployment | Production-provider OIDC/TLS acceptance and real-client remote OAuth certification remain |
 | Native distribution | Signed packaging, user-session startup and target-platform certification remain |

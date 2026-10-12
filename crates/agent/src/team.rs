@@ -134,6 +134,9 @@ pub async fn enroll_repository(
         binding_revision,
     });
     state::save(&dir.join("agent.json"), &config)?;
+    if config.device.is_some() {
+        crate::device::save_receipt(&config, &binding)?;
+    }
     Ok(json!({"repository_enrolled":true,"repository_id":id,"local_observation_only":true}))
 }
 
