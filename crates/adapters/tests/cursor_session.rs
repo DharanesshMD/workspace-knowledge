@@ -167,7 +167,13 @@ fn observed_record_layout_preserves_visible_decision_and_file_evidence() {
     .unwrap();
     assert_eq!(s.turns.len(), 1);
     assert_eq!(s.turns[0].response, "Retries require idempotency.");
-    assert_eq!(s.turns[0].files_read, vec!["frontend/a.ts"]);
+    assert_eq!(
+        s.turns[0].files_read,
+        vec![std::path::Path::new("frontend")
+            .join("a.ts")
+            .to_string_lossy()
+            .into_owned()]
+    );
     assert_eq!(s.turns[0].messages, MessageState::Complete);
 }
 

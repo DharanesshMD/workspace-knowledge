@@ -12,6 +12,11 @@ class CodeContextHostTests(unittest.TestCase):
     def test_guarded_corruption_is_not_reported_as_unchanged(self):
         script = Path(__file__).resolve().parents[1] / "code-context-host.py"
         with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / 'sitecustomize.py').write_text(
+                "import socket\ndef unexpected_dns(*args, **kwargs):\n"
+                "    raise RuntimeError('Loopback fixture must not resolve host names')\n"
+                "socket.getfqdn = unexpected_dns\n"
+            )
             client = Path(directory) / "claude"
             client.write_text("#!" + sys.executable + "\n" + '''
 import json, os, sys
@@ -36,7 +41,7 @@ print('{}')
             try:
                 result = subprocess.run(
                     [sys.executable, str(script), "--claude", str(client), "--agent", sys.executable],
-                    env={**os.environ, 'WK_HOST_FIXTURE_TRACE': '1'},
+                    env={**os.environ, 'WK_HOST_FIXTURE_TRACE': '1', 'PYTHONPATH': directory},
                     text=True, capture_output=True, timeout=20,
                 )
             except subprocess.TimeoutExpired as error:

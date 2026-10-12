@@ -69,6 +69,13 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"{}\n").unwrap();
         let payload = serde_json::json!({"conversationId":"chat","workspacePaths":[root],"transcriptPath":path});
+        if cfg!(not(unix)) {
+            assert_eq!(
+                bind_at(&e, &payload, 10, &root).unwrap_err(),
+                "native_platform_unsupported"
+            );
+            return;
+        }
         let source = bind_at(&e, &payload, 10, &root).unwrap();
         assert_eq!(read_bound(&source, 11).unwrap(), b"{}\n");
         assert_eq!(

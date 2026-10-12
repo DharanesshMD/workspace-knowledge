@@ -19,6 +19,25 @@ jobs:
       - uses: actions/checkout@v4
       - if: runner.os != 'Windows'
         run: python3 -m unittest discover -s scripts/tests -v
+      - name: Diagnose private Windows fixture ACL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:WK_STATE_PATH = Join-Path $env:RUNNER_TEMP ('wk-acl-fixture-' + [guid]::NewGuid())
+          New-Item -ItemType Directory -Path $env:WK_STATE_PATH | Out-Null
+          try {
+            $source = Get-Content -Raw crates/agent/src/state.rs
+            $commands = [regex]::Matches($source, '"(\$ErrorActionPreference[^"\r\n]+)"')
+            foreach ($command in $commands) {
+              & powershell.exe -NoProfile -NonInteractive -Command $command.Groups[1].Value
+              Write-Host ('Private ACL command exit: ' + $LASTEXITCODE)
+            }
+            $acl = Get-Acl -LiteralPath $env:WK_STATE_PATH
+            Write-Host ('Rules protected: ' + $acl.AreAccessRulesProtected)
+            Write-Host ('Rule count: ' + $acl.Access.Count)
+          } finally {
+            Remove-Item -Recurse -Force -LiteralPath $env:WK_STATE_PATH
+          }
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Install pinned Rust toolchain

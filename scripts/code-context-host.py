@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import socketserver
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,13 @@ except ValueError:
 if not supported:
     parser.error('Claude Code 2.1.295 or later is required; no host edit flow was started')
 results = []
+class LoopbackServer(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # This fixture owns a literal loopback address; reverse DNS adds no value.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = '127.0.0.1'
+        self.server_port = self.server_address[1]
+
 for case in ['baseline', 'missing_enrollment', 'hook_crash', 'hook_timeout']:
     with tempfile.TemporaryDirectory(prefix='wk-v01-native-host-') as tmp:
         root = Path(tmp)
@@ -92,7 +100,7 @@ for case in ['baseline', 'missing_enrollment', 'hook_crash', 'hook_timeout']:
                 send('content_block_stop', {'type': 'content_block_stop', 'index': 0})
                 send('message_delta', {'type': 'message_delta', 'delta': {'stop_reason': stop, 'stop_sequence': None}, 'usage': {'output_tokens': 10}})
                 send('message_stop', {'type': 'message_stop'})
-        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        server = LoopbackServer(('127.0.0.1', 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         hook = state / 'hook.py'
