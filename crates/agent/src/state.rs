@@ -73,6 +73,8 @@ fn windows_acl(path: &Path, create: bool) -> Result<(), String> {
     };
     let status = std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        // A Rust child of PowerShell 7 must not give its Core module paths to 5.1.
+        .env_remove("PSModulePath")
         .env("WK_STATE_PATH", path)
         .stdout(std::process::Stdio::null())
         .stderr(if cfg!(test) {
