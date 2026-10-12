@@ -33,10 +33,14 @@ Path('retry.txt').write_text('CORRUPTED\\n' if guarded else 'after confirmation\
 print('{}')
 ''')
             client.chmod(0o700)
-            result = subprocess.run(
-                [sys.executable, str(script), "--claude", str(client), "--agent", sys.executable],
-                text=True, capture_output=True, timeout=20,
-            )
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(script), "--claude", str(client), "--agent", sys.executable],
+                    env={**os.environ, 'WK_HOST_FIXTURE_TRACE': '1'},
+                    text=True, capture_output=True, timeout=20,
+                )
+            except subprocess.TimeoutExpired as error:
+                self.fail('Synthetic fixture timeout trace: ' + (error.stderr or b'').decode(errors='replace')[-6000:])
             self.assertEqual(result.returncode, 1, "Corrupt guarded writes must fail acceptance")
             self.assertNotIn('"passed": true', result.stdout)
             records = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]

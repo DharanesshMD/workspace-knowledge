@@ -13,6 +13,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+if os.environ.get('WK_HOST_FIXTURE_TRACE') == '1':
+    import faulthandler
+    faulthandler.dump_traceback_later(10)
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--claude', type=Path, required=True, help='Explicit supported Claude executable; never installed or upgraded by this harness')
 parser.add_argument('--agent', type=Path, default=Path('target/debug/wk-agent'))
