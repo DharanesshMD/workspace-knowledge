@@ -14,7 +14,7 @@ Git brings the code into your checkout. Workspace Knowledge brings the recorded 
 
 > **Pre-release:** local acceptance covers the hosted portal and bounded workflows. Capture is client- and version-specific, and the optional edit-protection hook still needs supported-host live acceptance. Production identity, native packaging and security gates remain open. Read the [limitations](#limitations-and-release-status) before choosing a deployment.
 
-<img src="docs/reviews/team-context/live-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
+<img src="docs/assets/team-context-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
 
 *The hosted Team context page with synthetic data from local acceptance testing.*
 
@@ -135,7 +135,7 @@ Publishing a copy and deleting a private note are separate actions. Withdraw sha
 Try the synthetic scope and consent demo first. It needs **Rust**, a **C build toolchain** and **Python 3**. Rustup selects the version pinned in `rust-toolchain.toml`.
 
 ```sh
-git clone --branch codex/cursor-native-capture https://github.com/DharanesshMD/workspace-knowledge.git
+git clone --branch codex/v0.1-readiness https://github.com/DharanesshMD/workspace-knowledge.git
 cd workspace-knowledge
 ./scripts/cargo build --locked -p wk-cli
 python3 scripts/demo.py
@@ -148,7 +148,7 @@ cargo build --locked -p wk-cli
 python scripts/demo.py
 ```
 
-These instructions target the current pre-release branch, `codex/cursor-native-capture`.
+These instructions target the current pre-release branch, `codex/v0.1-readiness`.
 
 The demo creates a temporary synthetic workspace, approves one service, rejects out-of-scope paths, replays a visible conversation fixture and checks that pause stops eligibility. Successful output ends with:
 
