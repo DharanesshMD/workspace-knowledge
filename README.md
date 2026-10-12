@@ -12,7 +12,7 @@ Git brings the code into your checkout. Workspace Knowledge brings the recorded 
 
 [Try the demo](#quickstart) · [Join a team](#join-a-team-server) · [Host a server](#host-a-team-server) · [Documentation](#documentation) · [Contribute](CONTRIBUTING.md)
 
-> **Pre-release:** local acceptance covers the hosted portal and bounded workflows. Capture is client- and version-specific, and the optional edit-protection hook still needs supported-host live acceptance. Production identity, native packaging and security gates remain open. Read the [limitations](#limitations-and-release-status) before choosing a deployment.
+> **Source-only alpha candidate, not yet published:** the first scope is a Linux Docker server with macOS developers. Local portal and Claude Code 2.1.296 `Edit`/`Write` acceptance passed with synthetic fixtures. Capture remains partial; the runtime RSA audit and model-sensitive privacy qualification remain open. Automatic publication is disabled. Read the [limitations](#limitations-and-release-status), [alpha launch packet](docs/operations/public-alpha.md) and [unreleased changelog](CHANGELOG.md) before choosing a deployment.
 
 <img src="docs/assets/team-context-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
 
@@ -432,9 +432,9 @@ The repository includes implementation and synthetic/local acceptance records. I
 | Edit protection | Claude Code 2.1.296 local Edit/Write flow passed; MultiEdit/cloud behavior, shell, external/manual writes and other clients remain uncovered |
 | Knowledge completeness | Undocumented rationale and dependencies remain gaps; source-backed briefs cannot guarantee a safe change |
 | Identity/deployment | Production-provider OIDC/TLS acceptance and real-client remote OAuth certification remain |
-| Native distribution | Signed packaging, user-session startup and target-platform certification remain |
-| Security | Known runtime RSA advisory, privacy-corpus work and production security assessment remain |
-| Capacity | Local synthetic pilot evidence only; target-server soak testing and protected-edit workload measurement remain |
+| Native distribution | Owned macOS source installation/Keychain/user-session startup passed; Apple signing/notarization and distributed installer acceptance remain |
+| Security | Runtime RSA advisory unresolved; strict local model-sensitive corpus failed; production security assessment remains |
+| Capacity | Ten-minute local five-identity soak passed; target-server/team, long-duration capacity and protected-edit workload measurement remain |
 | Optional components | Semantic retrieval needs an approved embedding endpoint/evaluation; advisory assessment needs an approved endpoint; Enterprise capture needs entitlement and live acceptance |
 
 The first candidate targets a Linux Docker server and macOS developers. See the [bounded v0.1 checklist](docs/operations/v0.1-release.md) and [fresh readiness evidence](docs/reviews/2026-10-12-v0.1-readiness.md). Production identity testing is deferred; the runtime dependency audit remains a release blocker.

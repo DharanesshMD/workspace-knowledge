@@ -21,3 +21,9 @@ The inspected production OIDC verification paths therefore do not expose the pri
 ## Disposition
 
 Retain the established OIDC implementation, track upstream remediation, and keep the audit result visible. A fresh independent continuation reviewer corroborated the trace through public exponentiation and found no affected private-RSA operation reachable in the inspected consumers. Its scope and remaining findings are recorded in the acceptance report. Production provider/TLS acceptance and release authorization remain separate gates. Do not describe this assessment as third-party security clearance or a clean dependency audit.
+
+## Pending source-only alpha decision
+
+**Status: pending repository-owner approval.** The proposed narrow disposition is to permit a source-only experimental alpha with this advisory disclosed, the established OIDC verifier retained and the dependency audit left visibly failing. It would not authorize production deployment, binary distribution, private-RSA operations, an audit exception or a claim of security clearance. Remediation remains tracked; dependency or cryptographic changes require reassessment.
+
+Before launch, the owner must explicitly accept or reject this scoped disposition after reviewing the inspected call paths and independent review evidence. Approval to prepare documentation or monitor reports is not acceptance of the advisory. Until that decision, public visibility, merge and alpha tag/release publication remain pending. See the [concrete launch packet](../operations/public-alpha.md).

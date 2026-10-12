@@ -7,7 +7,7 @@ Use synthetic fixtures only. Never submit team conversations, credentials, `.env
 Install the pinned Rust toolchain and platform prerequisites from [installation](docs/operations/install.md#install-the-tools). On POSIX, `./scripts/cargo` uses the checkout's optional local toolchain and otherwise system Cargo; on Windows use `cargo` directly.
 
 ```sh
-./scripts/cargo fmt --all -- --check
+./scripts/cargo fmt --all --check
 ./scripts/cargo clippy --workspace --all-targets --locked -- -D warnings
 ./scripts/cargo test --workspace --locked
 ./scripts/cargo build --workspace --locked
@@ -55,6 +55,10 @@ Run that block from the repository root. Open the local origin and enter the gen
 
 Production migration and identity provisioning are described in [server setup](docs/operations/install.md#host-a-team-server). MCP configuration is separate; see [remote MCP](docs/architecture/remote-mcp.md).
 
+## Alpha contribution scope
+
+The first publication candidate is source-only, targeting Linux Docker servers and macOS developers. See the [unreleased changelog](CHANGELOG.md) and [public-alpha runbook](docs/operations/public-alpha.md). Windows CI builds do not establish native installation or capture support. Report sensitive findings through [SECURITY.md](SECURITY.md), never public issues or PRs.
+
 ## Contribution policy
 
 Contributions are Apache-2.0. Sign each commit with `git commit -s`, agreeing to the [Developer Certificate of Origin](https://developercertificate.org/). Do not use another person's identity. Dependency changes must preserve license notices and update lockfiles/SBOM. Public release requires separate maintainer authorization; a successful CI build is not authorization to publish.
@@ -63,4 +67,4 @@ Contributions are Apache-2.0. Sign each commit with `git commit -s`, agreeing to
 
 See the [bounded v0.1 checklist](docs/operations/v0.1-release.md). Candidate CI scans full Git history with redacted Gitleaks findings, checks normal-runtime dependencies without hiding resolution errors, and builds a restricted Linux container. Exact historical and path-plus-literal synthetic-fixture exceptions are documented in [the readiness record](docs/reviews/2026-10-12-v0.1-readiness.md); do not add broad directory allowlists.
 
-For actual native Claude hook failure checks without a real account or cloud model, pass an explicitly installed supported executable to `python3 scripts/code-context-host.py --claude ABS_CLAUDE --agent ABS_WK_AGENT`. The harness uses only owned temporary files and an isolated loopback model fixture. This does not certify the complete browser acknowledgement flow.
+For actual native Claude hook failure checks without a real account or cloud model, pass an explicitly installed supported executable to `python3 scripts/code-context-host.py --claude ABS_CLAUDE --agent ABS_WK_AGENT`. The harness uses only owned temporary files and an isolated loopback model fixture. A separate `scripts/code-context-enrolled.py` harness covers local enrolled browser acknowledgement and matching retry; see the [continuation evidence](docs/reviews/2026-10-12-v0.1-continuation.md). Neither harness certifies cloud-backed behavior, MultiEdit or every installation.

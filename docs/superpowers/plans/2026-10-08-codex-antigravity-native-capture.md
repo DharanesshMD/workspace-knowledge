@@ -21,8 +21,8 @@
 - Keep reviewed publication; no automatic sharing.
 - Tool and mutation record formats require synthetic live examples before adding them to the parser.
 - Five-developer load, signing/notarization, other platforms, enterprise deployment and broad client certification remain separate release gates.
-- Work in `/Users/dharun/.codex/worktrees/cursor-native-capture/workspace-knowledge`, branch `codex/cursor-native-capture`. Preserve unrelated changes in the original checkout.
-- Use `/Users/dharun/Personal/Projects/workspace-knowledge/scripts/cargo` for the `cargo` commands below. Do not change user login credentials or global model routing.
+- Work in `/path/to/isolated/workspace-knowledge`, branch `codex/cursor-native-capture`. Preserve unrelated changes in the original checkout.
+- Use `./scripts/cargo` for the `cargo` commands below. Do not change user login credentials or global model routing.
 - Limits: hook body 256 KiB; transcript snapshot 4 MiB; JSONL record 256 KiB; encrypted record below existing 1 MiB store limit; raw evidence expires 24 hours after first observation without extension; drafts expire no later than their source and within one hour of creation. Overflow holds the source; never silently truncate evidence.
 
 ## Review Focus

@@ -10,7 +10,7 @@
 
 **Spec:** [Approved architectural design](../specs/2026-10-11-code-change-context-design.md). The user approved proceeding on 2026-10-11 and selected confirmation for missing/stale/high-risk context. This plan is ready for review; product implementation has not started.
 
-**Workspace:** `/Users/dharun/.codex/worktrees/cursor-native-capture/workspace-knowledge`, branch `codex/cursor-native-capture`, design commit `d4442ef`. Reuse this clean isolated checkout after verifying status. Preserve `/Users/dharun/Personal/Projects/workspace-knowledge` and its unrelated untracked documentation. Commit with the configured identity and `git commit -s`; do not merge, release, message contributors, or change production/client installations for acceptance.
+**Workspace:** `/path/to/isolated/workspace-knowledge`, branch `codex/cursor-native-capture`, design commit `d4442ef`. Reuse this clean isolated checkout after verifying status. Preserve `/path/to/original/workspace-knowledge` and its unrelated untracked documentation. Commit with the configured identity and `git commit -s`; do not merge, release, message contributors, or change production/client installations for acceptance.
 
 ## Global Constraints
 
