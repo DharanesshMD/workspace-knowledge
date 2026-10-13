@@ -1,4 +1,40 @@
 {
+  "$defs": {
+    "ProductPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_loopback": {
+          "type": "boolean"
+        },
+        "https_origins": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "type": "array"
+        },
+        "private_days": {
+          "format": "uint16",
+          "maximum": 30,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "report_days": {
+          "format": "uint16",
+          "maximum": 7,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "private_days",
+        "report_days",
+        "allow_loopback",
+        "https_origins"
+      ],
+      "type": "object"
+    }
+  },
   "$id": "urn:workspace-knowledge:effective-policy:v1",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
@@ -12,6 +48,9 @@
     "product": {
       "type": "string"
     },
+    "restrictions": {
+      "$ref": "#/$defs/ProductPolicy"
+    },
     "services": {
       "items": {
         "type": "string"
@@ -23,7 +62,8 @@
     "product",
     "services",
     "can_review",
-    "policy_revision"
+    "policy_revision",
+    "restrictions"
   ],
   "title": "Policy",
   "type": "object"

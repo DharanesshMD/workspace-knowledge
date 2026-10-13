@@ -1,6 +1,18 @@
 //! Non-destructive strict-JSON merging. JSONC is rejected unchanged.
 use serde_json::Value;
 pub fn merge(existing: &Value, fragment: &Value) -> Result<Value, String> {
+    if let Some(owned) = fragment.get("workspace-knowledge") {
+        let mut result = existing.clone();
+        let object = result.as_object_mut().ok_or("config must be an object")?;
+        if object
+            .get("workspace-knowledge")
+            .is_some_and(|old| old != owned)
+        {
+            return Err("native hook name already owned".into());
+        }
+        object.insert("workspace-knowledge".into(), owned.clone());
+        return Ok(result);
+    }
     let mut result = existing.clone();
     let obj = result.as_object_mut().ok_or("config must be an object")?;
     if let Some(version) = fragment.get("version") {
@@ -32,6 +44,14 @@ pub fn merge(existing: &Value, fragment: &Value) -> Result<Value, String> {
     Ok(result)
 }
 pub fn remove(existing: &Value, fragment: &Value) -> Result<Value, String> {
+    if let Some(owned) = fragment.get("workspace-knowledge") {
+        let mut result = existing.clone();
+        let object = result.as_object_mut().ok_or("config must be an object")?;
+        if object.get("workspace-knowledge") == Some(owned) {
+            object.remove("workspace-knowledge");
+        }
+        return Ok(result);
+    }
     let mut result = existing.clone();
     let Some(hooks) = result.get_mut("hooks").and_then(Value::as_object_mut) else {
         return Ok(result);

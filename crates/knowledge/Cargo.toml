@@ -9,7 +9,8 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 wk-contracts = { path = "../contracts" }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "json", "uuid"] }
+wk-summarize = { path = "../summarize" }
+sqlx = { package = "wk-postgres", path = "../postgres" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 

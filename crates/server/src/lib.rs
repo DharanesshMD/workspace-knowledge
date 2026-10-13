@@ -1,8 +1,20 @@
 //! Authenticated shared knowledge HTTP API.
+pub mod admin_cli;
 pub mod auth;
+pub mod browser_auth;
+mod browser_routes;
+mod change_routes;
 pub mod decisions;
+pub mod device_routes;
+pub mod embeddings;
 pub mod environments;
+mod health;
+mod personal_routes;
 pub mod remote_mcp;
+pub mod retention_worker;
+pub mod runtime;
+pub mod semantic;
+mod team_routes;
 use axum::{
     extract::{rejection::JsonRejection, DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -17,11 +29,15 @@ use std::{collections::HashMap, sync::Arc};
 use wk_knowledge::{Actor, Error, Knowledge};
 #[derive(Clone)]
 struct Api {
+    embeddings: Option<Arc<embeddings::Embeddings>>,
+    health_slots: Arc<tokio::sync::Semaphore>,
     decisions: Arc<std::sync::OnceLock<Result<decisions::Jev, String>>>,
     knowledge: Knowledge,
     tokens: Arc<HashMap<[u8; 32], Actor>>,
     oidc: Option<auth::Oidc>,
     origin: Option<String>,
+    browser: Option<browser_auth::BrowserAuth>,
+    collector: Option<device_routes::CollectorAuth>,
 }
 struct Failure(StatusCode, &'static str);
 impl IntoResponse for Failure {
@@ -40,7 +56,7 @@ impl From<Error> for Failure {
         }
     }
 }
-async fn actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
+async fn bearer_actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
     if headers
         .get("origin")
         .is_some_and(|v| v.to_str().ok() != api.origin.as_deref())
@@ -67,6 +83,31 @@ async fn actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
         .get(&key)
         .cloned()
         .ok_or(Failure(StatusCode::UNAUTHORIZED, "unauthenticated"))
+}
+async fn actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
+    let cookie = browser_routes::session_cookie(api, headers)?;
+    if let Some(secret) = cookie {
+        if headers.contains_key("authorization") {
+            return Err(Failure(StatusCode::UNAUTHORIZED, "ambiguous_identity"));
+        }
+        if api.browser.is_none() {
+            return Err(Failure(StatusCode::UNAUTHORIZED, "unauthenticated"));
+        }
+        let session = api
+            .knowledge
+            .browser_session(&browser_auth::hash(&secret))
+            .await
+            .map_err(|_| Failure(StatusCode::UNAUTHORIZED, "unauthenticated"))?;
+        if session.csrf_hash != browser_auth::hash(&browser_routes::csrf(&secret)) {
+            return Err(Failure(StatusCode::UNAUTHORIZED, "unauthenticated"));
+        }
+        return api
+            .knowledge
+            .identity(&session.issuer, &session.subject)
+            .await
+            .map_err(|_| Failure(StatusCode::UNAUTHORIZED, "unauthenticated"));
+    }
+    bearer_actor(api, headers).await
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,11 +141,9 @@ async fn search(
     if wk_summarize::sensitive(&request.query) {
         return Err(Failure(StatusCode::UNPROCESSABLE_ENTITY, "sensitive_query"));
     }
-    let cards = api
-        .knowledge
-        .search(&who, &request.product, &request.query, request.limit)
-        .await?;
-    Ok(Json(json!({"cards":cards})))
+    Ok(Json(
+        semantic::search_for(&api, &who, &request.product, &request.query, request.limit).await?,
+    ))
 }
 async fn submit(
     State(api): State<Api>,
@@ -411,6 +450,40 @@ pub fn configured_router(
     oidc: Option<auth::Oidc>,
     origin: Option<String>,
 ) -> Router {
+    portal_router(knowledge, tokens, oidc, origin, None)
+}
+pub fn portal_router(
+    knowledge: Knowledge,
+    tokens: Vec<(String, Actor)>,
+    oidc: Option<auth::Oidc>,
+    origin: Option<String>,
+    browser: Option<browser_auth::BrowserAuth>,
+) -> Router {
+    portal_router_with_collector(knowledge, tokens, oidc, origin, browser, None)
+        .expect("no collector configuration")
+}
+pub fn portal_router_with_collector(
+    knowledge: Knowledge,
+    tokens: Vec<(String, Actor)>,
+    oidc: Option<auth::Oidc>,
+    origin: Option<String>,
+    browser: Option<browser_auth::BrowserAuth>,
+    collector: Option<device_routes::CollectorAuth>,
+) -> Result<Router, String> {
+    portal_router_with_embeddings(knowledge, tokens, oidc, origin, browser, collector, None)
+}
+pub fn portal_router_with_embeddings(
+    knowledge: Knowledge,
+    tokens: Vec<(String, Actor)>,
+    oidc: Option<auth::Oidc>,
+    origin: Option<String>,
+    browser: Option<browser_auth::BrowserAuth>,
+    collector: Option<device_routes::CollectorAuth>,
+    embeddings: Option<embeddings::Embeddings>,
+) -> Result<Router, String> {
+    if let Some(c) = &collector {
+        c.validate(oidc.as_ref(), origin.as_deref(), &tokens)?;
+    }
     let mode = if oidc.is_some() {
         "production"
     } else {
@@ -420,7 +493,24 @@ pub fn configured_router(
         .into_iter()
         .map(|(token, actor)| (Sha256::digest(token.as_bytes()).into(), actor))
         .collect();
-    Router::new()
+    let api = Api {
+        embeddings: embeddings.map(Arc::new),
+        health_slots: Arc::new(tokio::sync::Semaphore::new(1)),
+        decisions: Arc::new(std::sync::OnceLock::new()),
+        knowledge,
+        tokens: Arc::new(tokens),
+        oidc,
+        origin,
+        browser,
+        collector,
+    };
+    let limits = runtime::Limits::from_env()?;
+    let router = Router::new()
+        .merge(browser_routes::routes())
+        .merge(personal_routes::routes())
+        .merge(team_routes::routes())
+        .merge(change_routes::routes())
+        .merge(device_routes::routes())
         .route(
             "/health",
             get(move || async move { Json(json!({"status":"ok","mode":mode})) }),
@@ -453,15 +543,16 @@ pub fn configured_router(
         .route("/v1/products/{product}/relationships", post(relate))
         .route(
             "/v1/products/{product}/activity",
-            post(activity).delete(clear_activity),
+            post(activity)
+                .get(team_routes::activity)
+                .delete(clear_activity),
         )
         .route("/v1/products/{product}/overlaps", post(overlaps))
         .layer(DefaultBodyLimit::max(65536))
-        .with_state(Api {
-            decisions: Arc::new(std::sync::OnceLock::new()),
-            knowledge,
-            tokens: Arc::new(tokens),
-            oidc,
-            origin,
-        })
+        .layer(axum::middleware::from_fn_with_state(
+            api.clone(),
+            browser_routes::protect,
+        ))
+        .with_state(api.clone());
+    Ok(runtime::bound(router, limits).merge(health::routes().with_state(api)))
 }

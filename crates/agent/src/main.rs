@@ -1,8 +1,16 @@
 mod chat;
 mod compliance;
+mod cursor_capture;
+mod cursor_source;
 mod daemon;
+mod device;
+mod native_login;
 mod network;
+mod personal_sync;
 mod process;
+mod protection;
+#[allow(dead_code)] // Integrated by the following transport task.
+mod repository;
 mod state;
 mod team;
 use clap::{Parser, Subcommand};
@@ -40,6 +48,28 @@ enum Command {
         yes: bool,
     },
     Serve,
+    /// Connect a hosted collector through upstream sign-in and a bound installation key.
+    Device {
+        #[command(subcommand)]
+        action: device::Action,
+    },
+    /// Opt into version-pinned native capture in the enrolled service.
+    NativeEnroll {
+        #[arg(long)]
+        client: String,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Disable native capture before removing hook configuration.
+    NativeDisable {
+        #[arg(long)]
+        client: String,
+    },
+    /// Opt in to private Cursor 3.23.23 local session recovery (24 hours, reviewed sharing).
+    CursorEnroll {
+        #[arg(long)]
+        yes: bool,
+    },
     Hook {
         #[arg(long)]
         client: String,
@@ -57,12 +87,46 @@ enum Command {
         #[arg(long)]
         reviewed: bool,
     },
+    /// Configure owner-only hosted summary synchronization (off by default).
+    OwnerSync {
+        action: String,
+        #[arg(long)]
+        yes: bool,
+    },
     Doctor,
     Auth,
     /// Pause, resume or show sharing of your live activity ("who is working on what").
     Activity {
         /// pause | resume | status
         action: String,
+    },
+    /// Bind an operator-approved server repository ID to this approved workspace.
+    RepositoryEnroll {
+        #[arg(long)]
+        repository_id: String,
+        #[arg(long)]
+        git_dir: Option<PathBuf>,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Show source-backed contributor and rationale context for repository files.
+    Context {
+        #[arg(long = "file", required = true)]
+        files: Vec<String>,
+        #[arg(long, default_value = "edit")]
+        operation_class: String,
+    },
+    /// Manage the separate pre-edit confirmation gate.
+    Protect {
+        #[command(subcommand)]
+        action: protection::Action,
+    },
+    /// Claude Code pre-tool hook; errors are returned as a blocking decision.
+    ProtectHook {
+        #[arg(long)]
+        client: String,
+        #[arg(long)]
+        version: String,
     },
     ResetCapture {
         #[arg(long)]
@@ -141,9 +205,16 @@ async fn main() {
     }
 }
 async fn run(cli: Cli) -> Result<Value, String> {
-    let create = matches!(&cli.command, Command::Init { .. });
+    let create = matches!(
+        &cli.command,
+        Command::Init { .. }
+            | Command::Device {
+                action: device::Action::Connect(_)
+            }
+    );
     let state = state::private_dir(&cli.state_dir, create)?;
     match cli.command {
+        Command::Device { action } => device::run(&state, action).await,
         Command::Init {
             binding,
             service,
@@ -186,6 +257,10 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 port,
                 account: "workspace".into(),
                 device_id: uuid::Uuid::new_v4().to_string(),
+
+                repository: None,
+
+                device: None,
             };
             let policy = network::policy(&c, &b, &token).await?;
             network::post(&c,&token,"/v1/workspace-bindings",&json!({"product":b.product,"device_id":c.device_id,"approval_hash":b.policy_hash,"services":[c.service],"policy_revision":policy["policy_revision"]})).await?;
@@ -211,10 +286,58 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 json!({"enrolled":true,"capture_enabled":false,"next":"wk-agent serve","automatic_publication":false}),
             )
         }
+        Command::CursorEnroll { yes } => {
+            if !yes {
+                return Err("pass --yes to allow private recovery of callback-bound Cursor 3.23.23 local sessions for 24 hours; sharing requires review".into());
+            }
+            let c = state::load(&state)?;
+            let b = state::binding(&c)?;
+            let t = state::token(&state, "server-token")?;
+            network::policy(&c, &b, &t).await?;
+            cursor_source::enroll(&state)?;
+            Ok(
+                json!({"native_cursor_enrolled":true,"version":cursor_source::VERSION,"surface":"agents-local","raw_ttl_hours":24,"automatic_publication":false,"missed_initial_sessions":"undetectable"}),
+            )
+        }
+        Command::NativeEnroll { client, yes } => {
+            if !yes {
+                return Err("review native capture boundaries, then pass --yes".into());
+            }
+            let client = native_enrollment::parse_client(&client)?;
+            let c = state::load(&state)?;
+            let b = state::binding(&c)?;
+            let token = state::token(&state, "server-token")?;
+            network::policy(&c, &b, &token).await?;
+            native_enrollment::enroll(&state, client)?;
+            Ok(json!({"enrolled":true,"automatic_publication":false,"raw_ttl_hours":24}))
+        }
+        Command::NativeDisable { client } => {
+            let client = native_enrollment::parse_client(&client)?;
+            let _guard = native_capture::lock(&state).await?;
+            native_enrollment::disable(&state, client)?;
+            native_capture::clear(&state, Some(client))?;
+            Ok(json!({"disabled":true}))
+        }
         Command::Serve => daemon::serve(state).await,
         Command::Hook { client, event } => {
-            let input: Value =
+            let mut input: Value =
                 serde_json::from_str(&stdin_limited()?).map_err(|_| "invalid hook")?;
+            if client == "antigravity" && input.get("hook_event_name").is_none() {
+                input
+                    .as_object_mut()
+                    .ok_or("invalid hook")?
+                    .insert("hook_event_name".into(), json!(event));
+            }
+            if let Ok(native) = native_enrollment::parse_client(&client) {
+                if native_enrollment::disabled(&state, native)? {
+                    return Ok(wk_adapters::success(&client, &event));
+                }
+                native_enrollment::verify_emitter(&state, native)?;
+                input
+                    .as_object_mut()
+                    .ok_or("invalid hook")?
+                    .insert("_wk_emitter_verified".into(), json!(true));
+            }
             if input["hook_event_name"] != event {
                 return Err("hook event mismatch".into());
             }
@@ -240,6 +363,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 context.as_deref(),
             ))
         }
+        Command::OwnerSync { action, yes } => personal_sync::configure(&state, &action, yes).await,
         Command::Process => process::run(&state).await,
         Command::Drafts { after } => process::list(&state, &after),
         Command::Submit { id, reviewed } => {
@@ -250,6 +374,9 @@ async fn run(cli: Cli) -> Result<Value, String> {
         }
         Command::Auth => {
             let c = state::load(&state)?;
+            if c.device.is_some() {
+                return Err("hosted devices use device login; token replacement through the legacy command is disabled".into());
+            }
             let b = state::binding(&c)?;
             let t = zeroize::Zeroizing::new(
                 std::env::var("WK_ACCESS_TOKEN").map_err(|_| "WK_ACCESS_TOKEN required")?,
@@ -261,10 +388,32 @@ async fn run(cli: Cli) -> Result<Value, String> {
             Ok(json!({"credential_updated":true}))
         }
         Command::Activity { action } => team::activity(&state, &action).await,
+        Command::RepositoryEnroll {
+            repository_id,
+            git_dir,
+            yes,
+        } => team::enroll_repository(&state, &repository_id, git_dir.as_deref(), yes).await,
+        Command::Context {
+            files,
+            operation_class,
+        } => team::change_context(&state, &files, &operation_class).await,
+        Command::Protect { action } => match action {
+            protection::Action::Enroll { settings_file, yes } => {
+                protection::enroll(&state, &settings_file, yes)
+            }
+            protection::Action::Status => Ok(protection::status(&state)),
+            protection::Action::Disable { settings_file } => {
+                protection::disable(&state, &settings_file)
+            }
+        },
+        Command::ProtectHook { client, version } => {
+            Ok(protection::run_hook(&state, &client, &version).await)
+        }
         Command::ResetCapture { yes } => {
             if !yes {
                 return Err("--yes closes all pending capture sessions and discards their private drafts; start a genuinely new client session afterward".into());
             }
+            let _guard = native_capture::lock(&state).await?;
             let mut store = state::store(&state)?;
             loop {
                 let rows = store.pending(daemon::now()?)?;
@@ -296,7 +445,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 .await
                 .unwrap_or(json!({"available":false}));
             Ok(
-                json!({"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
+                json!({"native_clients":native_capture::status(&state).unwrap_or(json!({"unavailable":true})),"native_cursor":cursor_capture::status(&state).unwrap_or(json!({"unavailable":true})),"code_change_protection":protection::status(&state),"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
             )
         }
         Command::Config { client } => wk_adapters::config(
@@ -342,6 +491,11 @@ async fn run(cli: Cli) -> Result<Value, String> {
             Ok(json!({"installed":true,"live_verified":false}))
         }
         Command::Uninstall { client, file } => {
+            if let Ok(native) = native_enrollment::parse_client(&client) {
+                let _guard = native_capture::lock(&state).await?;
+                native_enrollment::disable(&state, native)?;
+                native_capture::clear(&state, Some(native))?;
+            }
             if !wk_contracts::valid_id(&client) {
                 return Err("invalid client".into());
             }
@@ -370,5 +524,41 @@ async fn run(cli: Cli) -> Result<Value, String> {
             approve_transcript,
         } => chat::import(&state, &file, &session, approve_transcript).await,
         Command::Compliance { binding } => compliance::poll(&state, &binding).await,
+    }
+}
+
+mod native_enrollment;
+
+mod antigravity_source;
+
+mod native_capture;
+
+mod native_process;
+
+#[cfg(test)]
+mod cli_tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn context_command_requires_explicit_files_and_parses_operation_class() {
+        let cli = Cli::try_parse_from([
+            "wk-agent",
+            "--state-dir",
+            "/private/wk",
+            "context",
+            "--file",
+            "backend/retry.rs",
+            "--operation-class",
+            "multi_edit",
+        ])
+        .unwrap();
+        assert!(
+            matches!(cli.command, Command::Context { files, operation_class }
+            if files == ["backend/retry.rs"] && operation_class == "multi_edit")
+        );
+        assert!(
+            Cli::try_parse_from(["wk-agent", "--state-dir", "/private/wk", "context"]).is_err()
+        );
     }
 }

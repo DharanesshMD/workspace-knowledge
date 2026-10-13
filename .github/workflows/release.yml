@@ -5,6 +5,8 @@ permissions:
   contents: read
 jobs:
   native:
+    # Source-only alpha: never expose unsigned candidates through public Actions.
+    if: github.event.repository.private == true
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -31,6 +33,7 @@ jobs:
             target/release/wk-server
             target/release/wk-server.exe
   console:
+    if: github.event.repository.private == true
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

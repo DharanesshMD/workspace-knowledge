@@ -4,10 +4,24 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use wk_contracts::CardSubmission;
 pub mod activity;
+pub mod admin;
+pub mod browser;
+pub mod change_context;
+mod code_anchors;
+pub mod code_provenance;
+pub mod collector_epoch;
+pub mod devices;
 pub mod evidence;
 pub mod graph;
 pub mod lifecycle;
+pub mod personal;
+mod pool;
+pub mod preflight;
+pub use pool::PoolConfig;
+pub mod retention;
+pub mod semantic;
 pub mod signed_evidence;
+pub mod team;
 #[derive(Clone)]
 pub struct Actor {
     pub org: String,
@@ -36,6 +50,14 @@ pub struct Card {
 #[derive(Clone)]
 pub struct Knowledge {
     pool: PgPool,
+    device_guard: Option<devices::DeviceGuard>,
+}
+fn validate_shared_body(body: &serde_json::Value) -> Result<(), Error> {
+    if wk_summarize::sensitive(&body.to_string()) {
+        Err(Error::Invalid)
+    } else {
+        Ok(())
+    }
 }
 fn db(_: sqlx::Error) -> Error {
     Error::Storage
@@ -54,6 +76,22 @@ impl Knowledge {
         &self,
         actor: &Actor,
     ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, Error> {
+        self.actor_tx_scoped(actor, None).await
+    }
+    // One product gate before any device/membership/source row lock. Writers and
+    // preflight validation share it, including relationship insertion/removal.
+    async fn code_tx(
+        &self,
+        actor: &Actor,
+        product: &str,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, Error> {
+        self.actor_tx_scoped(actor, Some(product)).await
+    }
+    async fn actor_tx_scoped(
+        &self,
+        actor: &Actor,
+        product: Option<&str>,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, Error> {
         let mut tx = self.pool.begin().await.map_err(db)?;
         sqlx::query("SELECT set_config('wk.org',$1,true),set_config('wk.user',$2,true)")
             .bind(&actor.org)
@@ -61,10 +99,17 @@ impl Knowledge {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
+        if let Some(p) = product {
+            Self::lock_administration(&mut tx, actor, p).await?;
+        }
+        self.lock_device(&mut tx, actor).await?;
         Ok(tx)
     }
     pub fn from_pool(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            device_guard: None,
+        }
     }
     pub async fn connect(url: &str) -> Result<Self, Error> {
         let pool = sqlx::postgres::PgPoolOptions::new()
@@ -73,20 +118,33 @@ impl Knowledge {
             .connect(url)
             .await
             .map_err(db)?;
-        let result = Self { pool };
+        let result = Self {
+            pool,
+            device_guard: None,
+        };
         result.migrate().await?;
         Ok(result)
     }
     /// Production application connection: never performs DDL.
     pub async fn open(url: &str) -> Result<Self, Error> {
+        Self::open_with_config(url, PoolConfig::default()).await
+    }
+    pub async fn open_with_config(url: &str, config: PoolConfig) -> Result<Self, Error> {
         Ok(Self {
-            pool: sqlx::postgres::PgPoolOptions::new()
-                .max_connections(10)
-                .acquire_timeout(std::time::Duration::from_secs(5))
-                .connect(url)
-                .await
-                .map_err(db)?,
+            device_guard: None,
+            pool: config.connect(url).await?,
         })
+    }
+    pub async fn ready(&self) -> Result<(), Error> {
+        let versions: Vec<i32> =
+            sqlx::query_scalar("SELECT version FROM public.wk_schema_migrations ORDER BY version")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(db)?;
+        if versions != (1..=17).collect::<Vec<_>>() {
+            return Err(Error::Storage);
+        }
+        Ok(())
     }
     /// Run only with the deployment migration role, before starting app processes.
     pub async fn migrate(&self) -> Result<(), Error> {
@@ -106,6 +164,19 @@ impl Knowledge {
             (2, include_str!("../../../migrations/server/0002.sql")),
             (3, include_str!("../../../migrations/server/0003.sql")),
             (4, include_str!("../../../migrations/server/0004.sql")),
+            (5, include_str!("../../../migrations/server/0005.sql")),
+            (6, include_str!("../../../migrations/server/0006.sql")),
+            (7, include_str!("../../../migrations/server/0007.sql")),
+            (8, include_str!("../../../migrations/server/0008.sql")),
+            (9, include_str!("../../../migrations/server/0009.sql")),
+            (10, include_str!("../../../migrations/server/0010.sql")),
+            (11, include_str!("../../../migrations/server/0011.sql")),
+            (12, include_str!("../../../migrations/server/0012.sql")),
+            (13, include_str!("../../../migrations/server/0013.sql")),
+            (14, include_str!("../../../migrations/server/0014.sql")),
+            (15, include_str!("../../../migrations/server/0015.sql")),
+            (16, include_str!("../../../migrations/server/0016.sql")),
+            (17, include_str!("../../../migrations/server/0017.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
@@ -142,27 +213,52 @@ impl Knowledge {
             return Err(Error::Invalid);
         }
         let mut tx = self.pool.begin().await.map_err(db)?;
+        Self::lock_administration(&mut tx, actor, product).await?;
+        Self::lock_registration(&mut tx, actor).await?;
         sqlx::query("INSERT INTO products(org,id) VALUES($1,$2) ON CONFLICT DO NOTHING")
             .bind(&actor.org)
             .bind(product)
             .execute(&mut *tx)
             .await
             .map_err(db)?;
+        sqlx::query("SELECT id FROM registered_devices WHERE org=$1 AND product=$2 AND owner=$3 ORDER BY id FOR UPDATE").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("UPDATE registered_devices SET revoked_at=now(),revision=revision+1 WHERE org=$1 AND product=$2 AND owner=$3 AND revoked_at IS NULL AND NOT($4::text[] @> services)").bind(&actor.org).bind(product).bind(&actor.user).bind(services).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("INSERT INTO memberships(org,product,user_id,services,can_review) VALUES($1,$2,$3,$4,$5) ON CONFLICT(org,product,user_id) DO UPDATE SET services=excluded.services,can_review=excluded.can_review,policy_revision=memberships.policy_revision+1").bind(&actor.org).bind(product).bind(&actor.user).bind(services).bind(review).execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("DELETE FROM product_admins WHERE org=$1 AND product=$2 AND user_id=$3 AND NOT($4::text[] @> services)").bind(&actor.org).bind(product).bind(&actor.user).bind(services).execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("INSERT INTO audit_events(org,product,user_id,action,entity_id,target_user) VALUES($1,$2,current_user::text,'operator_member_put','00000000-0000-0000-0000-000000000000',$3)").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)
     }
     pub async fn revoke(&self, actor: &Actor, product: &str) -> Result<(), Error> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        Self::lock_administration(&mut tx, actor, product).await?;
+        Self::lock_registration(&mut tx, actor).await?;
+        sqlx::query("SELECT id FROM registered_devices WHERE org=$1 AND product=$2 AND owner=$3 ORDER BY id FOR UPDATE").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("UPDATE registered_devices SET revoked_at=now(),revision=revision+1 WHERE org=$1 AND product=$2 AND owner=$3 AND revoked_at IS NULL").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("DELETE FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3")
             .bind(&actor.org)
             .bind(product)
             .bind(&actor.user)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(db)?;
-        Ok(())
+        sqlx::query("INSERT INTO audit_events(org,product,user_id,action,entity_id,target_user) VALUES($1,$2,current_user::text,'operator_member_remove','00000000-0000-0000-0000-000000000000',$3)").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
+        tx.commit().await.map_err(db)
     }
+
     pub async fn submit(
         &self,
+        actor: &Actor,
+        product: &str,
+        body: CardSubmission,
+    ) -> Result<Card, Error> {
+        self.device_scope(product, &body.service_ids)?;
+        let mut tx = self.code_tx(actor, product).await?;
+        let result = Self::submit_in_transaction(&mut tx, actor, product, body).await?;
+        tx.commit().await.map_err(db)?;
+        Ok(result)
+    }
+    pub(crate) async fn submit_in_transaction(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         actor: &Actor,
         product: &str,
         body: CardSubmission,
@@ -173,17 +269,17 @@ impl Knowledge {
         }
         let policy = i64::try_from(body.policy_revision).map_err(|_| Error::Invalid)?;
         let value = serde_json::to_value(&body).map_err(|_| Error::Invalid)?;
-        let mut tx = self.actor_tx(actor).await?;
+        validate_shared_body(&value)?;
         // Lock the membership row through insertion so concurrent revocation has an order.
-        let allowed=sqlx::query("SELECT 1 FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3 AND services @> $4::text[] AND policy_revision=$5 FOR SHARE").bind(&actor.org).bind(product).bind(&actor.user).bind(&body.service_ids).bind(policy).fetch_optional(&mut *tx).await.map_err(db)?;
+        let allowed=sqlx::query("SELECT 1 FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3 AND services @> $4::text[] AND policy_revision=$5 FOR SHARE").bind(&actor.org).bind(product).bind(&actor.user).bind(&body.service_ids).bind(policy).fetch_optional(&mut **tx).await.map_err(db)?;
         if allowed.is_none() {
             return Err(Error::Denied);
         }
-        let row=sqlx::query("INSERT INTO cards(id,org,product,author,idempotency_key,services,body,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE(to_timestamp($8::bigint/1000.0),now())) ON CONFLICT(org,product,author,idempotency_key) DO NOTHING RETURNING id,body,revision,published").bind(uuid::Uuid::new_v4()).bind(&actor.org).bind(product).bind(&actor.user).bind(&body.idempotency_key).bind(&body.service_ids).bind(&value).bind(body.observed_at_ms).fetch_optional(&mut *tx).await.map_err(db)?;
+        let row=sqlx::query("INSERT INTO cards(id,org,product,author,idempotency_key,services,body,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE(to_timestamp($8::bigint/1000.0),now())) ON CONFLICT(org,product,author,idempotency_key) DO NOTHING RETURNING id,body,revision,published").bind(uuid::Uuid::new_v4()).bind(&actor.org).bind(product).bind(&actor.user).bind(&body.idempotency_key).bind(&body.service_ids).bind(&value).bind(body.observed_at_ms).fetch_optional(&mut **tx).await.map_err(db)?;
         let result = match row {
             Some(row) => decode(row)?,
             None => {
-                let row=sqlx::query("SELECT id,body,revision,published FROM cards WHERE org=$1 AND product=$2 AND author=$3 AND idempotency_key=$4 AND NOT withdrawn").bind(&actor.org).bind(product).bind(&actor.user).bind(&body.idempotency_key).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::Conflict)?;
+                let row=sqlx::query("SELECT id,body,revision,published FROM cards WHERE org=$1 AND product=$2 AND author=$3 AND idempotency_key=$4 AND NOT withdrawn").bind(&actor.org).bind(product).bind(&actor.user).bind(&body.idempotency_key).fetch_optional(&mut **tx).await.map_err(db)?.ok_or(Error::Conflict)?;
                 let existing = decode(row)?;
                 if serde_json::to_value(&existing.body).map_err(|_| Error::Storage)? != value {
                     return Err(Error::Conflict);
@@ -191,26 +287,24 @@ impl Knowledge {
                 existing
             }
         };
-        sqlx::query("INSERT INTO card_revisions(org,product,card_id,revision,body,changed_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING").bind(&actor.org).bind(product).bind(result.id).bind(result.revision).bind(&value).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
-        tx.commit().await.map_err(db)?;
+        sqlx::query("INSERT INTO card_revisions(org,product,card_id,revision,body,changed_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING").bind(&actor.org).bind(product).bind(result.id).bind(result.revision).bind(&value).bind(&actor.user).execute(&mut **tx).await.map_err(db)?;
         Ok(result)
     }
     pub async fn publish(&self, actor: &Actor, product: &str, id: uuid::Uuid) -> Result<(), Error> {
-        let mut tx = self.actor_tx(actor).await?;
-        let result=sqlx::query("UPDATE cards c SET published=TRUE WHERE c.id=$1 AND c.org=$2 AND c.product=$3 AND NOT c.withdrawn AND c.body->>'capture_completeness'='complete' AND EXISTS(SELECT 1 FROM memberships m WHERE m.org=c.org AND m.product=c.product AND m.user_id=$4 AND m.can_review AND m.services @> c.services AND m.policy_revision=(c.body->>'policy_revision')::bigint)").bind(id).bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
-        if result.rows_affected() == 0 {
-            return Err(Error::Denied);
-        }
-        let row = sqlx::query(
-            "SELECT id,body,revision,published FROM cards WHERE id=$1 AND org=$2 AND product=$3",
-        )
-        .bind(id)
-        .bind(&actor.org)
-        .bind(product)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db)?;
-        let card = decode(row)?;
+        let mut tx = self.code_tx(actor, product).await?;
+        let row = sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$4 WHERE c.id=$1 AND c.org=$2 AND c.product=$3 AND NOT c.withdrawn AND c.body->>'capture_completeness'='complete' AND m.can_review AND m.services @> c.services AND m.policy_revision=(c.body->>'policy_revision')::bigint FOR UPDATE OF c FOR SHARE OF m")
+            .bind(id).bind(&actor.org).bind(product).bind(&actor.user)
+            .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::Denied)?;
+        let body: serde_json::Value = row.try_get("body").map_err(db)?;
+        validate_shared_body(&body)?;
+        let mut card = decode(row)?;
+        sqlx::query("UPDATE cards SET published=TRUE WHERE id=$1 AND revision=$2")
+            .bind(id)
+            .bind(card.revision)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        card.published = true;
         Self::write_graph(
             &mut tx,
             actor,
@@ -246,11 +340,12 @@ impl Knowledge {
         query: &str,
         limit: u32,
     ) -> Result<Vec<Card>, Error> {
+        self.device_scope(product, &[])?;
         let mut tx = self.actor_tx(actor).await?;
         if query.trim().is_empty() || query.len() > 1024 || limit == 0 || limit > 20 {
             return Err(Error::Invalid);
         }
-        let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND to_tsvector('simple',(c.body->>'title') || ' ' || (c.body->>'intent') || ' ' || (c.body->>'rationale')) @@ plainto_tsquery('simple',$4) ORDER BY c.id LIMIT $5").bind(&actor.user).bind(&actor.org).bind(product).bind(query).bind(i64::from(limit)).fetch_all(&mut *tx).await.map_err(db)?;
+        let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND ($6::text[] IS NULL OR $6::text[] @> c.services) AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND to_tsvector('simple',(c.body->>'title') || ' ' || (c.body->>'intent') || ' ' || (c.body->>'rationale') || ' ' || COALESCE(c.body->>'decisions','') || ' ' || COALESCE(c.body->>'constraints','') || ' ' || COALESCE(c.body->>'open_questions','')) @@ plainto_tsquery('simple',$4) ORDER BY c.id LIMIT $5").bind(&actor.user).bind(&actor.org).bind(product).bind(query).bind(i64::from(limit)).bind(self.device_guard.as_ref().map(|g|g.services.clone())).fetch_all(&mut *tx).await.map_err(db)?;
         rows.into_iter().map(decode).collect()
     }
 }

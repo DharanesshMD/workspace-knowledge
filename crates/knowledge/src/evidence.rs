@@ -85,7 +85,7 @@ impl Knowledge {
         revoke: bool,
     ) -> Result<(), Error> {
         e.validate(hosts)?;
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         let row=sqlx::query("SELECT c.revision,c.body FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND c.id=$4 AND NOT c.withdrawn AND m.can_review AND m.services @> c.services FOR UPDATE OF c FOR SHARE OF m").bind(&a.user).bind(&a.org).bind(product).bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
         let body: Value = row.try_get("body").map_err(db)?;
         if matches!(
@@ -152,7 +152,7 @@ impl Knowledge {
         product: &str,
         id: uuid::Uuid,
     ) -> Result<Vec<Value>, Error> {
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         let revision: i64 = sqlx::query_scalar("SELECT c.revision FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND c.id=$4 AND NOT c.withdrawn AND m.services @> c.services AND (c.published OR c.author=$1 OR m.can_review) FOR SHARE OF c,m")
             .bind(&a.user).bind(&a.org).bind(product).bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
         let rows = sqlx::query("SELECT e.provider,e.reference,e.code_revision,e.kind,e.card_revision,e.stale FROM trusted_evidence e JOIN card_revisions r ON r.org=e.org AND r.product=e.product AND r.card_id=e.card_id AND r.revision=e.card_revision JOIN memberships m ON m.org=e.org AND m.product=e.product AND m.user_id=$4 WHERE e.org=$1 AND e.product=$2 AND e.card_id=$3 AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(r.body->'service_ids') s WHERE NOT s=ANY(m.services)) ORDER BY e.card_revision DESC,e.id LIMIT 100")

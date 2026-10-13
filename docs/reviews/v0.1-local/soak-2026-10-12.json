@@ -1,0 +1,590 @@
+{
+  "platform": {
+    "app": "Linux aarch64 release container, synthetic JWT verifier fixture",
+    "database": "PostgreSQL 17.11 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+    "host": "Darwin arm64",
+    "host_cpu_count": 8,
+    "host_memory_bytes": 17179869184,
+    "docker_vm": "8 CPUs; 12529250304 memory bytes",
+    "image_id": "sha256:5ec4a3f04449f423661096311f1bff554a5cd28fcb01f16c504f9505975f7594"
+  },
+  "schedule": {
+    "identities": 5,
+    "services": [
+      "backend",
+      "frontend"
+    ],
+    "reviewer": "developer0",
+    "scoped_admin": "developer1",
+    "warmup": {
+      "duration_seconds": 7.712,
+      "cycles_per_developer": [
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "steady": {
+      "duration_seconds": 600.621,
+      "cycles_per_developer": [
+        246,
+        261,
+        333,
+        261,
+        259
+      ]
+    },
+    "cycle_operations": 10,
+    "cycle_pause_ms": 1000,
+    "payload_bytes": 10240,
+    "shared_body_bytes": 10247,
+    "offline_catchup": "20 preassembled synthetic summaries per developer; not native disk-queue acceptance",
+    "burst_seconds": 2.853,
+    "client": "five threads, one request each at a time; urllib HTTP and local OpenSSL signing"
+  },
+  "recovery": {
+    "owned_app_restart": true,
+    "five_owner_reconnections": true,
+    "restore": "separate hosted-restore-drill required"
+  },
+  "requests": 13900,
+  "errors": [
+    {
+      "operation": "restart_ready",
+      "error": "transport"
+    }
+  ],
+  "latency": {
+    "collector_policy": {
+      "requests": 1360,
+      "p50_ms": 17.06,
+      "p95_ms": 80.4,
+      "max_ms": 2938.78
+    },
+    "collector_personal": {
+      "requests": 2820,
+      "p50_ms": 19.09,
+      "p95_ms": 86.31,
+      "max_ms": 2990.05
+    },
+    "collector_cards": {
+      "requests": 1460,
+      "p50_ms": 22.55,
+      "p95_ms": 90.07,
+      "max_ms": 902.31
+    },
+    "publish": {
+      "requests": 1460,
+      "p50_ms": 17.18,
+      "p95_ms": 72.28,
+      "max_ms": 305.37
+    },
+    "owner": {
+      "requests": 1360,
+      "p50_ms": 16.71,
+      "p95_ms": 75.82,
+      "max_ms": 865.44
+    },
+    "team": {
+      "requests": 1360,
+      "p50_ms": 19.5,
+      "p95_ms": 75.9,
+      "max_ms": 427.69
+    },
+    "search": {
+      "requests": 1360,
+      "p50_ms": 154.0,
+      "p95_ms": 1980.33,
+      "max_ms": 3921.86
+    },
+    "mcp": {
+      "requests": 1360,
+      "p50_ms": 144.28,
+      "p95_ms": 2049.83,
+      "max_ms": 4026.89
+    },
+    "review": {
+      "requests": 1360,
+      "p50_ms": 5.43,
+      "p95_ms": 41.29,
+      "max_ms": 271.31
+    }
+  },
+  "throughput_requests_per_second": 23.03,
+  "resources": {
+    "app": {
+      "peak_cpu_percent_one_core": 43.48,
+      "mean_cpu_percent_one_core": 10.78,
+      "peak_memory_bytes": 12853248,
+      "peak_rss_bytes": 19537920,
+      "cpu_cap": 2,
+      "throttled_microseconds_delta": 781501,
+      "memory_cap_bytes": 1073741824
+    },
+    "database": {
+      "peak_cpu_percent_one_core": 207.28,
+      "mean_cpu_percent_one_core": 136.88,
+      "peak_memory_bytes": 236511232,
+      "peak_rss_bytes": 33779712,
+      "cpu_cap": 2,
+      "throttled_microseconds_delta": 522239457,
+      "memory_cap_bytes": 2147483648
+    },
+    "sampling_note": "Per-container guest uptime captured beside each cgroup read; sampled intervals are approximate. RSS is PID1 only; cgroup memory includes workers/cache. Throttle time counts throttled runnable tasks, not wall-clock outage.",
+    "actual_container_configuration": {
+      "app": {
+        "cpu_nanoseconds": 2000000000,
+        "memory_bytes": 1073741824,
+        "readonly": true,
+        "user": "10001:10001"
+      },
+      "database": {
+        "cpu_nanoseconds": 2000000000,
+        "memory_bytes": 2147483648,
+        "readonly": false,
+        "user": ""
+      }
+    }
+  },
+  "pool": {
+    "sample_count": 436,
+    "peak_connections": 10,
+    "peak_active": 5,
+    "peak_lock_waits": 2
+  },
+  "storage": {
+    "initial": {
+      "database_bytes": 9524915,
+      "wal_bytes": 11073555,
+      "notes": 0,
+      "cards": 0,
+      "nonce_rows": 5,
+      "max_nonces_per_device": 1,
+      "tables": {
+        "browser_sessions": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "graph_nodes": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "collector_security_epoch": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "code_mappings": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "code_preflights": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "graph_edges": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "workspace_bindings": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "personal_deletions": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "cards": {
+          "total_bytes": 73728,
+          "index_bytes": 65536
+        },
+        "audit_events": {
+          "total_bytes": 49152,
+          "index_bytes": 32768
+        },
+        "trusted_evidence": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "card_revisions": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "code_maintainers": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "product_admins": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "product_settings": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "registered_devices": {
+          "total_bytes": 65536,
+          "index_bytes": 49152
+        },
+        "code_repositories": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "memberships": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "products": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "code_rationale_anchors": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "personal_summaries": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "collector_credentials": {
+          "total_bytes": 49152,
+          "index_bytes": 32768
+        },
+        "wk_schema_migrations": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "identities": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "activity": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "feedback": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "tombstones": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "device_nonces": {
+          "total_bytes": 49152,
+          "index_bytes": 32768
+        },
+        "device_reports": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "code_contributions": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "code_profiles": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        }
+      }
+    },
+    "after_warmup": {
+      "database_bytes": 10147507,
+      "wal_bytes": 11386814,
+      "notes": 20,
+      "cards": 20,
+      "nonce_rows": 85,
+      "max_nonces_per_device": 17,
+      "tables": {
+        "browser_sessions": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "graph_nodes": {
+          "total_bytes": 114688,
+          "index_bytes": 32768
+        },
+        "collector_security_epoch": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "code_mappings": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "code_preflights": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "graph_edges": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "workspace_bindings": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "personal_deletions": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "cards": {
+          "total_bytes": 262144,
+          "index_bytes": 139264
+        },
+        "audit_events": {
+          "total_bytes": 49152,
+          "index_bytes": 32768
+        },
+        "trusted_evidence": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "card_revisions": {
+          "total_bytes": 139264,
+          "index_bytes": 16384
+        },
+        "code_maintainers": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "product_admins": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "product_settings": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "registered_devices": {
+          "total_bytes": 65536,
+          "index_bytes": 49152
+        },
+        "code_repositories": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "memberships": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "products": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "code_rationale_anchors": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "personal_summaries": {
+          "total_bytes": 188416,
+          "index_bytes": 65536
+        },
+        "collector_credentials": {
+          "total_bytes": 49152,
+          "index_bytes": 32768
+        },
+        "wk_schema_migrations": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "identities": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "activity": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "feedback": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "tombstones": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "device_nonces": {
+          "total_bytes": 106496,
+          "index_bytes": 32768
+        },
+        "device_reports": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "code_contributions": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "code_profiles": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        }
+      }
+    },
+    "after_measured_load": {
+      "database_bytes": 30774963,
+      "wal_bytes": 43514695,
+      "notes": 1480,
+      "cards": 1480,
+      "nonce_rows": 1348,
+      "max_nonces_per_device": 292,
+      "tables": {
+        "browser_sessions": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "graph_nodes": {
+          "total_bytes": 3964928,
+          "index_bytes": 778240
+        },
+        "collector_security_epoch": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "code_mappings": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "code_preflights": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "graph_edges": {
+          "total_bytes": 1056768,
+          "index_bytes": 557056
+        },
+        "workspace_bindings": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "personal_deletions": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "cards": {
+          "total_bytes": 5529600,
+          "index_bytes": 974848
+        },
+        "audit_events": {
+          "total_bytes": 49152,
+          "index_bytes": 32768
+        },
+        "trusted_evidence": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "card_revisions": {
+          "total_bytes": 4890624,
+          "index_bytes": 172032
+        },
+        "code_maintainers": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "product_admins": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "product_settings": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "registered_devices": {
+          "total_bytes": 65536,
+          "index_bytes": 49152
+        },
+        "code_repositories": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "memberships": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "products": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "code_rationale_anchors": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "personal_summaries": {
+          "total_bytes": 5251072,
+          "index_bytes": 516096
+        },
+        "collector_credentials": {
+          "total_bytes": 49152,
+          "index_bytes": 32768
+        },
+        "wk_schema_migrations": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "identities": {
+          "total_bytes": 32768,
+          "index_bytes": 16384
+        },
+        "activity": {
+          "total_bytes": 40960,
+          "index_bytes": 32768
+        },
+        "feedback": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "tombstones": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "device_nonces": {
+          "total_bytes": 507904,
+          "index_bytes": 278528
+        },
+        "device_reports": {
+          "total_bytes": 24576,
+          "index_bytes": 16384
+        },
+        "code_contributions": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        },
+        "code_profiles": {
+          "total_bytes": 16384,
+          "index_bytes": 8192
+        }
+      }
+    },
+    "encrypted_snapshot_bytes": 4447992,
+    "retention_operation": {
+      "busy": false,
+      "personal": 1,
+      "preflights": 0,
+      "reports": 0,
+      "activity": 0,
+      "sessions": 0,
+      "nonces": 14,
+      "credentials": 0,
+      "audit": 0
+    }
+  },
+  "limits": {
+    "pool": 10,
+    "acquire_ms": 5000,
+    "statement_ms": 5000,
+    "lock_ms": 3000,
+    "http_seconds": 30,
+    "inflight": 64,
+    "response_bytes": 8388608,
+    "database_max_connections": 50,
+    "shared_buffers_bytes": 268435456,
+    "work_mem_bytes": 4194304
+  },
+  "limitations": [
+    "Local Docker VM is not a provisioned remote server or a long-duration capacity test.",
+    "Synthetic10KiB technical vocabulary is compressible; measured row density is not a real-content forecast.",
+    "No production OIDC/TLS/browser/native capture or model inference exercised by this load fixture."
+  ]
+}

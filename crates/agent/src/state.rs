@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use wk_scope::enrollment::Binding;
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub root: PathBuf,
@@ -17,6 +17,10 @@ pub struct Config {
     pub port: u16,
     pub account: String,
     pub device_id: String,
+    #[serde(default)]
+    pub device: Option<crate::device::Connection>,
+    #[serde(default)]
+    pub repository: Option<crate::repository::RepositoryEnrollment>,
 }
 pub fn private_dir(path: &Path, create: bool) -> Result<PathBuf, String> {
     if !path.is_absolute()
@@ -69,15 +73,42 @@ fn windows_acl(path: &Path, create: bool) -> Result<(), String> {
     };
     let status = std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        // A Rust child of PowerShell 7 must not give its Core module paths to 5.1.
+        .env_remove("PSModulePath")
         .env("WK_STATE_PATH", path)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(if cfg!(test) {
+            std::process::Stdio::inherit()
+        } else {
+            std::process::Stdio::null()
+        })
         .status()
         .map_err(|_| "private ACL unavailable")?;
     if !status.success() {
         return Err("state directory ACL is not private".into());
     }
     Ok(())
+}
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn new_private_state_can_be_reopened_at_its_canonical_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state");
+        let canonical = private_dir(&path, true).unwrap();
+        assert_eq!(private_dir(&canonical, false).unwrap(), canonical);
+    }
+
+    #[test]
+    fn existing_inherited_state_is_rejected_without_rewriting_its_acl() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state");
+        std::fs::create_dir(&path).unwrap();
+        assert!(private_dir(&path, true).is_err());
+        assert!(private_dir(&path, false).is_err());
+    }
 }
 pub fn read(path: &Path, max: u64) -> Result<String, String> {
     if std::fs::symlink_metadata(path)
@@ -111,12 +142,34 @@ pub fn load(state: &Path) -> Result<Config, String> {
     serde_json::from_str(&read(&state.join("agent.json"), 65536)?)
         .map_err(|_| "invalid agent config".into())
 }
-pub fn binding(c: &Config) -> Result<Binding, String> {
+pub fn base_binding(c: &Config) -> Result<Binding, String> {
     let b: Binding = serde_json::from_str(&read(&c.binding_file, 65536)?)
         .map_err(|_| "invalid local approval")?;
-    if b.root != c.root || !b.services.contains(&c.service) || !b.eligible(&b.root.join(&c.service))
+    let approved = Binding {
+        root: b.root.clone(),
+        product: b.product.clone(),
+        services: b.services.clone(),
+        enabled: true,
+        policy_hash: b.policy_hash.clone(),
+    };
+    if b.root != c.root
+        || !b.services.contains(&c.service)
+        || !approved.eligible(&b.root.join(&c.service))
     {
         return Err("workspace approval absent, changed or paused".into());
+    }
+    Ok(b)
+}
+pub fn binding(c: &Config) -> Result<Binding, String> {
+    let b = base_binding(c)?;
+    if !b.enabled {
+        return Err("workspace approval paused".into());
+    }
+    if c.device.is_some() {
+        crate::device::validate(c, &b)?;
+        if crate::device::remote(c)?.settings.paused {
+            return Err("remote capture pause requested".into());
+        }
     }
     Ok(b)
 }
@@ -143,6 +196,12 @@ pub fn secret(state: &Path, purpose: &str) -> Result<zeroize::Zeroizing<Vec<u8>>
     ))
 }
 pub fn token(state: &Path, purpose: &str) -> Result<zeroize::Zeroizing<String>, String> {
+    if purpose == "server-token"
+        && load(state)?.device.is_some()
+        && !crate::device::credential_current(state)?
+    {
+        return Err("collector authentication expired; run device login".into());
+    }
     Ok(zeroize::Zeroizing::new(
         String::from_utf8(secret(state, purpose)?.to_vec())
             .map_err(|_| "invalid stored credential")?,

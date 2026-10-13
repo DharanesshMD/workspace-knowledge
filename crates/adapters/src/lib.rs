@@ -136,7 +136,7 @@ pub fn normalize(client: &str, v: &Value) -> Result<Option<Observation>, String>
     }))
 }
 pub fn capabilities() -> Value {
-    json!({"cursor":{"status":"partial","prompt":true,"response":true,"live_certified":false},"claude-code":{"status":"partial","prompt":true,"response":true,"live_certified":false},"gemini":{"status":"partial","prompt":true,"response":true,"live_certified":false},"codex":{"status":"unsupported-native","alternative":"managed-chat"},"antigravity":{"status":"unsupported-native","alternative":"managed-chat"},"claude-desktop":{"status":"enterprise-bound-chat-or-managed-chat","mcp_is_capture":false}})
+    json!({"cursor":{"status":"opt-in-native-recovery","native_version":"3.23.23","native_surface":"macOS Agents local","prompt":true,"response":true,"live_certified":false},"claude-code":{"status":"partial","prompt":true,"response":true,"live_certified":false},"gemini":{"status":"partial","prompt":true,"response":true,"live_certified":false},"codex":{"status":"experimental-no-tool-capture","native_version":"0.162.0-alpha.2","native_surface":"macOS CLI","live_certified":false,"unsupported_context":"session-held"},"antigravity":{"status":"experimental-private-capture-held","native_version":"2.19.1","native_surface":"macOS desktop","publication":"blocked-terminal-attribution-unverified","live_certified":false},"claude-desktop":{"status":"enterprise-bound-chat-or-managed-chat","mcp_is_capture":false}})
 }
 /// Generate a merge fragment only; caller must explicitly choose a config file.
 pub fn config(client: &str, executable: &Path, state: &Path) -> Result<Value, String> {
@@ -152,7 +152,38 @@ pub fn config(client: &str, executable: &Path, state: &Path) -> Result<Value, St
         quote(executable)?,
         quote(state)?
     );
+    if client == "antigravity" {
+        let mut events = serde_json::Map::new();
+        for event in [
+            "PreInvocation",
+            "PostInvocation",
+            "Stop",
+            "PreToolUse",
+            "PostToolUse",
+        ] {
+            let handler = json!({"type":"command","command":format!("{command} --event {event}"),"timeout":2});
+            events.insert(
+                event.into(),
+                if event.ends_with("ToolUse") {
+                    json!([{"matcher":".*","hooks":[handler]}])
+                } else {
+                    json!([handler])
+                },
+            );
+        }
+        return Ok(json!({"workspace-knowledge":events}));
+    }
     let events: &[&str] = match client {
+        "codex" => &[
+            "UserPromptSubmit",
+            "Stop",
+            "Interrupt",
+            "PreToolUse",
+            "PostToolUse",
+            "PreCompact",
+            "SubagentStart",
+            "SubagentStop",
+        ],
         "cursor" => &[
             "beforeSubmitPrompt",
             "afterAgentResponse",
@@ -198,6 +229,7 @@ pub fn config(client: &str, executable: &Path, state: &Path) -> Result<Value, St
     })
 }
 
+pub mod change_guard;
 pub mod cursor_history;
 pub mod install;
 pub mod team_context;
@@ -210,3 +242,9 @@ pub fn success(client: &str, event: &str) -> Value {
         _ => json!({}),
     }
 }
+
+pub mod cursor_session;
+
+pub mod antigravity_session;
+pub mod codex_session;
+pub mod native_evidence;

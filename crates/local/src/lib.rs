@@ -265,29 +265,56 @@ impl LocalStore {
     }
     /// Persist scan progress across daemon ticks and restarts so held sessions
     /// cannot permanently starve later sessions. A crash skips only one cycle.
+    pub fn purge_expired(&mut self, now: i64) -> Result<usize, String> {
+        self.db
+            .execute("DELETE FROM events WHERE expires<=?", [now])
+            .map_err(db_error)
+    }
     pub fn next_session_ids(&mut self, now: i64) -> Result<Vec<String>, String> {
+        self.next_ids("sessions", "session:", now, 10)
+    }
+    pub fn next_ids(
+        &mut self,
+        namespace: &str,
+        prefix: &str,
+        now: i64,
+        limit: u32,
+    ) -> Result<Vec<String>, String> {
+        if namespace.is_empty()
+            || namespace.len() > 64
+            || prefix.len() > 64
+            || !(1..=100).contains(&limit)
+        {
+            return Err("invalid scan bounds".into());
+        }
         let tx = self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(db_error)?;
         tx.execute("DELETE FROM events WHERE expires<=?", [now])
             .map_err(db_error)?;
-        let after: String = tx.query_row("SELECT COALESCE((SELECT after_id FROM scan_cursors WHERE namespace='sessions'),'')", [], |r| r.get(0)).map_err(db_error)?;
-        let mut query = tx.prepare("SELECT id FROM events WHERE substr(id,1,8)='session:' AND id>? ORDER BY id LIMIT 10").map_err(db_error)?;
+        let after: String = tx
+            .query_row(
+                "SELECT COALESCE((SELECT after_id FROM scan_cursors WHERE namespace=?),'')",
+                [namespace],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        let mut query=tx.prepare("SELECT id FROM events WHERE substr(id,1,length(?1))=?1 AND id>?2 ORDER BY id LIMIT ?3").map_err(db_error)?;
         let mut ids = query
-            .query_map([&after], |r| r.get::<_, String>(0))
+            .query_map(params![prefix, after, limit], |r| r.get::<_, String>(0))
             .map_err(db_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(db_error)?;
         if ids.is_empty() {
             ids = query
-                .query_map([""], |r| r.get::<_, String>(0))
+                .query_map(params![prefix, "", limit], |r| r.get::<_, String>(0))
                 .map_err(db_error)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(db_error)?;
         }
         drop(query);
-        tx.execute("INSERT INTO scan_cursors(namespace,after_id) VALUES('sessions',?) ON CONFLICT(namespace) DO UPDATE SET after_id=excluded.after_id", [ids.last().map(String::as_str).unwrap_or("")]).map_err(db_error)?;
+        tx.execute("INSERT INTO scan_cursors(namespace,after_id) VALUES(?,?) ON CONFLICT(namespace) DO UPDATE SET after_id=excluded.after_id",params![namespace,ids.last().map(String::as_str).unwrap_or("")]).map_err(db_error)?;
         tx.commit().map_err(db_error)?;
         Ok(ids)
     }

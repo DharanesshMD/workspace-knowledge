@@ -1,0 +1,42 @@
+{
+  "passed": true,
+  "scope": "actual Claude host with synthetic loopback model only; no cloud, real credentials or browser acknowledgement",
+  "cases": [
+    {
+      "case": "baseline",
+      "claude_version": "2.1.296",
+      "exit_code": 0,
+      "model_requests": 3,
+      "hook_invoked": false,
+      "target_changed": true,
+      "expected_unchanged": false
+    },
+    {
+      "case": "missing_enrollment",
+      "claude_version": "2.1.296",
+      "exit_code": 0,
+      "model_requests": 3,
+      "hook_invoked": true,
+      "target_changed": false,
+      "expected_unchanged": true
+    },
+    {
+      "case": "hook_crash",
+      "claude_version": "2.1.296",
+      "exit_code": 0,
+      "model_requests": 3,
+      "hook_invoked": true,
+      "target_changed": false,
+      "expected_unchanged": true
+    },
+    {
+      "case": "hook_timeout",
+      "claude_version": "2.1.296",
+      "exit_code": 0,
+      "model_requests": 3,
+      "hook_invoked": true,
+      "target_changed": false,
+      "expected_unchanged": true
+    }
+  ]
+}

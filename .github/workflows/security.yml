@@ -8,14 +8,46 @@ on:
 permissions:
   contents: read
 jobs:
+  history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download checksum-verified Gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl --fail --silent --show-error --location "$base/$archive" -o "$RUNNER_TEMP/$archive"
+          curl --fail --silent --show-error --location "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o "$RUNNER_TEMP/checksums.txt"
+          cd "$RUNNER_TEMP"
+          awk -v archive="$archive" '$2 == archive' checksums.txt | sha256sum --check --strict -
+          tar -xzf "$archive" gitleaks
+      - name: Scan full Git history with secret values redacted
+        run: |
+          "$RUNNER_TEMP/gitleaks" git --no-banner --redact=100 --config .gitleaks.toml --log-opts="--all --full-history -m" .
+      - name: Reject merge-only synthetic credentials
+        env:
+          WK_TEST_GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
+        run: python3 -m unittest discover -s scripts/tests -p test_secret_history.py -v
   dependencies:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - run: cargo install cargo-audit --locked
-      - name: Confirm audited rsa exception is not compiled
-        run: test -z "$(cargo tree -i rsa --target all -e all 2>/dev/null)"
+      - name: Reject unresolved runtime RSA dependency
+        run: |
+          set -euo pipefail
+          cargo tree --locked --workspace --target all -e normal --prefix none --format '{p}' > "$RUNNER_TEMP/runtime-dependencies.txt"
+          if grep -q '^rsa v' "$RUNNER_TEMP/runtime-dependencies.txt"; then
+            echo '::error::RUSTSEC-2023-0071 remains in normal runtime dependencies; release is blocked.'
+            exit 1
+          fi
       - run: cargo audit
       - uses: actions/setup-node@v4
         with:

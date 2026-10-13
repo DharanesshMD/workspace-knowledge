@@ -63,7 +63,7 @@ impl Knowledge {
         p: Provenance,
     ) -> Result<(), Error> {
         p.validate()?;
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         let row=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND c.id=$4 AND NOT c.withdrawn AND m.services @> c.services AND (c.author=$1 OR m.can_review) FOR UPDATE OF c FOR SHARE OF m").bind(&a.user).bind(&a.org).bind(product).bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
         let c = decode(row)?;
         if c.revision != revision {
@@ -145,7 +145,7 @@ impl Knowledge {
         target: uuid::Uuid,
         kind: &str,
     ) -> Result<(), Error> {
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         if ![
             "belongs_to",
             "affects",
@@ -191,7 +191,7 @@ impl Knowledge {
         {
             return Err(Error::Invalid);
         }
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         let rows = sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND c.id=ANY($4) AND c.published AND NOT c.withdrawn AND m.can_review AND m.services @> c.services ORDER BY c.id FOR UPDATE OF c FOR SHARE OF m")
             .bind(&a.user).bind(&a.org).bind(product).bind(vec![r.source_card,r.target_card]).fetch_all(&mut *tx).await.map_err(db)?;
         if rows.len() != 2 {

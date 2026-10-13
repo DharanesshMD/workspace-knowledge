@@ -1,1 +1,76 @@
-{"schema_version":1,"certified_clients":[],"adapters":[{"client":"Cursor","surface":"IDE","status":"partial","method":"native hook fields","live_tested":false},{"client":"Claude Code","surface":"CLI/Code mode","status":"partial","method":"native hook fields","live_tested":false},{"client":"Gemini CLI","status":"partial","method":"native hook fields","live_tested":false},{"client":"Codex","surface":"CLI/Desktop","status":"unsupported-native-capture","retrieval":"stdio MCP","alternative":"instrumented local chat"},{"client":"Antigravity","status":"unsupported-native-capture","retrieval":"stdio MCP","alternative":"instrumented local chat"},{"client":"Claude Desktop","surface":"general chat","status":"partial","method":"explicit bound Enterprise Compliance chat pull","requires":"Enterprise read entitlement and isolated broker","live_tested":false},{"client":"Workspace Knowledge managed chat","status":"implemented-unverified","method":"controlled visible prompt/response capture","provider":"loopback OpenAI-compatible chat endpoint"}]}
+{
+  "schema_version": 1,
+  "certified_clients": [],
+  "adapters": [
+    {
+      "client": "Cursor",
+      "surface": "macOS Agents window / This Mac",
+      "version": "3.23.23",
+      "status": "implemented-opt-in-certification-pending",
+      "method": "authenticated hooks plus securely bound transcript recovery",
+      "live_tested": "bounded macOS 3.23.23 acceptance: see docs/reviews/2026-10-08-cursor-live-acceptance.md; production certification pending",
+      "limitations": [
+        "initial missed sessions undetectable",
+        "unsupported context holds",
+        "24-hour fixed collector retention",
+        "review required"
+      ]
+    },
+    {
+      "client": "Claude Code",
+      "surface": "CLI/Code mode",
+      "status": "partial",
+      "method": "native hook fields",
+      "live_tested": "2.1.293 with subscription/Sonnet 5.5: actual search/get and prompt/response callbacks passed; coverage remains partial; see docs/reviews/2026-10-08-multiclient-live-results.md"
+    },
+    {
+      "client": "Gemini CLI",
+      "status": "partial",
+      "method": "native hook fields",
+      "live_tested": false
+    },
+    {
+      "client": "Codex",
+      "surface": "macOS CLI",
+      "status": "experimental-no-tool-capture",
+      "retrieval": "stdio MCP",
+      "alternative": "instrumented local chat",
+      "retrieval_live_tested": "CLI 0.162.0-alpha.2: search/get passed; Desktop not separately tested; see docs/reviews/2026-10-08-multiclient-live-results.md",
+      "version": "0.162.0-alpha.2",
+      "limitations": [
+        "Tool use, subagents, compaction and unknown context hold the session",
+        "Actual emitter must match pinned installed binary",
+        "Fixed 24-hour retention; explicit enrollment and review required"
+      ],
+      "live_tested": "2026-10-09 actual no-tool hooks -> local Qwen3.5:2b draft -> reviewer correction revision 2 -> publication -> second identity MCP search/get; full certification pending"
+    },
+    {
+      "client": "Antigravity",
+      "status": "experimental-private-capture-held",
+      "retrieval": "stdio MCP",
+      "alternative": "instrumented local chat",
+      "retrieval_live_tested": "desktop 2.19.1 search/get passed previously; native parser implemented but all native publication held pending terminal attribution",
+      "surface": "macOS desktop",
+      "version": "2.19.1",
+      "limitations": [
+        "Terminal attribution unverified: all native publication blocked",
+        "Only exact callback-bound transcript is read",
+        "Actual emitter ancestry verification and full collector acceptance pending"
+      ]
+    },
+    {
+      "client": "Claude Desktop",
+      "surface": "general chat",
+      "status": "partial",
+      "method": "explicit bound Enterprise Compliance chat pull",
+      "requires": "Enterprise read entitlement and isolated broker",
+      "live_tested": false
+    },
+    {
+      "client": "Workspace Knowledge managed chat",
+      "status": "implemented-unverified",
+      "method": "controlled visible prompt/response capture",
+      "provider": "loopback OpenAI-compatible chat endpoint"
+    }
+  ]
+}

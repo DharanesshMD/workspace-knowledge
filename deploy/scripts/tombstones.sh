@@ -18,6 +18,7 @@ export)
   ;;
 merge)
   age -d -i "$2" -o "$work/ledger.csv" "$3"
+  [ "$(head -n 1 "$work/ledger.csv")" = 'org,product,card_id,revision,created_at' ] || { echo 'Invalid journal header' >&2; exit 1; }
   # COPY reads a file, not SQL interpolation. A malicious CSV field cannot execute SQL.
   # Keep this fixed relative name in a private working directory.
   cd "$work"

@@ -27,9 +27,46 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mode = std::env::args()
         .nth(1)
         .ok_or("choose --dev, --production, migrate, provision, revoke, or replay-tombstones")?;
+    if mode == "healthcheck" {
+        // Fixed local destination, no environment-supplied URL or credential forwarding.
+        reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(2))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?
+            .get("http://127.0.0.1:8080/health/ready")
+            .send()
+            .await?
+            .error_for_status()?;
+        return Ok(());
+    }
     let url = required("WK_DATABASE_URL")?;
     if mode == "migrate" {
         Knowledge::open(&url).await?.migrate().await?;
+        return Ok(());
+    }
+    if mode == "semantic-migrate" {
+        Knowledge::open(&url).await?.semantic_migrate().await?;
+        return Ok(());
+    }
+    if mode == "semantic-index" {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Scope {
+            org: String,
+            product: String,
+        }
+        let scope: Scope = wk_server::admin_cli::parse(std::io::stdin().lock())?;
+        let client = wk_server::embeddings::Embeddings::from_env()?
+            .ok_or("embedding configuration required")?;
+        let result = wk_server::semantic::index_once(
+            &Knowledge::open(&url).await?,
+            &client,
+            &scope.org,
+            &scope.product,
+        )
+        .await?;
+        println!("{result}");
         return Ok(());
     }
     if mode == "replay-tombstones" {
@@ -58,6 +95,96 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if mode == "retention-once" {
+        let counts = Knowledge::open(&url).await?.retention_batch(1000).await?;
+        println!("{}", serde_json::to_string(&counts)?);
+        return Ok(());
+    }
+    if mode == "replay-personal-deletions" {
+        Knowledge::open(&url)
+            .await?
+            .replay_personal_deletions()
+            .await?;
+        return Ok(());
+    }
+    if mode == "retention-worker" {
+        let k = Knowledge::open(&url).await?;
+        wk_server::retention_worker::run(
+            &k,
+            async {
+                let _ = tokio::signal::ctrl_c().await;
+            },
+            std::time::Duration::from_secs(60),
+        )
+        .await?;
+        return Ok(());
+    }
+    if mode == "admin-assign" {
+        let p: wk_server::admin_cli::AdminAssignment =
+            wk_server::admin_cli::parse(std::io::stdin().lock())?;
+        Knowledge::open(&url)
+            .await?
+            .admin_assign(
+                &Actor {
+                    org: p.org,
+                    user: p.user,
+                },
+                &p.product,
+                &p.services,
+            )
+            .await?;
+        return Ok(());
+    }
+    if mode == "admin-policy-bootstrap" {
+        let p: wk_server::admin_cli::PolicyBootstrap =
+            wk_server::admin_cli::parse(std::io::stdin().lock())?;
+        Knowledge::open(&url)
+            .await?
+            .admin_policy_bootstrap(
+                &Actor {
+                    org: p.org,
+                    user: p.user,
+                },
+                &p.product,
+                p.policy,
+            )
+            .await?;
+        return Ok(());
+    }
+    if mode == "admin" || mode == "--dev-admin" {
+        let input = wk_server::admin_cli::parse(std::io::stdin().lock())?;
+        let verifier = if mode == "admin" {
+            wk_server::auth::Oidc::load(
+                required("WK_OIDC_ISSUER")?,
+                required("WK_OIDC_AUDIENCE")?,
+                required("WK_OIDC_JWKS_URL")?,
+            )
+            .await?
+        } else {
+            let name = url
+                .split('?')
+                .next()
+                .unwrap_or_default()
+                .rsplit('/')
+                .next()
+                .unwrap_or_default();
+            if name != "wk_test" && name != "wk_dev" {
+                return Err(
+                    "development administration requires isolated wk_test or wk_dev".into(),
+                );
+            }
+            wk_server::auth::Oidc::load_for_development(
+                required("WK_ADMIN_TEST_ISSUER")?,
+                required("WK_ADMIN_TEST_AUDIENCE")?,
+                required("WK_ADMIN_TEST_JWKS_URL")?,
+            )
+            .await?
+        };
+        let result =
+            wk_server::admin_cli::execute(&Knowledge::open(&url).await?, &verifier, input).await?;
+        println!("{}", serde_json::to_string(&result)?);
+        return Ok(());
+    }
     let origin = std::env::var("WK_CONSOLE_ORIGIN").ok();
     if let Some(ref value) = origin {
         let u = reqwest::Url::parse(value)?;
@@ -65,6 +192,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("WK_CONSOLE_ORIGIN must be an exact origin without a path".into());
         }
     }
+    let limits = wk_server::runtime::Limits::from_env()?;
     let (knowledge, tokens, oidc, address) = match mode.as_str() {
         "--production" => {
             let oidc = wk_server::auth::Oidc::load(
@@ -75,7 +203,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .await
             .map_err(|e| format!("OIDC initialization failed: {e}"))?;
             (
-                Knowledge::open(&url).await?,
+                Knowledge::open_with_config(&url, limits.pool.clone()).await?,
                 vec![],
                 Some(oidc),
                 std::env::var("WK_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into()),
@@ -142,6 +270,85 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => return Err("unknown mode".into()),
     };
+    let browser = if let Ok(client_id) = std::env::var("WK_BROWSER_CLIENT_ID") {
+        let browser_origin = origin
+            .clone()
+            .ok_or("WK_CONSOLE_ORIGIN required for browser login")?;
+        let issuer = if mode == "--dev" {
+            required("WK_BROWSER_TEST_ISSUER")?
+        } else {
+            required("WK_OIDC_ISSUER")?
+        };
+        Some(
+            wk_server::browser_auth::BrowserConfig::load(
+                browser_origin,
+                issuer,
+                client_id,
+                std::env::var("WK_BROWSER_CLIENT_SECRET").ok(),
+                mode == "--dev",
+            )
+            .await
+            .map_err(|e| format!("Browser identity initialization failed: {e}"))?,
+        )
+    } else {
+        None
+    };
+    let collector = if let Ok(audience) = std::env::var("WK_COLLECTOR_AUDIENCE") {
+        if mode != "--production" {
+            return Err("collector audience configuration requires production identity; use separate synthetic collector tokens in development".into());
+        }
+        Some(wk_server::device_routes::CollectorAuth {
+            origin: origin
+                .clone()
+                .ok_or("WK_CONSOLE_ORIGIN required for collector binding")?,
+            oidc: Some(
+                wk_server::auth::Oidc::load(
+                    required("WK_OIDC_ISSUER")?,
+                    audience,
+                    required("WK_OIDC_JWKS_URL")?,
+                )
+                .await?,
+            ),
+            tokens: vec![],
+            client_id: Some(required("WK_COLLECTOR_CLIENT_ID")?),
+        })
+    } else if mode == "--dev" && std::env::var("WK_COLLECTOR_TEST_ISSUER").is_ok() {
+        if std::env::var("WK_COLLECTOR_TEST_TOKEN").is_ok() {
+            return Err("choose one synthetic collector authentication mode".into());
+        }
+        Some(wk_server::device_routes::CollectorAuth {
+            origin: origin
+                .clone()
+                .ok_or("WK_CONSOLE_ORIGIN required for test collector")?,
+            oidc: Some(
+                wk_server::auth::Oidc::load_for_development(
+                    required("WK_COLLECTOR_TEST_ISSUER")?,
+                    required("WK_COLLECTOR_TEST_AUDIENCE")?,
+                    required("WK_COLLECTOR_TEST_JWKS_URL")?,
+                )
+                .await?,
+            ),
+            tokens: vec![],
+            client_id: Some(required("WK_COLLECTOR_TEST_CLIENT_ID")?),
+        })
+    } else if mode == "--dev" {
+        std::env::var("WK_COLLECTOR_TEST_TOKEN").ok().map(|token| {
+            wk_server::device_routes::CollectorAuth {
+                origin: origin.clone().unwrap_or_default(),
+                oidc: None,
+                tokens: vec![(
+                    token,
+                    Actor {
+                        org: "development".into(),
+                        user: "developer".into(),
+                    },
+                )],
+                client_id: None,
+            }
+        })
+    } else {
+        None
+    };
     let listener = tokio::net::TcpListener::bind(&address).await?;
     eprintln!(
         "{mode} API listening at http://{} (authenticated)",
@@ -160,7 +367,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
     });
-    let mut router = wk_server::configured_router(knowledge, tokens, oidc, origin);
+    let collector_refresh = collector.as_ref().and_then(|c|c.oidc.clone()).map(|verifier| {
+        tokio::spawn(async move {let mut interval=tokio::time::interval(wk_server::auth::REFRESH_INTERVAL);interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);interval.tick().await;loop {interval.tick().await;if verifier.refresh().await.is_err(){eprintln!("Collector OIDC key refresh failed; cached keys expire after five minutes");}}})
+    });
+    let mut router = wk_server::portal_router_with_embeddings(
+        knowledge,
+        tokens,
+        oidc,
+        origin,
+        browser,
+        collector,
+        wk_server::embeddings::Embeddings::from_env()?,
+    )?;
     if let Ok(dir) = std::env::var("WK_WEB_DIR") {
         router = router.fallback_service(
             tower_http::services::ServeDir::new(&dir).append_index_html_on_directories(true),
@@ -179,6 +397,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await;
     if let Some(worker) = refresh_worker {
+        worker.abort();
+    }
+    if let Some(worker) = collector_refresh {
         worker.abort();
     }
     served?;

@@ -22,7 +22,11 @@ pub struct Oidc {
 }
 #[derive(Clone, Deserialize)]
 struct Claims {
+    exp: u64,
+    #[serde(default)]
+    iat: Option<u64>,
     sub: String,
+    aud: serde_json::Value,
 }
 impl Oidc {
     pub fn issuer(&self) -> &str {
@@ -32,8 +36,16 @@ impl Oidc {
         &self.audience
     }
     pub fn from_jwks(issuer: String, audience: String, keys: JwkSet) -> Result<Self, String> {
+        Self::from_keys(issuer, audience, keys, false)
+    }
+    fn from_keys(
+        issuer: String,
+        audience: String,
+        keys: JwkSet,
+        development: bool,
+    ) -> Result<Self, String> {
         let parsed = reqwest::Url::parse(&issuer).map_err(|_| "invalid issuer URL")?;
-        if parsed.scheme() != "https"
+        if (parsed.scheme() != "https" && !development)
             || !parsed.username().is_empty()
             || parsed.password().is_some()
             || parsed.query().is_some()
@@ -64,6 +76,30 @@ impl Oidc {
         }
         let keys = Self::fetch_keys(parsed.clone()).await?;
         let mut verifier = Self::from_jwks(issuer, audience, keys)?;
+        verifier.source = Some(parsed);
+        Ok(verifier)
+    }
+    /// Explicit synthetic fixture loader. Ordinary production constructors remain HTTPS-only.
+    pub async fn load_for_development(
+        issuer: String,
+        audience: String,
+        url: String,
+    ) -> Result<Self, String> {
+        let parsed = reqwest::Url::parse(&url).map_err(|_| "invalid JWKS URL")?;
+        for value in [&issuer, &url] {
+            let u = reqwest::Url::parse(value).map_err(|_| "invalid test OIDC URL")?;
+            if u.scheme() != "http"
+                || !matches!(u.host_str(), Some("127.0.0.1" | "[::1]" | "::1"))
+                || !u.username().is_empty()
+                || u.password().is_some()
+                || u.query().is_some()
+                || u.fragment().is_some()
+            {
+                return Err("test OIDC requires literal loopback URLs".into());
+            }
+        }
+        let keys = Self::fetch_keys(parsed.clone()).await?;
+        let mut verifier = Self::from_keys(issuer, audience, keys, true)?;
         verifier.source = Some(parsed);
         Ok(verifier)
     }
@@ -124,6 +160,13 @@ impl Oidc {
         Ok(keys)
     }
     pub fn verify(&self, token: &str) -> Result<(&str, String), InvalidToken> {
+        self.verify_credential(token)
+            .map(|(issuer, subject, _, _)| (issuer, subject))
+    }
+    pub fn verify_credential(
+        &self,
+        token: &str,
+    ) -> Result<(&str, String, u64, Option<u64>), InvalidToken> {
         if token.len() > 16384 {
             return Err(InvalidToken);
         }
@@ -168,10 +211,14 @@ impl Oidc {
         let c = decode::<Claims>(token, &key, &v)
             .map_err(|_| InvalidToken)?
             .claims;
-        if c.sub.is_empty() || c.sub.len() > 512 {
+        let single_audience = c.aud.as_str() == Some(self.audience.as_str())
+            || c.aud
+                .as_array()
+                .is_some_and(|v| v.len() == 1 && v[0].as_str() == Some(self.audience.as_str()));
+        if !single_audience || c.sub.is_empty() || c.sub.len() > 512 {
             return Err(InvalidToken);
         }
-        Ok((&self.issuer, c.sub))
+        Ok((&self.issuer, c.sub, c.exp, c.iat))
     }
 }
 
@@ -250,6 +297,22 @@ mod tests {
         server.abort();
     }
     #[test]
+    fn tokens_with_another_audience_cannot_cross_api_roles() {
+        let (keys, _) = fixture("old");
+        let verifier =
+            Oidc::from_jwks("https://issuer.example".into(), "wk-api".into(), keys).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/synthetic-rsa-a.json")).unwrap();
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some("old".into());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let token=encode(&header,&json!({"iss":"https://issuer.example","aud":["wk-api","wk-collector"],"sub":"developer","exp":now+600}),&EncodingKey::from_rsa_pem(raw["private_pkcs8_pem"].as_str().unwrap().as_bytes()).unwrap()).unwrap();
+        assert!(verifier.verify(&token).is_err());
+    }
+    #[test]
     fn duplicate_ids_and_wrong_key_purpose_are_rejected() {
         let (keys, token) = fixture("key");
         let mut duplicates = keys.clone();
@@ -272,6 +335,60 @@ mod tests {
             .unwrap();
             assert!(verifier.verify(&token).is_err());
         }
+    }
+    #[tokio::test]
+    async fn development_loader_accepts_only_literal_loopback_and_keeps_production_strict() {
+        let (keys, _) = fixture("old");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/keys",
+            axum::routing::get(move || {
+                let keys = keys.clone();
+                async move { axum::Json(keys) }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let issuer = format!("http://{address}");
+        assert!(Oidc::load_for_development(
+            issuer.clone(),
+            "wk-collector".into(),
+            format!("{issuer}/keys")
+        )
+        .await
+        .is_ok());
+        assert!(Oidc::load(
+            issuer.clone(),
+            "wk-collector".into(),
+            format!("{issuer}/keys")
+        )
+        .await
+        .is_err());
+        for value in [
+            "http://localhost:1234",
+            "http://example.org",
+            "http://user@127.0.0.1",
+            "https://example.org",
+            "http://127.0.0.1?query=1",
+        ] {
+            assert!(Oidc::load_for_development(
+                value.into(),
+                "wk-collector".into(),
+                format!("{issuer}/keys")
+            )
+            .await
+            .is_err());
+            assert!(Oidc::load_for_development(
+                issuer.clone(),
+                "wk-collector".into(),
+                format!("{value}/keys")
+            )
+            .await
+            .is_err());
+        }
+        server.abort();
     }
     #[tokio::test]
     async fn production_disallows_insecure_or_credentialed_key_urls() {

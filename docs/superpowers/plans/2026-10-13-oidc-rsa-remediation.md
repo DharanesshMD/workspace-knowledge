@@ -1,0 +1,13 @@
+# OIDC RSA dependency remediation
+
+Goal: remove the unresolved RustCrypto RSA dependency and obtain unsuppressed passing dependency checks for the source-alpha candidate, preserving established OIDC/PKCE validation.
+
+Approved scope: the user's instruction to make the existing application open-source ready. This is a bounded dependency correction, not a new identity architecture. Reuse the isolated candidate worktree; preserve the original checkout and private evidence. Do not publish, merge, rewrite history or accept an advisory exception implicitly.
+
+Design: use the existing OIDC API from Convex's public fork at immutable revision `15a9c551eafcf3b60d307feb94332352ac56c099`, which replaces RustCrypto signature code with AWS-LC. Use one workspace dependency for server and collector. The fork permits missing authorization endpoints for workload identities; interactive server/collector login must reject missing endpoints explicitly. Replace the general SQLx facade with a tiny PostgreSQL-only re-export of exact official0.8.6core/driver types, preserving existing query/pool/TLS behavior while removing unused MySQL/SQLite dependency resolution from the lockfile. Preserve issuer/audience/nonce/PKCE/access-token-hash checks and redirect/network restrictions. No relaxed timestamp feature or custom JWT validation. Record fork provenance, license and update/review obligations.
+
+1. Run the existing runtime-RSA gate and observe failure. Add signature/claim rejection regressions using permanently synthetic keys. Pin the shared dependency, update the lockfile, prove RSA absent across the normal all-target graph, and run protocol regressions plus fork upstream tests.
+2. Run unsuppressed Cargo/npm audits, full Rust/PG and applicable portal/collector identity acceptance in owned fixtures, browser build/regressions and Python checks. Update present-tense readiness/security/README/changelog claims; retain historical assessments as superseded evidence. Keep production/model/capture/signing limits explicit.
+3. One fresh independent final review, one bounded correction pass; commit/push and verify exact-head Foundation/history/dependency CI. Refresh Actions/privacy inventory; keep source-only candidate workflow disabled and no binary publication. Archive private evidence and remove only this plan scratch. Publication remains a separate owner decision.
+
+Review focus: fork trust/provenance and immutable resolution, hidden protocol/algorithm changes, issuer/audience/nonce/hash/key rejection, source-only packaging/build portability, unsuppressed audit and honest release/production claims. OIDC library changes are not production IdP qualification. Failed model-sensitive corpus remains disclosed, automatic publication disabled.

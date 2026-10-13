@@ -118,6 +118,8 @@ pub async fn run(dir: &Path, file: &Path, session: Option<String>) -> Result<Val
             agent: "managed-chat",
         },
     )?;
+    crate::process::processing_current(dir, &c, &b)?;
+    network::policy(&c, &b, &token).await?;
     let url = wk_summarize::local_url(&c.inference)?;
     let response = network::client(60)?
         .post(url)
@@ -126,6 +128,7 @@ pub async fn run(dir: &Path, file: &Path, session: Option<String>) -> Result<Val
         .await
         .map_err(|_| "local chat provider unavailable")?;
     let v = wk_summarize::bounded_json(response, 128 * 1024).await?;
+    crate::process::processing_current(dir, &c, &b)?;
     if v["choices"][0]["finish_reason"] != "stop" {
         record(
             &mut store,

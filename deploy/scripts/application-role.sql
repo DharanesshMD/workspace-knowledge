@@ -11,3 +11,33 @@ GRANT SELECT,UPDATE(stale) ON trusted_evidence TO wk_app;
 GRANT INSERT ON audit_events TO wk_app;
 GRANT USAGE ON SEQUENCE audit_events_id_seq TO wk_app;
 GRANT SELECT,INSERT,UPDATE,DELETE ON activity TO wk_app;
+-- Authentication resolves identity before an Actor exists. Only opaque session
+-- hashes are stored; these rows are accessible solely through the auth service.
+GRANT SELECT,INSERT,UPDATE,DELETE ON browser_sessions TO wk_app;
+
+GRANT SELECT,INSERT,UPDATE ON personal_summaries TO wk_app;
+GRANT EXECUTE ON FUNCTION wk_personal_has_capacity(TEXT,TEXT,TEXT) TO wk_app;
+
+GRANT SELECT,INSERT,UPDATE ON registered_devices,device_reports TO wk_app;
+GRANT SELECT,INSERT,DELETE ON device_nonces TO wk_app;
+GRANT EXECUTE ON FUNCTION wk_device_has_capacity(TEXT,TEXT) TO wk_app;
+
+GRANT SELECT,INSERT,DELETE ON collector_credentials TO wk_app;
+
+GRANT SELECT ON product_settings TO wk_app;
+GRANT EXECUTE ON FUNCTION wk_admin_members(TEXT),wk_admin_member(TEXT,TEXT,TEXT[],BOOLEAN,BOOLEAN),wk_admin_device(TEXT,UUID),wk_admin_policy(TEXT,JSONB) TO wk_app;
+
+GRANT EXECUTE ON FUNCTION wk_personal_deleted_key(TEXT,TEXT,TEXT,TEXT) TO wk_app;
+
+GRANT SELECT ON collector_security_epoch TO wk_app;
+GRANT SELECT ON wk_schema_migrations TO wk_app;
+GRANT SELECT ON code_repositories,code_mappings TO wk_app;
+GRANT SELECT,INSERT,UPDATE ON code_profiles TO wk_app;
+GRANT SELECT,INSERT,UPDATE ON code_contributions,code_rationale_anchors TO wk_app;
+GRANT SELECT ON code_maintainers TO wk_app;
+-- Row-locking reads need column UPDATE privilege. Scoped lock policies have
+-- WITH CHECK(false), so these operator-owned tables still reject mutations.
+GRANT UPDATE(revision) ON code_repositories,code_mappings,code_maintainers TO wk_app;
+GRANT SELECT,INSERT,UPDATE ON code_preflights TO wk_app;
+GRANT EXECUTE ON FUNCTION wk_preflight_has_capacity(TEXT,TEXT,TEXT) TO wk_app;
+GRANT UPDATE(not_before) ON collector_security_epoch TO wk_app;

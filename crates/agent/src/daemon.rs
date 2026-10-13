@@ -90,6 +90,14 @@ pub fn now() -> Result<i64, String> {
         .as_secs() as i64)
 }
 pub async fn capture(dir: &Path, client: &str, payload: &Value) -> Result<Option<String>, String> {
+    if client == "cursor" && dir.join("cursor-consent.json").exists() {
+        crate::cursor_capture::receive(dir, payload).await?;
+        return Ok(Some("native_observation".into()));
+    }
+    if let Ok(native) = crate::native_enrollment::parse_client(client) {
+        crate::native_capture::receive(dir, native, payload).await?;
+        return Ok(Some("native_observation".into()));
+    }
     let Some(o) = wk_adapters::normalize(client, payload)? else {
         return Ok(None);
     };
@@ -148,9 +156,22 @@ pub async fn health(dir: &Path) -> Result<Value, String> {
         .map_err(|_| "collector unavailable")?;
     wk_summarize::bounded_json(r, 65536).await
 }
+async fn retention_loop(mut store: wk_local::LocalStore) {
+    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(15));
+    loop {
+        ticks.tick().await;
+        if let Ok(now) = now() {
+            let _ = store.purge_expired(now);
+        }
+    }
+}
 pub async fn serve(dir: PathBuf) -> Result<Value, String> {
     let c = state::load(&dir)?;
-    state::binding(&c)?;
+    if c.device.is_some() {
+        state::base_binding(&c)?;
+    } else {
+        state::binding(&c)?;
+    }
     state::store(&dir)?;
     let auth = Sha256::digest(ipc(&dir)?.as_bytes()).into();
     let a = App {
@@ -169,10 +190,12 @@ pub async fn serve(dir: PathBuf) -> Result<Value, String> {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, c.port))
         .await
         .map_err(|_| "collector port unavailable")?;
+    let retention = tokio::spawn(retention_loop(state::store(&dir)?));
     let background = tokio::spawn(async move {
         let mut ticks = tokio::time::interval(std::time::Duration::from_secs(15));
         loop {
             ticks.tick().await;
+            let _ = crate::device::poll(&dir).await;
             let _ = crate::process::run(&dir).await;
         }
     });
@@ -183,6 +206,34 @@ pub async fn serve(dir: PathBuf) -> Result<Value, String> {
         .await
         .map_err(|_| "collector stopped unexpectedly".to_string());
     background.abort();
+    retention.abort();
     result?;
     Ok(json!({"stopped":true}))
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    #[tokio::test]
+    async fn expiry_runs_while_inference_is_pending() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("expiry.db");
+        let at = now().unwrap();
+        let mut store = wk_local::LocalStore::open(&db, [7; 32], 100000).unwrap();
+        store
+            .enqueue("native:test", b"private", at - 10, 1)
+            .unwrap();
+        assert!(store.read_record("native:test", at - 10).unwrap().is_some());
+        let task = tokio::spawn(retention_loop(store));
+        tokio::time::timeout(
+            std::time::Duration::from_millis(30),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err();
+        let store = wk_local::LocalStore::open(&db, [7; 32], 100000).unwrap();
+        // Read at the old timestamp to prove physical purge, not read-time filtering.
+        assert!(store.read_record("native:test", at - 10).unwrap().is_none());
+        task.abort();
+    }
 }

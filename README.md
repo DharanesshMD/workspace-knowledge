@@ -6,15 +6,13 @@
 
 **Know why the code exists before you change it.**
 
-> **Current implementation:** the portal, collector and code-change workflows described below are on [`codex/cursor-native-capture`](https://github.com/DharanesshMD/workspace-knowledge/tree/codex/cursor-native-capture). Follow the Quickstart to clone that branch. This `main`-branch update publishes the project overview and branding; implementation guides link to the matching source revision.
-
 Workspace Knowledge is an open-source, self-hosted development knowledge system for teams working with AI coding agents. It connects reviewed development summaries to product boundaries, code revisions and confirmed contributors, so teammates can understand the decisions behind someone else's code and know whom to ask before changing it.
 
 Git brings the code into your checkout. Workspace Knowledge brings the recorded reasons, constraints and evidence into the next developer's workflow.
 
-[Try the demo](#quickstart) · [Join a team](#join-a-team-server) · [Host a server](#host-a-team-server) · [Documentation](#documentation) · [Contribute](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/CONTRIBUTING.md)
+[Try the demo](#quickstart) · [Join a team](#join-a-team-server) · [Host a server](#host-a-team-server) · [Documentation](#documentation) · [Contribute](CONTRIBUTING.md)
 
-> **Pre-release:** local acceptance covers the hosted portal and bounded workflows. Capture is client- and version-specific, and the optional edit-protection hook still needs supported-host live acceptance. Production identity, native packaging and security gates remain open. Read the [limitations](#limitations-and-release-status) before choosing a deployment.
+> **Source-only alpha candidate, not yet published:** the first scope is a Linux Docker server with macOS developers. Local portal and Claude Code 2.1.296 `Edit`/`Write` acceptance passed with synthetic fixtures. Capture remains partial; strict model-sensitive privacy qualification remains open. The RSA dependency has been removed; unsuppressed Cargo audit reports zero vulnerabilities and one informational maintenance warning. Automatic publication is disabled. Read the [limitations](#limitations-and-release-status), [alpha launch packet](docs/operations/public-alpha.md) and [unreleased changelog](CHANGELOG.md) before choosing a deployment.
 
 <img src="docs/assets/team-context-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
 
@@ -130,14 +128,14 @@ flowchart LR
 | Owner summaries | Local drafts or explicitly synchronized owner-only server records; excluded from shared search, graph, activity and MCP |
 | Submitted and published summaries | Review copies visible to authorized reviewers; published copies available within authorized team scope |
 
-Publishing a copy and deleting a private note are separate actions. Withdraw shared knowledge separately when appropriate. See the [private journal](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/private-capture-journal.md) and [console behavior](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/console.md) for lifecycle details.
+Publishing a copy and deleting a private note are separate actions. Withdraw shared knowledge separately when appropriate. See the [private journal](docs/architecture/private-capture-journal.md) and [console behavior](docs/architecture/console.md) for lifecycle details.
 
 ## Quickstart
 
 Try the synthetic scope and consent demo first. It needs **Rust**, a **C build toolchain** and **Python 3**. Rustup selects the version pinned in `rust-toolchain.toml`.
 
 ```sh
-git clone --branch codex/cursor-native-capture https://github.com/DharanesshMD/workspace-knowledge.git
+git clone https://github.com/DharanesshMD/workspace-knowledge.git
 cd workspace-knowledge
 ./scripts/cargo build --locked -p wk-cli
 python3 scripts/demo.py
@@ -150,7 +148,7 @@ cargo build --locked -p wk-cli
 python scripts/demo.py
 ```
 
-These instructions target the current pre-release branch, `codex/cursor-native-capture`.
+These instructions target the default branch, `main`. After the `v0.1.0-alpha.1` tag exists, add `--branch v0.1.0-alpha.1` to evaluate exactly that prerelease.
 
 The demo creates a temporary synthetic workspace, approves one service, rejects out-of-scope paths, replays a visible conversation fixture and checks that pause stops eligibility. Successful output ends with:
 
@@ -168,9 +166,9 @@ It removes its temporary state and does not read real chats or publish anything.
 |---|---|---|
 | Try consent and scope | Rust, C toolchain, Python | [Quickstart](#quickstart) |
 | Use the portal and manual notes | A provisioned team account and browser | [Join a team server](#join-a-team-server) |
-| Capture and summarize locally | User tools, native credential store, compatible local model, configured adapter | [Collector setup](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/adapters/setup.md) |
-| Host for a team | Linux Docker/Compose host, PostgreSQL, OIDC and HTTPS proxy | [Server installation](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/install.md#host-a-team-server) |
-| Contribute code | Pinned Rust toolchain; Node.js 22 for web work | [Contributing](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/CONTRIBUTING.md) |
+| Capture and summarize locally | User tools, native credential store, compatible local model, configured adapter | [Collector setup](docs/adapters/setup.md) |
+| Host for a team | Linux Docker/Compose host, PostgreSQL, OIDC and HTTPS proxy | [Server installation](docs/operations/install.md#host-a-team-server) |
+| Contribute code | Pinned Rust toolchain; Node.js 22 for web work | [Contributing](CONTRIBUTING.md) |
 
 ### Install the tools
 
@@ -195,7 +193,7 @@ On Windows, build the tools with:
 cargo build --locked --release -p wk-cli -p wk-agent -p wk-environments -p wk-server -p wk-mcp
 ```
 
-Copy the five executables from `target/release` to a user-owned directory on PATH. Node.js 22/npm is required only when building the web console locally; the server container builds it in its build image. Read [installation](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/install.md#install-the-tools) for exact prerequisites and platform boundaries.
+Copy the five executables from `target/release` to a user-owned directory on PATH. Node.js 22/npm is required only when building the web console locally; the server container builds it in its build image. Read [installation](docs/operations/install.md#install-the-tools) for exact prerequisites and platform boundaries.
 
 ### Join a team server
 
@@ -236,11 +234,11 @@ In another terminal:
 wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" doctor
 ```
 
-**4. Configure your exact client/version.** Follow [adapter setup](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/adapters/setup.md). Capture configuration, native opt-ins and edit protection are separate choices. Each collector state binds one service; multi-service projects need explicit attribution.
+**4. Configure your exact client/version.** Follow [adapter setup](docs/adapters/setup.md). Capture configuration, native opt-ins and edit protection are separate choices. Each collector state binds one service; multi-service projects need explicit attribution.
 
-**5. Choose summary sharing.** Owner sync and activity sharing default off. Owner sync requires both the hosted Devices permission and explicit local consent. Review local drafts before submitting a summary; authorized reviewers publish the shared copy. See [private summaries and review](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/adapters/setup.md#private-summaries-and-review).
+**5. Choose summary sharing.** Owner sync and activity sharing default off. Owner sync requires both the hosted Devices permission and explicit local consent. Review local drafts before submitting a summary; authorized reviewers publish the shared copy. See [private summaries and review](docs/adapters/setup.md#private-summaries-and-review).
 
-Test foreground operation before enabling [optional startup](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/install.md#optional-startup). Use `device login` with the same state directory when upstream credentials expire; automatic refresh-token storage is currently absent.
+Test foreground operation before enabling [optional startup](docs/operations/install.md#optional-startup). Use `device login` with the same state directory when upstream credentials expire; automatic refresh-token storage is currently absent.
 
 ### Host a team server
 
@@ -252,7 +250,7 @@ The server container includes both the API and portal. The deployment template s
 4. Use the protected operator connection for migrations, runtime-role grants and initial provisioning.
 5. Start the restricted application, then verify sign-in, membership isolation, readiness, retention and backup/restore in your deployment.
 
-Start with [the complete server setup](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/install.md#host-a-team-server) and [Compose template](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/deploy/compose/compose.yaml). Starting Compose alone does not provision identity or database roles. Production configuration has no browser token-paste fallback.
+Start with [the complete server setup](docs/operations/install.md#host-a-team-server) and [Compose template](deploy/compose/compose.yaml). Starting Compose alone does not provision identity or database roles. Production configuration has no browser token-paste fallback.
 
 ## Code-change context
 
@@ -271,7 +269,7 @@ The brief can include confirmed contributor details, reviewed reasons, revision 
 
 ### Optional before-edit confirmation
 
-The separate Claude Code hook covers `Edit`, `Write` and `MultiEdit`. Enrollment requires **Claude Code 2.1.295 or later**, device/repository enrollment and the fail-closed hook behavior used by this adapter.
+The separate Claude Code hook has local acceptance for `Edit` and `Write`. It also configures a defensive `MultiEdit` matcher, but that tool was not offered by the tested host and remains unverified. Enrollment requires **Claude Code 2.1.295 or later**, device/repository enrollment and the fail-closed hook behavior used by this adapter.
 
 ```sh
 wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" protect status
@@ -283,9 +281,15 @@ The first covered attempt is denied and opens a hosted brief. Only the developer
 
 This hook **does not cover** shell commands, `NotebookEdit`, manual/external writes, other AI clients or a disabled hook. A concurrent writer can still change a file after the hook returns. Keep code review, tests and branch protection in place.
 
-Configuration is labeled `configured_unverified` until supported-host acceptance passes. The tested installation was older than the required version and was correctly refused; the complete live edit/acknowledgement/retry flow remains unverified. Read [setup and trust boundaries](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/code-change-context.md) and [acceptance evidence](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/reviews/2026-10-11-code-change-context-acceptance.md).
+Configuration remains labeled `configured_unverified` for each installation. An isolated Claude Code **2.1.296** on macOS passed actual `Edit`/`Write` denial, crash, timeout and enrolled browser acknowledgement/retry tests against a synthetic loopback model. Changed input/source, local receipt expiry and revoked access blocked writes. This does not certify cloud-backed behavior or every installation. Read [setup and trust boundaries](docs/architecture/code-change-context.md) and [current local acceptance](docs/reviews/2026-10-12-v0.1-continuation.md).
 
 ## Coding-agent integration
+
+### Optional semantic search
+
+Enable private hybrid retrieval with **pgvector inside PostgreSQL** and a reviewed local Nomic embedding model. Keyword search remains the default. Hybrid mode searches by both wording and meaning over published summaries; raw conversations, owner-only notes and unpublished drafts are excluded from the vector index. File/revision evidence still determines confirmed attribution and rationale applicability.
+
+Setup uses a separate optional migration, read-only runtime grants and a bounded operator index pass. HTTP, MCP and the portal report the retrieval mode and keyword fallback when the model or index is unavailable. Review [semantic setup, boundaries and evaluation](docs/architecture/semantic-search.md) before enabling it; model/network capacity and representative team quality require deployment-specific acceptance.
 
 Agents can retrieve authorized shared knowledge through `wk-mcp` over stdio or the server's authenticated stateless Streamable HTTP endpoint, `/mcp/{product}`. Remote requests authenticate independently and enforce route-bound product membership. MCP provides integration and retrieval; it does not capture conversations.
 
@@ -309,7 +313,7 @@ missing, stale or high-risk, ask the developer to review before proceeding.
 Do not claim an acknowledgement or summary proves a change is safe.
 ```
 
-A project rule relies on the agent following it. The separate protection hook supplies the bounded blocking behavior described above. See [remote MCP configuration and OAuth boundaries](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/remote-mcp.md) and [overlap notices](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/overlap-notices.md).
+A project rule relies on the agent following it. The separate protection hook supplies the bounded blocking behavior described above. See [remote MCP configuration and OAuth boundaries](docs/architecture/remote-mcp.md) and [overlap notices](docs/architecture/overlap-notices.md).
 
 ## Client coverage
 
@@ -327,7 +331,7 @@ Capture support depends on the exact **client, version, operating system and sur
 
 Other versions and surfaces are not implied supported. The updated Codex `0.162.0-alpha.17.2` was rejected by the pinned adapter. Held sessions do not become complete because a later message looks clean; follow the adapter's reset/new-session guidance.
 
-Read [adapter setup](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/adapters/setup.md), [native acceptance](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/reviews/2026-10-09-native-capture-acceptance.md) and [the native follow-up](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/reviews/2026-10-10-native-capture-follow-up.md) for exact evidence and limits.
+Read [adapter setup](docs/adapters/setup.md), [native acceptance](docs/reviews/2026-10-09-native-capture-acceptance.md) and [the native follow-up](docs/reviews/2026-10-10-native-capture-follow-up.md) for exact evidence and limits.
 
 ## Privacy and security
 
@@ -342,9 +346,11 @@ The architecture uses explicit scope and separate permissions throughout:
 
 Screening and local inference reduce exposure, but they do not guarantee perfect redaction. Review summaries before submission. A local model is another local processing boundary, and client-owned transcript retention is outside this collector's control.
 
-Server pause blocks uploads immediately; local pause is pending until the collector receives it. An offline revoked collector may continue local capture until it observes revocation. Logical expiry and live-database cleanup do not instantly erase WAL or retained backups. See [device controls](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/install.md#renewal-and-device-controls), [retention](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/hosted-portal.md#physical-retention-worker) and [restore](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/restore.md).
+Hook capture failures let development continue. The hosted **Devices** page highlights reported missing context and distinguishes missing, stale and unknown reports, with local recovery guidance. Refreshing a report or resetting capture does not recover missing messages. A connection cannot prove complete capture, and some missing callbacks are undetectable. Existing code-change review requirements and summary privacy holds still apply.
 
-The known runtime dependency advisory **RUSTSEC-2023-0071** remains a release gate. Production security certification and penetration testing are pending. For sensitive findings, follow [SECURITY.md](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/SECURITY.md); do not put credentials or real chats in public issues.
+Server pause blocks uploads immediately; local pause is pending until the collector receives it. An offline revoked collector may continue local capture until it observes revocation. Logical expiry and live-database cleanup do not instantly erase WAL or retained backups. See [device controls](docs/operations/install.md#renewal-and-device-controls), [retention](docs/operations/hosted-portal.md#physical-retention-worker) and [restore](docs/operations/restore.md).
+
+The earlier **RUSTSEC-2023-0071** dependency was removed using a pinned AWS-LC OIDC backend and PostgreSQL-only dependencies. Read the [dependency assessment](docs/security/rsa-runtime-disposition.md) for provenance, maintenance warning and test scope. Production security certification and penetration testing are pending. For sensitive findings, follow [SECURITY.md](SECURITY.md); do not put credentials or real chats in public issues.
 
 ## Server operations and sizing
 
@@ -352,13 +358,13 @@ Local inference runs on developer machines in the current capture architecture. 
 
 | Operation | Starting point |
 |---|---|
-| Readiness and request bounds | [Hosted deployment bounds](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/hosted-portal.md#deployment-bounds) |
-| Membership, policy and device administration | [Administrative boundaries](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/hosted-portal.md#administrative-boundaries) |
-| Physical expiry cleanup | [Retention worker](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/hosted-portal.md#physical-retention-worker) |
-| Encrypted backups and independent deletion journals | [Backup](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/backup.md) |
-| Restore without resurrecting deleted private notes or authority | [Restore](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/restore.md) |
-| Migration and rollback preparation | [Upgrade](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/upgrade.md) |
-| Collector removal and owned-hook cleanup | [Uninstall](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/uninstall.md) |
+| Readiness and request bounds | [Hosted deployment bounds](docs/operations/hosted-portal.md#deployment-bounds) |
+| Membership, policy and device administration | [Administrative boundaries](docs/operations/hosted-portal.md#administrative-boundaries) |
+| Physical expiry cleanup | [Retention worker](docs/operations/hosted-portal.md#physical-retention-worker) |
+| Encrypted backups and independent deletion journals | [Backup](docs/operations/backup.md) |
+| Restore without resurrecting deleted private notes or authority | [Restore](docs/operations/restore.md) |
+| Migration and rollback preparation | [Upgrade](docs/operations/upgrade.md) |
+| Collector removal and owned-hook cleanup | [Uninstall](docs/operations/uninstall.md) |
 
 For planning only, five developers publishing **50 summaries each per day at 10 KiB each** add about **2.44 MiB/day**, or **0.87 GiB/year**, of shared JSON bodies before metadata and revisions. Thirty days of corresponding private copies add about **73.2 MiB**. Indexes, retained revisions, audit/idempotency/deletion metadata, WAL and backups add storage; some metadata currently grows indefinitely.
 
@@ -386,7 +392,7 @@ docs/         Architecture, setup, operations, security and acceptance records
 
 ### Build and test
 
-From the implementation branch's repository root (cloned in the Quickstart):
+From the repository root:
 
 ```sh
 ./scripts/cargo fmt --all -- --check
@@ -409,20 +415,20 @@ npm test
 npm run build
 ```
 
-Linux runners may need `npx playwright install --with-deps chromium`. See [CONTRIBUTING.md](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/CONTRIBUTING.md) for database tests, a local development server and the distinction between legacy development-token views and the full OIDC portal. CI includes Rust checks across Linux/macOS/Windows, PostgreSQL integration and console checks; CI configuration is not native-client or production certification.
+Linux runners may need `npx playwright install --with-deps chromium`. See [CONTRIBUTING.md](CONTRIBUTING.md) for database tests, a local development server and the distinction between legacy development-token views and the full OIDC portal. CI includes Rust checks across Linux/macOS/Windows, PostgreSQL integration and console checks; CI configuration is not native-client or production certification.
 
 ## Documentation
 
 | Area | Guides |
 |---|---|
-| Getting started | [Installation](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/install.md) · [Collector/client setup](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/adapters/setup.md) |
-| Team workflow | [Console](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/console.md) · [Code-change context](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/code-change-context.md) · [Overlap notices](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/overlap-notices.md) |
-| Architecture | [Backend and identity](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/backend.md) · [Private capture](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/private-capture-journal.md) · [MCP](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/remote-mcp.md) · [Schemas](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/schemas/README.md) |
-| Evidence and assessment | [Evidence connectors](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/evidence-connectors.md) · [Advisory decision layer](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/jev-decisions.md) |
-| Operations | [Hosted portal](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/hosted-portal.md) · [Backup](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/backup.md) · [Restore](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/restore.md) · [Upgrade](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/upgrade.md) · [Uninstall](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/uninstall.md) |
-| Separate environment tooling | [OpenBao environment broker](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/environments.md) |
-| Security | [Threat model](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/security/threat-model.md) · [Reporting](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/SECURITY.md) |
-| Project status | [Implementation/release gates](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/completion-matrix.md) · [Hosted acceptance](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/reviews/2026-10-10-hosted-operations-acceptance.md) · [Code-context acceptance](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/reviews/2026-10-11-code-change-context-acceptance.md) |
+| Getting started | [Installation](docs/operations/install.md) · [Collector/client setup](docs/adapters/setup.md) |
+| Team workflow | [Console](docs/architecture/console.md) · [Code-change context](docs/architecture/code-change-context.md) · [Overlap notices](docs/architecture/overlap-notices.md) |
+| Architecture | [Backend and identity](docs/architecture/backend.md) · [Private capture](docs/architecture/private-capture-journal.md) · [MCP](docs/architecture/remote-mcp.md) · [Schemas](docs/architecture/schemas/README.md) |
+| Evidence and assessment | [Evidence connectors](docs/architecture/evidence-connectors.md) · [Advisory decision layer](docs/architecture/jev-decisions.md) |
+| Operations | [Hosted portal](docs/operations/hosted-portal.md) · [Backup](docs/operations/backup.md) · [Restore](docs/operations/restore.md) · [Upgrade](docs/operations/upgrade.md) · [Uninstall](docs/operations/uninstall.md) |
+| Separate environment tooling | [OpenBao environment broker](docs/operations/environments.md) |
+| Security | [Threat model](docs/security/threat-model.md) · [Reporting](SECURITY.md) |
+| Project status | [Implementation/release gates](docs/architecture/completion-matrix.md) · [Hosted acceptance](docs/reviews/2026-10-10-hosted-operations-acceptance.md) · [Code-context acceptance](docs/reviews/2026-10-11-code-change-context-acceptance.md) · [Design history](docs/design-history/README.md) |
 
 ## Limitations and release status
 
@@ -431,15 +437,17 @@ The repository includes implementation and synthetic/local acceptance records. I
 | Area | Remaining work or boundary |
 |---|---|
 | Capture | Partial and version-pinned adapters; held Antigravity turns; unsupported surfaces and mixed context remain uncovered |
-| Edit protection | Supported Claude Code host acceptance is pending; shell, external/manual writes and other clients are uncovered |
+| Edit protection | Claude Code 2.1.296 local Edit/Write flow passed; MultiEdit/cloud behavior, shell, external/manual writes and other clients remain uncovered |
 | Knowledge completeness | Undocumented rationale and dependencies remain gaps; source-backed briefs cannot guarantee a safe change |
 | Identity/deployment | Production-provider OIDC/TLS acceptance and real-client remote OAuth certification remain |
-| Native distribution | Signed packaging, user-session startup and target-platform certification remain |
-| Security | Known runtime RSA advisory, privacy-corpus work and production security assessment remain |
-| Capacity | Local synthetic pilot evidence only; target-server soak testing and protected-edit workload measurement remain |
-| Optional components | Semantic retrieval needs an approved embedding endpoint/evaluation; advisory assessment needs an approved endpoint; Enterprise capture needs entitlement and live acceptance |
+| Native distribution | Owned macOS source installation/Keychain/user-session startup passed; Apple signing/notarization and distributed installer acceptance remain |
+| Security | RSA dependency removed; one informational PEM-parser maintenance warning; strict model-sensitive corpus failed; production security assessment remains |
+| Capacity | Ten-minute local five-identity soak passed; target-server/team, long-duration capacity and protected-edit workload measurement remain |
+| Optional components | Hybrid retrieval requires explicit pgvector/local model configuration and indexing; representative quality/provider capacity remain unqualified. Advisory assessment needs an approved endpoint; Enterprise capture needs entitlement and live acceptance |
 
-Release work should prioritize these gates before broader support claims. The [completion matrix](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/architecture/completion-matrix.md) and dated acceptance records distinguish implemented paths from externally verified behavior.
+The first candidate targets a Linux Docker server and macOS developers. See the [bounded v0.1 checklist](docs/operations/v0.1-release.md) and [earlier readiness evidence](docs/reviews/2026-10-12-v0.1-readiness.md). Production identity testing is deferred. See the [dependency remediation evidence](docs/reviews/2026-10-13-oidc-rsa-remediation.md) and exact-head PR checks for current audit status.
+
+Release work should prioritize these gates before broader support claims. The [completion matrix](docs/architecture/completion-matrix.md) and dated acceptance records distinguish implemented paths from externally verified behavior.
 
 ## Troubleshooting
 
@@ -453,7 +461,7 @@ Release work should prioritize these gates before broader support claims. The [c
 | Protection enrollment refuses Claude Code | Check the minimum version and device/repository enrollment; do not treat refused enrollment as active protection |
 | A covered edit is blocked after review | The receipt may be expired, consumed or bound to a different snapshot/input; request a fresh brief and review the reported gaps |
 
-Use [adapter setup](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/adapters/setup.md) and [installation](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/docs/operations/install.md) for recovery steps. Share only synthetic reproductions and content-free diagnostics when filing a report.
+Use [adapter setup](docs/adapters/setup.md) and [installation](docs/operations/install.md) for recovery steps. Share only synthetic reproductions and content-free diagnostics when filing a report.
 
 ## FAQ
 
@@ -489,9 +497,9 @@ No. It records review of a bounded brief for a covered operation. It does not pr
 
 Contributions are welcome: reproducible bug reports, documentation improvements, adapter fixtures and tests that strengthen scope, identity and privacy boundaries are useful starting points.
 
-Read [CONTRIBUTING.md](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/CONTRIBUTING.md) for build instructions and contribution policy. Use synthetic fixtures and include affected revisions/client versions in reports. Keep credentials, real conversations, customer data and private captures out of issues, screenshots and pull requests. Sign commits with `git commit -s` under the Developer Certificate of Origin.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions and contribution policy. Use synthetic fixtures and include affected revisions/client versions in reports. Keep credentials, real conversations, customer data and private captures out of issues, screenshots and pull requests. Sign commits with `git commit -s` under the Developer Certificate of Origin. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-Use the [issue tracker](https://github.com/DharanesshMD/workspace-knowledge/issues) for non-sensitive bugs and proposals. Follow [SECURITY.md](https://github.com/DharanesshMD/workspace-knowledge/blob/afb172dbedacd6e78375524dfff8b156d11d95c5/SECURITY.md) for sensitive vulnerability reports.
+Use the [issue tracker](https://github.com/DharanesshMD/workspace-knowledge/issues) for non-sensitive bugs and proposals. Follow [SECURITY.md](SECURITY.md) for sensitive vulnerability reports.
 
 ## License
 

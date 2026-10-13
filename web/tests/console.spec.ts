@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+test.beforeEach(async({page})=>{await page.route('**/auth/config',r=>r.fulfill({json:{browser_login:false,development:true}}));});
 test('shows authentication failures without persisting credentials',async({page})=>{
  await page.route('**/v1/search',route=>route.fulfill({status:401,contentType:'application/json',body:'{"error":"unauthenticated"}'}));
  await page.goto('/');await page.getByLabel('Product ID').fill('demo');await page.getByLabel('Access token').fill('SYNTHETIC_TOKEN');await page.getByRole('button',{name:'Connect',exact:true}).click();
@@ -17,6 +18,16 @@ test('console remains usable on a narrow viewport',async({page})=>{
 
 const summaries = ['First limiter','Replacement limiter'].map((title,i)=>({id:`00000000-0000-0000-0000-00000000000${i+1}`,revision:i+1,published:true,body:{schema_version:1,idempotency_key:`card-${i}`,policy_revision:1,title,intent:'Tenant limits',rationale:'Shared middleware',decisions:[],constraints:[],open_questions:[],service_ids:['backend'],evidence:[],lifecycle:'proposed',capture_completeness:'complete',base_revision:null}}));
 async function connect(page:import('@playwright/test').Page){await page.goto('/');await page.getByLabel('Product ID').fill('demo');await page.getByLabel('Access token').fill('SYNTHETIC');await page.getByRole('button',{name:'Connect',exact:true}).click();}
+test('search reports actual retrieval and clears stale diagnostics after failure or legacy response',async({page})=>{
+ let calls=0;await page.route('**/v1/search',r=>{calls++;return r.fulfill(calls===3?{status:503,json:{error:'unavailable'}}:{json:{cards:summaries,...(calls===1?{retrieval:{mode:'hybrid'}}:calls===2?{retrieval:{mode:'lexical',reason:'embedding_model_changed'}}:{})}});});
+ await connect(page);await page.getByLabel('Search product knowledge').fill('duplicate operations');
+ const method=page.getByRole('status',{name:'Search method'});
+ await page.getByRole('button',{name:'Search',exact:true}).click();await expect(method).toContainText('Keyword + semantic search');
+ await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);await page.screenshot({path:'test-results/hybrid-search-mobile.png',fullPage:true});await page.setViewportSize({width:1440,height:1000});await page.screenshot({path:'test-results/hybrid-search-desktop.png',fullPage:true});
+ await page.getByRole('button',{name:'Search',exact:true}).click();await expect(method).toContainText('Keyword search');await expect(method).toContainText('model changed');
+ await page.getByRole('button',{name:'Search',exact:true}).click();await expect(page.getByRole('alert')).toBeVisible();await expect(method).toHaveCount(0);
+ await page.getByRole('button',{name:'Search',exact:true}).click();await expect(page.getByRole('alert')).toHaveCount(0);await expect(page.getByRole('button').filter({hasText:'First limiter'})).toBeVisible();await expect(method).toHaveCount(0);
+});
 test('reviewed supersession uses exact revisions and rejects stale choices',async({page})=>{
  await page.route('**/v1/policy?*',r=>r.fulfill({json:{policy:{can_review:true}}}));await page.route('**/v1/products/demo/graph',r=>r.fulfill({json:{nodes:[],edges:[]}}));await page.route('**/v1/search',r=>r.fulfill({json:{cards:summaries}}));
  let attempts=0;await page.route('**/v1/products/demo/relationships',r=>{expect(r.request().postDataJSON()).toEqual({source_card:summaries[1].id,target_card:summaries[0].id,source_revision:2,target_revision:1,kind:'supersedes'});return r.fulfill({status:++attempts===1?409:200,json:{linked:attempts>1}});});

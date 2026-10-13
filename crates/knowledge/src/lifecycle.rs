@@ -6,14 +6,22 @@ pub struct Policy {
     pub services: Vec<String>,
     pub can_review: bool,
     pub policy_revision: i64,
+    pub restrictions: admin::ProductPolicy,
 }
 impl Knowledge {
     pub async fn policy(&self, a: &Actor, product: &str) -> Result<Policy, Error> {
+        self.device_scope(product, &[])?;
         let mut tx = self.actor_tx(a).await?;
         let r=sqlx::query("SELECT services,can_review,policy_revision FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3").bind(&a.org).bind(product).bind(&a.user).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
+        let restrictions = Self::product_restrictions(&mut tx, a, product).await?;
         Ok(Policy {
             product: product.into(),
-            services: r.try_get("services").map_err(db)?,
+            restrictions,
+            services: if let Some(g) = &self.device_guard {
+                g.services.clone()
+            } else {
+                r.try_get("services").map_err(db)?
+            },
             can_review: r.try_get("can_review").map_err(db)?,
             policy_revision: r.try_get("policy_revision").map_err(db)?,
         })
@@ -52,7 +60,7 @@ impl Knowledge {
         services: &[String],
         revision: i64,
     ) -> Result<uuid::Uuid, Error> {
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         if !wk_contracts::valid_id(device)
             || approval.len() != 64
             || !approval.bytes().all(|b| b.is_ascii_hexdigit())
@@ -67,7 +75,7 @@ impl Knowledge {
         Ok(id)
     }
     pub async fn review_queue(&self, a: &Actor, product: &str) -> Result<Vec<Card>, Error> {
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.can_review AND m.services @> c.services AND NOT c.published AND NOT c.withdrawn ORDER BY c.id LIMIT 100").bind(&a.user).bind(&a.org).bind(product).fetch_all(&mut *tx).await.map_err(db)?;
         rows.into_iter().map(decode).collect()
     }
@@ -79,16 +87,17 @@ impl Knowledge {
         body: CardSubmission,
     ) -> Result<Card, Error> {
         body.validate().map_err(|_| Error::Invalid)?;
+        let v = serde_json::to_value(&body).map_err(|_| Error::Invalid)?;
+        validate_shared_body(&v)?;
         let base =
             i64::try_from(body.base_revision.ok_or(Error::Invalid)?).map_err(|_| Error::Invalid)?;
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         let r=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND c.id=$4 AND NOT c.withdrawn AND m.services @> c.services AND m.services @> $5::text[] AND (c.author=$1 OR m.can_review) AND m.policy_revision=$6 FOR UPDATE OF c FOR SHARE OF m").bind(&a.user).bind(&a.org).bind(product).bind(id).bind(&body.service_ids).bind(i64::try_from(body.policy_revision).map_err(|_|Error::Invalid)?).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
         let old = decode(r)?;
         if old.revision != base {
             return Err(Error::Conflict);
         }
         sqlx::query("INSERT INTO card_revisions(org,product,card_id,revision,body,changed_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING").bind(&a.org).bind(product).bind(id).bind(base).bind(serde_json::to_value(&old.body).map_err(|_|Error::Invalid)?).bind(&a.user).execute(&mut *tx).await.map_err(db)?;
-        let v = serde_json::to_value(&body).map_err(|_| Error::Invalid)?;
         let r=sqlx::query("UPDATE cards SET body=$1,services=$2,revision=revision+1,published=FALSE WHERE id=$3 RETURNING id,body,revision,published").bind(&v).bind(&body.service_ids).bind(id).fetch_one(&mut *tx).await.map_err(db)?;
         sqlx::query("INSERT INTO card_revisions(org,product,card_id,revision,body,changed_by) VALUES($1,$2,$3,$4,$5,$6)").bind(&a.org).bind(product).bind(id).bind(base+1).bind(v).bind(&a.user).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("DELETE FROM graph_nodes WHERE org=$1 AND product=$2 AND card_id=$3")
@@ -117,7 +126,7 @@ impl Knowledge {
         id: uuid::Uuid,
         revision: i64,
     ) -> Result<(), Error> {
-        let mut tx = self.actor_tx(a).await?;
+        let mut tx = self.code_tx(a, product).await?;
         let r=sqlx::query("SELECT c.revision FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND c.id=$4 AND m.services @> c.services AND (c.author=$1 OR m.can_review) AND NOT c.withdrawn FOR UPDATE OF c FOR SHARE OF m").bind(&a.user).bind(&a.org).bind(product).bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::NotFound)?;
         if r.try_get::<i64, _>("revision").map_err(db)? != revision {
             return Err(Error::Conflict);
