@@ -340,6 +340,8 @@ The architecture uses explicit scope and separate permissions throughout:
 
 Screening and local inference reduce exposure, but they do not guarantee perfect redaction. Review summaries before submission. A local model is another local processing boundary, and client-owned transcript retention is outside this collector's control.
 
+Hook capture failures let development continue. The hosted **Devices** page highlights reported missing context and distinguishes missing, stale and unknown reports, with local recovery guidance. Refreshing a report or resetting capture does not recover missing messages. A connection cannot prove complete capture, and some missing callbacks are undetectable. Existing code-change review requirements and summary privacy holds still apply.
+
 Server pause blocks uploads immediately; local pause is pending until the collector receives it. An offline revoked collector may continue local capture until it observes revocation. Logical expiry and live-database cleanup do not instantly erase WAL or retained backups. See [device controls](docs/operations/install.md#renewal-and-device-controls), [retention](docs/operations/hosted-portal.md#physical-retention-worker) and [restore](docs/operations/restore.md).
 
 The earlier **RUSTSEC-2023-0071** dependency was removed using a pinned AWS-LC OIDC backend and PostgreSQL-only dependencies. Read the [dependency assessment](docs/security/rsa-runtime-disposition.md) for provenance, maintenance warning and test scope. Production security certification and penetration testing are pending. For sensitive findings, follow [SECURITY.md](SECURITY.md); do not put credentials or real chats in public issues.
