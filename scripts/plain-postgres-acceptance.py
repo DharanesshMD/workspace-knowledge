@@ -17,8 +17,10 @@ def main():
         docker('run', '-d', '--name', name, '--label', 'wk.fixture=plain-postgres',
                '-e', 'POSTGRES_USER=wk_test', '-e', 'POSTGRES_DB=wk_test',
                '-e', 'POSTGRES_PASSWORD=' + password, '-p', '127.0.0.1::5432', 'postgres:17')
+        # TCP readiness: the image's init-time server listens only on the Unix socket
+        # and restarts afterwards, so a socket check can pass before the real server.
         for _ in range(120):
-            if subprocess.run(['docker', 'exec', name, 'pg_isready', '-U', 'wk_test'],
+            if subprocess.run(['docker', 'exec', name, 'pg_isready', '-h', '127.0.0.1', '-U', 'wk_test'],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
                 break
             time.sleep(.5)
