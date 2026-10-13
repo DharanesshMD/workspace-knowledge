@@ -53,6 +53,6 @@
 **Interfaces:** Consume prepared source-only candidate. Produce verified setup evidence, one fresh review, committed/pushed reviewable result and an approval-ready decision packet.
 
 - [x] Export only tracked candidate source to a fresh owned directory, excluding private Cargo/tool symlinks and generated state. Build/demo with the real pinned Cargo; run appropriate existing Python checks. Expected: demo passes using fresh source and synthetic temporary state, no global install/profile mutation.
-- [ ] Re-run redacted source/history scan and validate docs/YAML after final edits. No need to repeat unchanged PostgreSQL/model/load suites; retain exact prior evidence and failed gates.
-- [ ] Request one fresh whole-change review covering Task1 inventory and docs/support/approval claims. Fix reproduced Important findings with meaningful regression or document correction; defer minor findings explicitly.
+- [x] Re-run redacted source/history scan and validate docs/YAML after final edits. No need to repeat unchanged PostgreSQL/model/load suites; retain exact prior evidence and failed gates.
+- [x] Request one fresh whole-change review covering Task1 inventory and docs/support/approval claims. Fix reproduced Important findings with meaningful regression or document correction; defer minor findings explicitly.
 - [ ] Commit/push candidate, update the existing draft PR and assess exact-head checks. Prepare final approval request only after the candidate/remaining risk decision is concrete. Repository remains private unless the user approves that step.
