@@ -340,11 +340,12 @@ impl Knowledge {
         query: &str,
         limit: u32,
     ) -> Result<Vec<Card>, Error> {
+        self.device_scope(product, &[])?;
         let mut tx = self.actor_tx(actor).await?;
         if query.trim().is_empty() || query.len() > 1024 || limit == 0 || limit > 20 {
             return Err(Error::Invalid);
         }
-        let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND to_tsvector('simple',(c.body->>'title') || ' ' || (c.body->>'intent') || ' ' || (c.body->>'rationale') || ' ' || COALESCE(c.body->>'decisions','') || ' ' || COALESCE(c.body->>'constraints','') || ' ' || COALESCE(c.body->>'open_questions','')) @@ plainto_tsquery('simple',$4) ORDER BY c.id LIMIT $5").bind(&actor.user).bind(&actor.org).bind(product).bind(query).bind(i64::from(limit)).fetch_all(&mut *tx).await.map_err(db)?;
+        let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND ($6::text[] IS NULL OR $6::text[] @> c.services) AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND to_tsvector('simple',(c.body->>'title') || ' ' || (c.body->>'intent') || ' ' || (c.body->>'rationale') || ' ' || COALESCE(c.body->>'decisions','') || ' ' || COALESCE(c.body->>'constraints','') || ' ' || COALESCE(c.body->>'open_questions','')) @@ plainto_tsquery('simple',$4) ORDER BY c.id LIMIT $5").bind(&actor.user).bind(&actor.org).bind(product).bind(query).bind(i64::from(limit)).bind(self.device_guard.as_ref().map(|g|g.services.clone())).fetch_all(&mut *tx).await.map_err(db)?;
         rows.into_iter().map(decode).collect()
     }
 }

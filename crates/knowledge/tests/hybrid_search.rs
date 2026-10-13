@@ -196,6 +196,26 @@ async fn semantic_matches_only_current_permitted_published_cards_and_runtime_is_
         .semantic_store(&f.alice.org, "demo", &ns, old, &[1., 0., 0.])
         .await
         .is_err());
+    let device =
+        f.k.device_register(
+            &f.alice,
+            wk_contracts::device::DeviceRegistration {
+                id: uuid::Uuid::new_v4(),
+                public_key: "a".repeat(64),
+                approval_hash: "b".repeat(64),
+                product: "demo".into(),
+                services: vec!["backend".into()],
+            },
+        )
+        .await
+        .unwrap();
+    let guarded =
+        f.k.device_bound(&device, wk_knowledge::devices::DevicePermission::Read);
+    assert!(guarded
+        .search(&f.alice, "demo", "idempotency", 5)
+        .await
+        .unwrap()
+        .is_empty());
     common::cleanup_runtime(&f, pool, role).await;
 }
 #[tokio::test]

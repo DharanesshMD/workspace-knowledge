@@ -6,12 +6,14 @@ mod browser_routes;
 mod change_routes;
 pub mod decisions;
 pub mod device_routes;
+pub mod embeddings;
 pub mod environments;
 mod health;
 mod personal_routes;
 pub mod remote_mcp;
 pub mod retention_worker;
 pub mod runtime;
+pub mod semantic;
 mod team_routes;
 use axum::{
     extract::{rejection::JsonRejection, DefaultBodyLimit, Path, Query, State},
@@ -27,6 +29,7 @@ use std::{collections::HashMap, sync::Arc};
 use wk_knowledge::{Actor, Error, Knowledge};
 #[derive(Clone)]
 struct Api {
+    embeddings: Option<Arc<embeddings::Embeddings>>,
     health_slots: Arc<tokio::sync::Semaphore>,
     decisions: Arc<std::sync::OnceLock<Result<decisions::Jev, String>>>,
     knowledge: Knowledge,
@@ -138,11 +141,9 @@ async fn search(
     if wk_summarize::sensitive(&request.query) {
         return Err(Failure(StatusCode::UNPROCESSABLE_ENTITY, "sensitive_query"));
     }
-    let cards = api
-        .knowledge
-        .search(&who, &request.product, &request.query, request.limit)
-        .await?;
-    Ok(Json(json!({"cards":cards})))
+    Ok(Json(
+        semantic::search_for(&api, &who, &request.product, &request.query, request.limit).await?,
+    ))
 }
 async fn submit(
     State(api): State<Api>,
@@ -469,6 +470,17 @@ pub fn portal_router_with_collector(
     browser: Option<browser_auth::BrowserAuth>,
     collector: Option<device_routes::CollectorAuth>,
 ) -> Result<Router, String> {
+    portal_router_with_embeddings(knowledge, tokens, oidc, origin, browser, collector, None)
+}
+pub fn portal_router_with_embeddings(
+    knowledge: Knowledge,
+    tokens: Vec<(String, Actor)>,
+    oidc: Option<auth::Oidc>,
+    origin: Option<String>,
+    browser: Option<browser_auth::BrowserAuth>,
+    collector: Option<device_routes::CollectorAuth>,
+    embeddings: Option<embeddings::Embeddings>,
+) -> Result<Router, String> {
     if let Some(c) = &collector {
         c.validate(oidc.as_ref(), origin.as_deref(), &tokens)?;
     }
@@ -482,6 +494,7 @@ pub fn portal_router_with_collector(
         .map(|(token, actor)| (Sha256::digest(token.as_bytes()).into(), actor))
         .collect();
     let api = Api {
+        embeddings: embeddings.map(Arc::new),
         health_slots: Arc::new(tokio::sync::Semaphore::new(1)),
         decisions: Arc::new(std::sync::OnceLock::new()),
         knowledge,

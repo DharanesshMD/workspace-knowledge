@@ -245,16 +245,15 @@ impl KnowledgeMcp {
         match path {
             "/v1/search" => {
                 let b = body.ok_or_else(|| error("missing input"))?;
-                let cards = k
-                    .search(
-                        a,
-                        p,
-                        b["query"].as_str().unwrap_or_default(),
-                        b["limit"].as_u64().unwrap_or(0) as u32,
-                    )
-                    .await
-                    .map_err(denied)?;
-                Ok(json!({"cards":cards}))
+                crate::semantic::search_for(
+                    &self.api,
+                    a,
+                    p,
+                    b["query"].as_str().unwrap_or_default(),
+                    b["limit"].as_u64().unwrap_or(0) as u32,
+                )
+                .await
+                .map_err(|_| error("knowledge request denied or unavailable"))
             }
             "/v1/cards" => {
                 let card = serde_json::from_value(
@@ -326,7 +325,11 @@ impl KnowledgeMcp {
             .as_array()
             .ok_or_else(|| error("invalid search response"))?;
         let previews:Vec<Value>=cards.iter().map(|c|json!({"id":c["id"],"title":c["body"]["title"],"intent":c["body"]["intent"].as_str().unwrap_or("").chars().take(400).collect::<String>(),"revision":c["revision"],"lifecycle":c["body"]["lifecycle"],"services":c["body"]["service_ids"]})).collect();
-        output(json!({"cards":previews}))
+        let mut preview = json!({"cards":previews});
+        if let Some(status) = wk_contracts::retrieval::diagnostics(result.get("retrieval")) {
+            preview["retrieval"] = status;
+        }
+        output(preview)
     }
     #[tool(
         name = "knowledge.get",
@@ -362,23 +365,16 @@ impl KnowledgeMcp {
         let cards = result["cards"]
             .as_array()
             .ok_or_else(|| error("invalid search response"))?;
-        output(bounded_context(cards, args.budget_tokens))
+        output(wk_contracts::retrieval::context(
+            cards,
+            args.budget_tokens,
+            result.get("retrieval"),
+        ))
     }
 }
+#[cfg(test)]
 fn bounded_context(cards: &[Value], budget: usize) -> Value {
-    let mut output = json!({"cards":[],"omitted":false});
-    for card in cards {
-        let item = json!({"id":card["id"],"title":card["body"]["title"],"revision":card["revision"],"lifecycle":card["body"]["lifecycle"]});
-        let mut candidate = output.clone();
-        candidate["cards"].as_array_mut().unwrap().push(item);
-        // UTF-8 byte count is a deliberately conservative token upper bound.
-        if candidate.to_string().len() <= budget {
-            output = candidate;
-        } else {
-            output["omitted"] = json!(true);
-        }
-    }
-    output
+    wk_contracts::retrieval::context(cards, budget, None)
 }
 #[tool_handler]
 impl ServerHandler for KnowledgeMcp {

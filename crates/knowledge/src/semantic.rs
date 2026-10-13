@@ -76,7 +76,26 @@ impl Knowledge {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
+        sqlx::raw_sql(
+            "CREATE TABLE IF NOT EXISTS wk_semantic_migrations(version INTEGER PRIMARY KEY)",
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+        let installed: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM wk_semantic_migrations WHERE version=1)",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
+        if installed {
+            return tx.commit().await.map_err(db);
+        }
         sqlx::raw_sql(include_str!("../../../migrations/semantic/0001.sql"))
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        sqlx::query("INSERT INTO wk_semantic_migrations(version) VALUES(1)")
             .execute(&mut *tx)
             .await
             .map_err(db)?;
