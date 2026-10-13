@@ -45,7 +45,10 @@ async def main():
         query = {'product': 'demo', 'query': marker, 'limit': 5}
         assert post(base + '/v1/search', token, query)['cards'] == []
         post(base + '/v1/cards/' + card['id'] + '/publish', token, {'product': 'demo'})
-        assert len(post(base + '/v1/search', token, query)['cards']) == 1
+        published = post(base + '/v1/search', token, query)
+        assert len(published['cards']) == 1
+        if os.environ.get('WK_EXPECT_RETRIEVAL_REASON'):
+            assert published['retrieval'] == {'mode': 'lexical', 'reason': os.environ['WK_EXPECT_RETRIEVAL_REASON']}
         def remote_rpc(method, params, identity=token, origin=None):
             headers={'Authorization':'Bearer '+identity,'Content-Type':'application/json','Accept':'application/json, text/event-stream','MCP-Protocol-Version':'2025-03-26'}
             if origin: headers['Origin']=origin
@@ -83,7 +86,7 @@ async def main():
         result = await rpc({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'knowledge.search', 'arguments': {'query': marker, 'limit': 5}}})
         assert not result.get('isError', False)
         assert card['id'] in json.dumps(result)
-        context = await rpc({'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call', 'params': {'name': 'knowledge.context', 'arguments': {'query': marker, 'budget_tokens': 200}}})
+        context = await rpc({'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call', 'params': {'name': 'knowledge.context', 'arguments': {'query': marker, 'budget_tokens': 500}}})
         assert card['id'] in json.dumps(context)
         replacement_body = dict(body, idempotency_key=marker + '-replacement')
         replacement = post(base + '/v1/cards', token, {'product':'demo','card':replacement_body})['card']

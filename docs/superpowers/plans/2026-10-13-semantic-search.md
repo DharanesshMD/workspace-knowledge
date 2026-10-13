@@ -14,7 +14,7 @@
 
 - Core schema versions1–17 and ordinary PostgreSQL remain unchanged; semantic migration/operator commands explicit.
 - Published current summaries only; never raw/private/draft/environment/contact data; no text/vector/error-detail logging.
-- Exact permission-filtered cosine search; candidate limits20+20; result limit1–20; RRF60, stable ties; no new edit permissions.
+- Exact permission-filtered cosine search, initial Nomic similarity floor0.6; candidate limits20+20; result limit1–20; RRF60, stable ties; no new edit permissions.
 - Loopback HTTP provider only, strict URL/model/digest/dimension bounds, no redirects/proxies, response cap1MiB, input cap16KiB, query3s/index30s, concurrency2; truncate:false.
 - Namespace includes model/digest/dimensions/nomic-search-v1; wrong provider/model/dimensions never use old vectors.
 - Operator indexing20/pass; failures retry after300s; runtime SELECT only. Optional feature disabled without explicit complete configuration.

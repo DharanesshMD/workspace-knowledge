@@ -164,6 +164,11 @@ async fn semantic_matches_only_current_permitted_published_cards_and_runtime_is_
         found.iter().map(|c| c.id).collect::<Vec<_>>(),
         vec![backend.id]
     );
+    assert!(runtime
+        .semantic_candidates(&f.reader, "demo", &ns, &[-1., 0., 0.], 5)
+        .await
+        .unwrap()
+        .is_empty());
     let readable: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT card_id FROM card_embeddings")
         .fetch_all(&pool)
         .await

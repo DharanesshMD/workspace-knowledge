@@ -1,0 +1,50 @@
+# Explicit optional overlay. Existing PostgreSQL deployments keep compose.yaml.
+# Review backup/extension upgrade compatibility before changing an existing volume.
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg17-bookworm
+  app:
+    environment:
+      WK_EMBEDDING_URL: http://127.0.0.1:11434/api/embed
+      WK_EMBEDDING_MODEL: ${WK_EMBEDDING_MODEL:?Set approved Nomic model tag}
+      WK_EMBEDDING_DIGEST: ${WK_EMBEDDING_DIGEST:?Set approved model digest}
+      WK_EMBEDDING_DIMENSIONS: '768'
+  embeddings:
+    image: ollama/ollama:0.35.1
+    network_mode: service:app
+    depends_on: [app]
+    cpus: '${WK_EMBEDDING_CPUS:-2}'
+    mem_limit: '${WK_EMBEDDING_MEMORY:-2g}'
+    pids_limit: 256
+    environment:
+      OLLAMA_HOST: 127.0.0.1:11434
+      OLLAMA_NO_CLOUD: '1'
+      OLLAMA_NUM_PARALLEL: '1'
+    volumes: ['embedding-models:/root/.ollama']
+    read_only: true
+    tmpfs: ['/tmp']
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    restart: unless-stopped
+  semantic-index:
+    profiles: [semantic-tools]
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+    network_mode: service:app
+    command: [semantic-index]
+    stdin_open: true
+    environment:
+      # Supply separately protected operator credentials for this short-lived tool.
+      # Never replace the app's restricted WK_DATABASE_URL with this URL.
+      WK_DATABASE_URL: ${WK_SEMANTIC_OPERATOR_DATABASE_URL:-}
+      WK_EMBEDDING_URL: http://127.0.0.1:11434/api/embed
+      WK_EMBEDDING_MODEL: ${WK_EMBEDDING_MODEL:?Set approved Nomic model tag}
+      WK_EMBEDDING_DIGEST: ${WK_EMBEDDING_DIGEST:?Set approved model digest}
+      WK_EMBEDDING_DIMENSIONS: '768'
+    read_only: true
+    tmpfs: ['/tmp']
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+volumes:
+  embedding-models:

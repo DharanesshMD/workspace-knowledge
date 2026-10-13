@@ -285,6 +285,12 @@ Configuration remains labeled `configured_unverified` for each installation. An 
 
 ## Coding-agent integration
 
+### Optional semantic search
+
+Enable private hybrid retrieval with **pgvector inside PostgreSQL** and a reviewed local Nomic embedding model. Keyword search remains the default. Hybrid mode searches by both wording and meaning over published summaries; raw conversations, owner-only notes and unpublished drafts are excluded from the vector index. File/revision evidence still determines confirmed attribution and rationale applicability.
+
+Setup uses a separate optional migration, read-only runtime grants and a bounded operator index pass. HTTP, MCP and the portal report the retrieval mode and keyword fallback when the model or index is unavailable. Review [semantic setup, boundaries and evaluation](docs/architecture/semantic-search.md) before enabling it; model/network capacity and representative team quality require deployment-specific acceptance.
+
 Agents can retrieve authorized shared knowledge through `wk-mcp` over stdio or the server's authenticated stateless Streamable HTTP endpoint, `/mcp/{product}`. Remote requests authenticate independently and enforce route-bound product membership. MCP provides integration and retrieval; it does not capture conversations.
 
 | Tool | Purpose |
@@ -437,7 +443,7 @@ The repository includes implementation and synthetic/local acceptance records. I
 | Native distribution | Owned macOS source installation/Keychain/user-session startup passed; Apple signing/notarization and distributed installer acceptance remain |
 | Security | RSA dependency removed; one informational PEM-parser maintenance warning; strict model-sensitive corpus failed; production security assessment remains |
 | Capacity | Ten-minute local five-identity soak passed; target-server/team, long-duration capacity and protected-edit workload measurement remain |
-| Optional components | Semantic retrieval needs an approved embedding endpoint/evaluation; advisory assessment needs an approved endpoint; Enterprise capture needs entitlement and live acceptance |
+| Optional components | Hybrid retrieval requires explicit pgvector/local model configuration and indexing; representative quality/provider capacity remain unqualified. Advisory assessment needs an approved endpoint; Enterprise capture needs entitlement and live acceptance |
 
 The first candidate targets a Linux Docker server and macOS developers. See the [bounded v0.1 checklist](docs/operations/v0.1-release.md) and [earlier readiness evidence](docs/reviews/2026-10-12-v0.1-readiness.md). Production identity testing is deferred. See the [dependency remediation evidence](docs/reviews/2026-10-13-oidc-rsa-remediation.md) and exact-head PR checks for current audit status.
 

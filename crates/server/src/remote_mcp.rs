@@ -372,10 +372,6 @@ impl KnowledgeMcp {
         ))
     }
 }
-#[cfg(test)]
-fn bounded_context(cards: &[Value], budget: usize) -> Value {
-    wk_contracts::retrieval::context(cards, budget, None)
-}
 #[tool_handler]
 impl ServerHandler for KnowledgeMcp {
     fn get_info(&self) -> ServerConfig {

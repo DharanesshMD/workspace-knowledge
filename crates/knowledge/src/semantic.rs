@@ -290,7 +290,7 @@ async fn vector_candidates(
     vector: &str,
     limit: u32,
 ) -> Result<Vec<Card>, Error> {
-    let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM card_embeddings e JOIN cards c ON c.org=e.org AND c.product=e.product AND c.id=e.card_id AND c.revision=e.revision JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND $4::text[] @> c.services AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND e.model=$5 AND e.digest=$6 AND e.dimensions=$7 AND e.format=$8 AND e.status='ready' ORDER BY e.embedding <=> $9::vector,c.id LIMIT $10")
+    let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM card_embeddings e JOIN cards c ON c.org=e.org AND c.product=e.product AND c.id=e.card_id AND c.revision=e.revision JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND $4::text[] @> c.services AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND e.model=$5 AND e.digest=$6 AND e.dimensions=$7 AND e.format=$8 AND e.status='ready' AND (e.embedding <=> $9::vector)<=0.4 ORDER BY e.embedding <=> $9::vector,c.id LIMIT $10")
         .bind(&a.user).bind(&a.org).bind(p).bind(services).bind(&ns.model).bind(&ns.digest).bind(ns.dimensions as i32).bind(FORMAT).bind(vector).bind(i64::from(limit)).fetch_all(&mut **tx).await.map_err(db)?;
     rows.into_iter().map(decode).collect()
 }

@@ -1,0 +1,147 @@
+{
+  "name": "synthetic-feature-reuse-v1",
+  "records": [
+    {
+      "id": "payments",
+      "title": "Payment deduplication",
+      "intent": "Make checkout idempotent",
+      "rationale": "An idempotency key identifies one operation across repeated requests. The gateway must return the earlier outcome without performing the charge again.",
+      "exact": "idempotency",
+      "query": "Why should resending checkout not charge a customer twice?"
+    },
+    {
+      "id": "retries",
+      "title": "Bounded retries",
+      "intent": "Limit transient failure recovery",
+      "rationale": "retry_budget caps attempts at three. Exponential backoff and an overall deadline prevent a temporary network fault from creating unbounded repeated calls.",
+      "exact": "retry_budget",
+      "query": "How do we keep a flaky network from causing endless repeated calls?"
+    },
+    {
+      "id": "tenants",
+      "title": "Tenant rate quotas",
+      "intent": "Isolate noisy clients",
+      "rationale": "Apply independent traffic limits per organization. One tenant exhausting its allowance must not consume every other tenant's request capacity.",
+      "exact": "quotas",
+      "query": "How do we keep one customer's traffic from slowing everyone else down?"
+    },
+    {
+      "id": "cache",
+      "title": "Catalog cache invalidation",
+      "intent": "Keep product prices current",
+      "rationale": "A price update evicts the saved catalog entry. Waiting only for expiration would serve a stale amount after the database value changes.",
+      "exact": "invalidation",
+      "query": "Why must refreshing a price remove previously saved product data?"
+    },
+    {
+      "id": "outbox",
+      "title": "Transactional outbox",
+      "intent": "Deliver events after committed writes",
+      "rationale": "Save the domain update and pending event in one database transaction. A separate publisher delivers the event after commit so a failed save cannot announce work that never happened.",
+      "exact": "outbox",
+      "query": "How do we ensure a message is sent only after the database save succeeds?"
+    },
+    {
+      "id": "migration",
+      "title": "Expand contract migration",
+      "intent": "Support overlapping releases",
+      "rationale": "Keep the old column while new application replicas learn the replacement field. Remove it only after every active release stops reading it.",
+      "exact": "migration",
+      "query": "Why can we not delete the old field immediately during a rollout?"
+    },
+    {
+      "id": "abort",
+      "title": "Cancel obsolete UI requests",
+      "intent": "Keep project selection consistent",
+      "rationale": "Abort an earlier fetch when the user selects another product. Also verify the response belongs to the current selection before replacing visible content.",
+      "exact": "obsolete",
+      "query": "How can an older network response be prevented from overwriting a newly selected project?"
+    },
+    {
+      "id": "scope",
+      "title": "Service membership isolation",
+      "intent": "Restrict shared records to permitted components",
+      "rationale": "A reader must belong to every service touched by a record. Apply organization, product and service conditions inside database queries before returning results.",
+      "exact": "membership",
+      "query": "Why should a teammate see only the components they belong to?"
+    },
+    {
+      "id": "revision",
+      "title": "Optimistic revision checks",
+      "intent": "Prevent lost collaborative updates",
+      "rationale": "An edit must provide the revision it started from. Reject an outdated revision so a second writer cannot silently replace the first writer's changes.",
+      "exact": "optimistic",
+      "query": "How do we stop two people from silently losing each other's changes?"
+    },
+    {
+      "id": "pagination",
+      "title": "Stable cursor pagination",
+      "intent": "Browse a changing list consistently",
+      "rationale": "Use a stable ordering and an explicit cursor rather than a shifting offset. Validate the cursor within the same scope and filters to avoid repeating or skipping records.",
+      "exact": "pagination",
+      "query": "How do we avoid duplicate records while scrolling a changing list?"
+    },
+    {
+      "id": "snapshot",
+      "title": "Edit acknowledgement snapshots",
+      "intent": "Bind human review to actual file state",
+      "rationale": "A reviewed edit acknowledgement is usable only for its exact operation, targets and file snapshot. Changed content needs a new review instead of reusing an old acknowledgement.",
+      "exact": "acknowledgement",
+      "query": "Why must permission for an edit depend on the contents of the file?"
+    },
+    {
+      "id": "retention",
+      "title": "Private capture retention",
+      "intent": "Keep raw discussions local and short lived",
+      "rationale": "Retain captured conversation payloads only within the local encrypted journal deadline. Publish reviewed knowledge summaries through a separate path, never the original transcript.",
+      "exact": "retention",
+      "query": "Why do we delete local conversation messages without uploading them to teammates?"
+    },
+    {
+      "id": "distractor-cart",
+      "title": "Cart quantity refresh",
+      "intent": "Display repeated purchases",
+      "rationale": "Customers may intentionally add the same item more than once. Preserve the requested quantity in the cart view."
+    },
+    {
+      "id": "distractor-images",
+      "title": "Image dimensions",
+      "intent": "Keep previews readable",
+      "rationale": "Reserve aspect ratios before loading pictures to avoid layout shifts in the product gallery."
+    },
+    {
+      "id": "distractor-event",
+      "title": "Calendar announcements",
+      "intent": "Notify attendees of schedules",
+      "rationale": "Send an invitation for a planned meeting and include its start time and room."
+    },
+    {
+      "id": "distractor-history",
+      "title": "Release history",
+      "intent": "Record changes for maintainers",
+      "rationale": "A changelog describes the improvements shipped in each release for later reference."
+    }
+  ],
+  "unanswerable": [
+    {
+      "id": "cooking",
+      "query": "How can I bake a chocolate cake?"
+    },
+    {
+      "id": "weather",
+      "query": "What will the weather be tomorrow?"
+    },
+    {
+      "id": "astronomy",
+      "query": "How many moons does Saturn have?"
+    },
+    {
+      "id": "music",
+      "query": "How should I tune a classical guitar?"
+    },
+    {
+      "id": "geography",
+      "query": "Which mountain is the tallest in the world?"
+    }
+  ]
+}
