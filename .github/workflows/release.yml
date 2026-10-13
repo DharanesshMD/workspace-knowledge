@@ -18,7 +18,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - run: rustup toolchain install 1.98.1 --profile minimal
       - run: cargo build --release --workspace --locked
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: candidate-${{ matrix.os }}
           path: |
@@ -45,7 +45,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci && npm run build
         working-directory: web
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: console
           path: web/dist
