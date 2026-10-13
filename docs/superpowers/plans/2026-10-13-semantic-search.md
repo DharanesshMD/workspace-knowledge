@@ -28,7 +28,7 @@
 4. Long/malformed/local-provider responses and model replacements must stay bounded and explicit, not silently truncate or reuse incompatible vectors.
 5. MCP/UI diagnostics must reflect actual retrieval; semantic similarity must not promote provenance or edit authorization.
 
-### Task1: Optional vector store and scoped candidates
+### Task 1: Optional vector store and scoped candidates
 
 **Files:** create `migrations/semantic/0001.sql`, `deploy/scripts/semantic-role.sql`, `crates/knowledge/src/semantic.rs`, `crates/knowledge/tests/hybrid_search.rs`; modify knowledge module declaration.
 
@@ -45,7 +45,7 @@
 - [ ] Implement exact SQL filtering, RLS SELECT, owner guards and revision-trigger invalidation. Namespace validation and finite/nonzero vectors serialize through JSON text cast to vector; SQL parameters only. SQL indexer SELECT uses published eligibility and retry guards, no private table access. RRF deduplication uses ordered candidates and stable IDs.
 - [ ] Verify all targeted tests against owned pgvector database; verify default core migrations still pass with ordinary PostgreSQL. Commit task1.
 
-### Task2: Bounded private embedding and integrated search
+### Task 2: Bounded private embedding and integrated search
 
 **Files:** create `crates/server/src/embeddings.rs`, `crates/server/src/semantic.rs`, `crates/server/tests/semantic.rs`; modify server lib/main/remote MCP and stdio MCP diagnostics.
 
@@ -60,7 +60,7 @@
 - [ ] Write HTTP/remote MCP regressions: a paraphrase matches authorized indexed card; sensitive/unauthorized input never reaches fixture; stopped/changed provider/missing schema return lexical plus diagnostics; final membership revocation remains denied/excluded. Default router response remains compatible. Implement shared search and CLI, with authorization before provider calls.
 - [ ] Run all server/knowledge tests with PostgreSQL; stdio MCP regression must preserve `retrieval` in previews/context. Commit task2.
 
-### Task3: UI, setup, real-model comparison and acceptance
+### Task 3: UI, setup, real-model comparison and acceptance
 
 **Files:** update `web/src/App.tsx`, `web/src/types.ts`, relevant browser tests, README/completion matrix; create `docs/architecture/semantic-search.md`, `deploy/compose/semantic.yaml`, `scripts/semantic-eval.py`, synthetic corpus and acceptance report; update CI with pgvector test database while retaining plain PostgreSQL compatibility check.
 

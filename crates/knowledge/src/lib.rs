@@ -19,6 +19,7 @@ mod pool;
 pub mod preflight;
 pub use pool::PoolConfig;
 pub mod retention;
+pub mod semantic;
 pub mod signed_evidence;
 pub mod team;
 #[derive(Clone)]
