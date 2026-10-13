@@ -1,4 +1,4 @@
-# <img src="docs/assets/workspace-knowledge-avatar.png" alt="Workspace Knowledge profile icon" width="56" height="56" /> Workspace Knowledge
+# <img src="docs/assets/workspace-knowledge-avatar.png" alt="Workspace Knowledge profile icon" width="32" height="32" align="absmiddle" /> Workspace Knowledge
 
 <img src="docs/assets/workspace-knowledge-cover.png" alt="Workspace Knowledge: connected mint W mark on navy, with the tagline Know why the code exists before you change it" width="900" />
 
