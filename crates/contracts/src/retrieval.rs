@@ -15,6 +15,7 @@ pub fn diagnostics(value: Option<&Value>) -> Option<Value> {
                     | "index_not_ready"
                     | "semantic_storage_unavailable"
                     | "embedding_busy"
+                    | "embedding_policy_disabled"
                     | "embedding_timeout"
                     | "embedding_unavailable"
                     | "embedding_invalid_response"

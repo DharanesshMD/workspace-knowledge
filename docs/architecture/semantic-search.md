@@ -54,6 +54,8 @@ The indexer prunes obsolete namespaces for its selected product when reindexing.
 
 ## Retrieval and fallback
 
+The product must permit local inference (`allow_loopback=true`). Disabled policy prevents query/index provider calls; indexing rechecks before each document and the storage transaction rejects results after policy removal. A query whose policy is removed during inference falls back to keyword results (or denies a concurrent authorization change). Already transmitted inference input cannot be recalled.
+
 Search checks membership before any provider request and rechecks it in final queries. Candidate sets are at most20 keyword and20 vector results; reciprocal rank fusion uses constant60 and stable ID ties. Initial Nomic matches require cosine similarity at least0.6, a heuristic tested on the synthetic corpus rather than a truth/confidence threshold. Weaker useful matches may be omitted; broader team/model/language calibration remains necessary. Search does not send content to a generative model or modify knowledge relationships.
 
 Requests have a3-second total semantic deadline,2 concurrent embedding operations per client/process, no queued overload and a1MiB response cap. Index calls have a30-second deadline. Input caps are1024 query bytes/16KiB document bytes, with `truncate:false`; inputs exceeding the provider's token window are held rather than silently shortened. Nomic's Ollama packaging may use a smaller context than its model-card maximum. Configure provider CPU/memory/queue limits separately; HTTP cancellation does not certify that provider computation stopped immediately.

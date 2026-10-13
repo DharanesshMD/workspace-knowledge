@@ -19,7 +19,8 @@ Observed sequential local latency (milliseconds): paraphrases keyword p50 4.78/p
 
 ## Verification
 
-- Full Rust workspace with database tests included: 294 passed, zero failed or ignored. Formatting, warnings-as-errors Clippy and workspace build passed.
+- Full Rust workspace with database tests included: 296 passed, zero failed or ignored. Formatting, warnings-as-errors Clippy and workspace build passed.
+- One independent review found a product local-inference policy bypass. Regressions failed before the fix; queries and indexing now enforce that restriction before provider use and before accepting results. Mid-batch restriction changes stop further documents. No deferred minor findings.
 - Real loopback provider tests cover model/digest changes, malformed/count/dimension/zero/overflow vectors, input screening, redirects, deadlines and response size.
 - Database and HTTP/MCP tests cover tenant/service/device isolation, current revision, correction, withdrawal, supersession, restricted-role access, revocation during inference, missing index and provider failure fallback.
 - Ordinary PostgreSQL without the vector extension passed real HTTP, remote/stdio MCP, publication and supersession checks with semantic search disabled and with complete embedding configuration but no optional index. Missing-index fallback is asserted explicitly. The disposable Docker harness removes its own container/volume.

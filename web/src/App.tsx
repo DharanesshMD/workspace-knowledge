@@ -56,7 +56,7 @@ function Workspace({token,product,view}:{token:string;product:string;view:View})
   </>;
 }
 function SearchMethod({retrieval}:{retrieval:Retrieval}) {
- const reasons:Record<string,string>={semantic_disabled:'Semantic search is disabled.',index_not_ready:'The semantic index is not ready.',embedding_model_changed:'The embedding model changed; the index needs operator review.',input_rejected:'This query could not be used for semantic search.'};
+ const reasons:Record<string,string>={semantic_disabled:'Semantic search is disabled.',embedding_policy_disabled:'Local inference is disabled by product policy.',index_not_ready:'The semantic index is not ready.',embedding_model_changed:'The embedding model changed; the index needs operator review.',input_rejected:'This query could not be used for semantic search.'};
  return <p className="muted" role="status" aria-label="Search method">{retrieval.mode==='hybrid'?'Keyword + semantic search.':`Keyword search. ${retrieval.reason?(reasons[retrieval.reason]??'Semantic search was unavailable for this request.'):''}`}</p>;
 }
 export function Detail({token,card,headingRef,busy,action,product,revisions,loadRevisions}:{token:string;card:Card;headingRef:React.RefObject<HTMLHeadingElement|null>;busy:boolean;action:(kind:string,body:unknown)=>Promise<void>;product:string;revisions:Card[];loadRevisions:()=>void}) {

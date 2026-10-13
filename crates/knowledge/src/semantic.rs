@@ -69,6 +69,26 @@ impl Knowledge {
         }
         Ok(())
     }
+    /// Owner-only inference destination check for a scoped indexing pass.
+    pub async fn semantic_index_allowed(&self, org: &str, product: &str) -> Result<(), Error> {
+        if org.is_empty() || org.len() > 256 || !wk_contracts::valid_id(product) {
+            return Err(Error::Invalid);
+        }
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        self.semantic_owner(&mut tx).await?;
+        let actor = Actor {
+            org: org.into(),
+            user: String::new(),
+        };
+        Self::lock_administration(&mut tx, &actor, product).await?;
+        if !Self::product_restrictions(&mut tx, &actor, product)
+            .await?
+            .allow_loopback
+        {
+            return Err(Error::Denied);
+        }
+        tx.commit().await.map_err(db)
+    }
     pub async fn semantic_migrate(&self) -> Result<(), Error> {
         let mut tx = self.pool.begin().await.map_err(db)?;
         self.semantic_owner(&mut tx).await?;
@@ -161,6 +181,17 @@ impl Knowledge {
         ns.validate()?;
         let mut tx = self.pool.begin().await.map_err(db)?;
         self.semantic_owner(&mut tx).await?;
+        let actor = Actor {
+            org: org.into(),
+            user: String::new(),
+        };
+        Self::lock_administration(&mut tx, &actor, product).await?;
+        if !Self::product_restrictions(&mut tx, &actor, product)
+            .await?
+            .allow_loopback
+        {
+            return Ok(false);
+        }
         let row=sqlx::query("SELECT body FROM cards WHERE org=$1 AND product=$2 AND id=$3 AND revision=$4 AND published AND NOT withdrawn AND body->>'lifecycle' NOT IN ('superseded','deprecated') FOR SHARE")
             .bind(org).bind(product).bind(pending.id).bind(pending.revision).fetch_optional(&mut *tx).await.map_err(db)?;
         let Some(row) = row else { return Ok(false) };
@@ -187,6 +218,9 @@ impl Knowledge {
         p: &str,
     ) -> Result<Vec<String>, Error> {
         self.device_scope(p, &[])?;
+        if !Self::product_restrictions(tx, a, p).await?.allow_loopback {
+            return Err(Error::Denied);
+        }
         let row = sqlx::query(
             "SELECT services FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3 FOR SHARE",
         )

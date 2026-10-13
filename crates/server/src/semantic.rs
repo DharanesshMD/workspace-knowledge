@@ -18,10 +18,22 @@ pub(crate) async fn search_for(
         return Err(Failure(StatusCode::UNPROCESSABLE_ENTITY, "sensitive_query"));
     }
     // Authorize before provider use; final candidate SQL rechecks after inference.
-    api.knowledge.policy(a, p).await?;
-    let reason = if let Some(client) = &api.embeddings {
+    let policy = api.knowledge.policy(a, p).await?;
+    let reason = if !policy.restrictions.allow_loopback {
+        "embedding_policy_disabled"
+    } else if let Some(client) = &api.embeddings {
         match api.knowledge.semantic_ready(a, p, &client.namespace).await {
             Ok(true) => match client.embed_query(q).await {
+                Ok(_)
+                    if !api
+                        .knowledge
+                        .policy(a, p)
+                        .await?
+                        .restrictions
+                        .allow_loopback =>
+                {
+                    "embedding_policy_disabled"
+                }
                 Ok(vector) => match api
                     .knowledge
                     .search_hybrid(a, p, q, limit, &client.namespace, &vector)
@@ -49,10 +61,12 @@ pub async fn index_once(
     org: &str,
     product: &str,
 ) -> Result<Value, Error> {
+    k.semantic_index_allowed(org, product).await?;
     let pending = k.semantic_pending(org, product, &client.namespace).await?;
     let (mut indexed, mut held, mut changed) = (0, 0, 0);
     let selected = pending.len();
     for source in pending {
+        k.semantic_index_allowed(org, product).await?;
         match client.embed_document(&source.text).await {
             Ok(vector) => {
                 if k.semantic_store(org, product, &client.namespace, &source, &vector)

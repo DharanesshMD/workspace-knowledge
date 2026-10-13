@@ -54,7 +54,20 @@ async fn model(
                     s.requests.fetch_add(1, Ordering::SeqCst);
                     assert_eq!(input["truncate"], false);
                     if let Some((k, a)) = s.revocation {
-                        k.revoke(&a, "demo").await.unwrap();
+                        if a.user == "admin" {
+                            k.admin_policy_put(
+                                &a,
+                                "demo",
+                                wk_knowledge::admin::ProductPolicy {
+                                    allow_loopback: false,
+                                    ..Default::default()
+                                },
+                            )
+                            .await
+                            .unwrap();
+                        } else {
+                            k.revoke(&a, "demo").await.unwrap();
+                        }
                     }
                     Json(json!({"model":ns().model,"embeddings":[[1.,0.,0.]]}))
                 },
@@ -221,4 +234,123 @@ async fn missing_current_index_falls_back_without_sending_query_to_provider() {
     assert_eq!(result["retrieval"]["reason"], "index_not_ready");
     assert_eq!(requests.load(Ordering::SeqCst), 0);
     task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
+async fn disabled_inference_policy_prevents_search_and_index_provider_calls() {
+    let f = common::setup().await;
+    f.k.semantic_migrate().await.unwrap();
+    let c = f.k.submit(&f.alice, "demo", card()).await.unwrap();
+    f.k.publish(&f.bob, "demo", c.id).await.unwrap();
+    let source =
+        f.k.semantic_pending(&f.alice.org, "demo", &ns())
+            .await
+            .unwrap()
+            .remove(0);
+    f.k.semantic_store(&f.alice.org, "demo", &ns(), &source, &[1., 0., 0.])
+        .await
+        .unwrap();
+    f.k.admin_policy_put(
+        &f.admin,
+        "demo",
+        wk_knowledge::admin::ProductPolicy {
+            allow_loopback: false,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (config, task, requests) = model(None).await;
+    let app = wk_server::portal_router_with_embeddings(
+        f.k.clone(),
+        vec![("reader".into(), f.reader.clone())],
+        None,
+        None,
+        None,
+        None,
+        Some(Embeddings::new(config.clone()).unwrap()),
+    )
+    .unwrap();
+    let (_, result) = send(&app, "idempotency", "reader").await;
+    assert_eq!(result["retrieval"]["reason"], "embedding_policy_disabled");
+    assert_eq!(result["cards"][0]["id"], c.id.to_string());
+    let response=app.clone().oneshot(Request::builder().method("POST").uri("http://localhost/mcp/demo").header("authorization","Bearer reader").header("content-type","application/json").header("accept","application/json, text/event-stream").header("mcp-protocol-version","2025-06-18").body(Body::from(json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"knowledge.context","arguments":{"query":"idempotency","budget_tokens":2000}}}).to_string())).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let wire: Value = serde_json::from_slice(&bytes).unwrap();
+    let context: Value =
+        serde_json::from_str(wire["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(context["retrieval"]["reason"], "embedding_policy_disabled");
+    assert_eq!(requests.load(Ordering::SeqCst), 0);
+    assert!(wk_server::semantic::index_once(
+        &f.k,
+        &Embeddings::new(config).unwrap(),
+        &f.alice.org,
+        "demo"
+    )
+    .await
+    .is_err());
+    assert_eq!(requests.load(Ordering::SeqCst), 0);
+    task.abort();
+}
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
+async fn inference_policy_change_discards_results_and_stops_index_batch() {
+    for indexing in [true, false] {
+        let f = common::setup().await;
+        f.k.semantic_migrate().await.unwrap();
+        for i in 0..2 {
+            let mut body = card();
+            body.idempotency_key = format!("policy-card-{i}");
+            let c = f.k.submit(&f.alice, "demo", body).await.unwrap();
+            f.k.publish(&f.bob, "demo", c.id).await.unwrap();
+        }
+        if !indexing {
+            for source in
+                f.k.semantic_pending(&f.alice.org, "demo", &ns())
+                    .await
+                    .unwrap()
+            {
+                f.k.semantic_store(&f.alice.org, "demo", &ns(), &source, &[1., 0., 0.])
+                    .await
+                    .unwrap();
+            }
+        }
+        let (config, task, requests) = model(Some((f.k.clone(), f.admin.clone()))).await;
+        if indexing {
+            assert!(wk_server::semantic::index_once(
+                &f.k,
+                &Embeddings::new(config).unwrap(),
+                &f.alice.org,
+                "demo"
+            )
+            .await
+            .is_err());
+            let count: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM card_embeddings WHERE org=$1 AND status='ready'",
+            )
+            .bind(&f.alice.org)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+            assert_eq!(count, 0);
+        } else {
+            let app = wk_server::portal_router_with_embeddings(
+                f.k.clone(),
+                vec![("reader".into(), f.reader.clone())],
+                None,
+                None,
+                None,
+                None,
+                Some(Embeddings::new(config).unwrap()),
+            )
+            .unwrap();
+            let (_, result) = send(&app, "idempotency", "reader").await;
+            assert_eq!(result["retrieval"]["mode"], "lexical");
+            assert_eq!(result["retrieval"]["reason"], "embedding_policy_disabled");
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        task.abort();
+    }
 }
