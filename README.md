@@ -135,7 +135,7 @@ Publishing a copy and deleting a private note are separate actions. Withdraw sha
 Try the synthetic scope and consent demo first. It needs **Rust**, a **C build toolchain** and **Python 3**. Rustup selects the version pinned in `rust-toolchain.toml`.
 
 ```sh
-git clone --branch codex/v0.1-readiness https://github.com/DharanesshMD/workspace-knowledge.git
+git clone https://github.com/DharanesshMD/workspace-knowledge.git
 cd workspace-knowledge
 ./scripts/cargo build --locked -p wk-cli
 python3 scripts/demo.py
@@ -148,7 +148,7 @@ cargo build --locked -p wk-cli
 python scripts/demo.py
 ```
 
-These instructions target the current pre-release branch, `codex/v0.1-readiness`.
+These instructions target the default branch, `main`. After the `v0.1.0-alpha.1` tag exists, add `--branch v0.1.0-alpha.1` to evaluate exactly that prerelease.
 
 The demo creates a temporary synthetic workspace, approves one service, rejects out-of-scope paths, replays a visible conversation fixture and checks that pause stops eligibility. Successful output ends with:
 
