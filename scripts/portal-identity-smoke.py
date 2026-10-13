@@ -43,10 +43,14 @@ class Provider(http.server.BaseHTTPRequestHandler):
         nonce=grant['nonce'][0]
         if cfg.pop('bad_nonce_once',False):nonce='wrong-nonce'
         now=int(time.time());claims={'iss':cfg['issuer'],'aud':'portal-test','sub':grant['synthetic_subject'][0],'iat':now,'exp':now+300,'nonce':nonce}
+        access=secrets.token_urlsafe(32)
+        if cfg.pop('good_hash_once',False):claims['at_hash']=b64(hashlib.sha256(access.encode()).digest()[:16])
+        for flag,field,value in [('bad_issuer_once','iss','https://evil.example'),('bad_audience_once','aud','other-client'),('expired_once','exp',0),('bad_hash_once','at_hash',b64(hashlib.sha256(b'wrong-synthetic-token').digest()[:16]))]:
+            if cfg.pop(flag,False):claims[field]=value
         raw=b64(json.dumps({'alg':'RS256','kid':'synthetic-portal'}).encode())+'.'+b64(json.dumps(claims).encode())
         signed=subprocess.check_output(['/usr/bin/openssl','dgst','-sha256','-sign',cfg['pem']],input=raw.encode(),stderr=subprocess.DEVNULL)
         if cfg.pop('bad_signature_once',False):signed=bytes([signed[0]^1])+signed[1:]
-        self.send(200,{'access_token':secrets.token_urlsafe(32),'token_type':'Bearer','expires_in':300,'id_token':raw+'.'+b64(signed)})
+        self.send(200,{'access_token':access,'token_type':'Bearer','expires_in':300,'id_token':raw+'.'+b64(signed)})
 def allocate():
     with socket.socket() as sock:sock.bind(('127.0.0.1',0));return sock.getsockname()[1]
 def main(owner_acceptance=None,provider_handler=Provider,collector=False):
@@ -82,8 +86,10 @@ def main(owner_acceptance=None,provider_handler=Provider,collector=False):
             mutation={'Origin':origin,'Content-Type':'application/json','X-CSRF-Token':me['csrf_token']}
             assert owner.request(origin+'/auth/logout',{},dict(mutation,Origin='https://evil.example'))[0]==403
             assert owner.request(origin+'/auth/logout',{}, {'Origin':origin,'Content-Type':'application/json'})[0]==403;results['csrf_and_origin']=True
-            for flag in ['bad_nonce_once','bad_signature_once']:
+            for flag in ['bad_nonce_once','bad_signature_once','bad_issuer_once','bad_audience_once','expired_once','bad_hash_once']:
                 provider.cfg[flag]=True;other=Browser();assert other.request(start(other))[0]==401;assert other.request(origin+'/v1/me')[0]==401;results[flag.replace('_once','_rejected')]=True
+            if provider_handler is Provider:
+                provider.cfg['good_hash_once']=True;hashed=Browser();assert hashed.request(start(hashed))[0]==303;assert hashed.request(origin+'/v1/me')[0]==200;results['valid_access_hash']=True
             if owner_acceptance:results.update(owner_acceptance(origin,owner,mutation,command,provider,start))
             command('revoke',grant('alpha'));me=json.loads(owner.request(origin+'/v1/me')[2]);assert [p['product'] for p in me['products']]==['beta'];results['membership_revocation']=True
             assert owner.request(origin+'/v1/policy?product=alpha')[0] in (403,404)

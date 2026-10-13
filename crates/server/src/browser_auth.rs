@@ -156,7 +156,20 @@ async fn metadata(issuer: &str, development: bool) -> Result<CoreProviderMetadat
     if m.issuer().as_str() != issuer {
         return Err("provider_issuer_mismatch".into());
     }
-    validated_url(m.authorization_endpoint().as_str(), development)?;
+    // The pinned fork also supports workload identities with incomplete discovery.
+    // Interactive sign-in keeps the original required metadata boundary.
+    if m.response_types_supported().is_empty()
+        || m.subject_types_supported().is_empty()
+        || m.id_token_signing_alg_values_supported().is_empty()
+    {
+        return Err("invalid_provider_metadata".into());
+    }
+    validated_url(
+        m.authorization_endpoint()
+            .ok_or("authorization_endpoint_missing")?
+            .as_str(),
+        development,
+    )?;
     validated_url(
         m.token_endpoint().ok_or("token_endpoint_missing")?.as_str(),
         development,
@@ -373,5 +386,46 @@ mod tests {
         let state = old.state.clone();
         pending.insert(old).unwrap();
         assert!(pending.take(&cookie, &state).is_err());
+    }
+    #[tokio::test]
+    async fn incomplete_interactive_discovery_is_rejected_before_login() {
+        use axum::{routing::get, Json};
+        for missing in [
+            "response_types_supported",
+            "subject_types_supported",
+            "id_token_signing_alg_values_supported",
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let issuer = format!("http://{}", listener.local_addr().unwrap());
+            let mut document = serde_json::json!({"issuer":issuer,"authorization_endpoint":format!("{issuer}/authorize"),"token_endpoint":format!("{issuer}/token"),"jwks_uri":format!("{issuer}/keys"),"response_types_supported":["code"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["RS256"]});
+            document.as_object_mut().unwrap().remove(missing);
+            let key: serde_json::Value =
+                serde_json::from_str(include_str!("../tests/fixtures/synthetic-rsa-a.json"))
+                    .unwrap();
+            let keys = serde_json::json!({"keys":[{"kty":"RSA","kid":"test","alg":"RS256","use":"sig","n":key["n"],"e":key["e"]}]});
+            let app = axum::Router::new()
+                .route(
+                    "/.well-known/openid-configuration",
+                    get(move || {
+                        let document = document.clone();
+                        async move { Json(document) }
+                    }),
+                )
+                .route(
+                    "/keys",
+                    get(move || {
+                        let keys = keys.clone();
+                        async move { Json(keys) }
+                    }),
+                );
+            let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let result = metadata(&issuer, true).await;
+            task.abort();
+            assert_eq!(
+                result.err().as_deref(),
+                Some("invalid_provider_metadata"),
+                "accepted missing {missing}"
+            );
+        }
     }
 }

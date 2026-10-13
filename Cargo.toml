@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/contracts", "crates/scope", "crates/local", "crates/capture", "crates/cli", "crates/knowledge", "crates/server", "crates/mcp", "crates/adapters", "crates/summarize", "crates/agent", "crates/environments"]
+members = ["crates/contracts", "crates/scope", "crates/local", "crates/capture", "crates/cli", "crates/knowledge", "crates/server", "crates/mcp", "crates/adapters", "crates/summarize", "crates/agent", "crates/environments", "crates/postgres"]
 resolver = "2"
 [workspace.package]
 version = "0.1.0"
@@ -11,3 +11,6 @@ serde_json = "1"
 thiserror = "2"
 tempfile = "3"
 sha2 = "0.10"
+
+# Pin the established OIDC API with Convex's AWS-LC backend; see docs/security/rsa-runtime-disposition.md.
+openidconnect = { git = "https://github.com/get-convex/openidconnect-rs", rev = "15a9c551eafcf3b60d307feb94332352ac56c099", default-features = false }

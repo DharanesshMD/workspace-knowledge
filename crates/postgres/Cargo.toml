@@ -1,0 +1,9 @@
+[package]
+name = "wk-postgres"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sqlx-core = { version = "=0.8.6", default-features = false, features = ["_rt-tokio", "_tls-rustls-ring-webpki", "json"] }
+sqlx-postgres = { version = "=0.8.6", default-features = false, features = ["json", "uuid"] }

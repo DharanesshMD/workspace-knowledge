@@ -1,5 +1,7 @@
 # Public source alpha preparation review
 
+Historical baseline review. The RSA blocker and pending waiver below are superseded by the [2026-10-13 remediation](2026-10-13-oidc-rsa-remediation.md). Historical metadata findings still apply; source-alpha publication remains a separate decision.
+
 Date: 2026-10-12. Baseline: `9a0099487b0c6725c1ec9695e0de76c22a95b3c7`, private `codex/v0.1-readiness` candidate. Proposed deliverable: source-only `v0.1.0-alpha.1`, Linux Docker server + macOS developers. No public visibility, merge, tag, release or binary publication is authorized by this record.
 
 ## Publication inventory

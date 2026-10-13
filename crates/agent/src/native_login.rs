@@ -125,7 +125,21 @@ pub async fn begin(server: &str) -> Result<Attempt, String> {
     if metadata.issuer().as_str() != issuer {
         return Err("identity issuer mismatch".into());
     }
-    provider_url(metadata.authorization_endpoint().as_str(), development)?;
+    // Interactive PKCE needs complete discovery even if the library also
+    // supports workload identities that omit these fields.
+    if metadata.response_types_supported().is_empty()
+        || metadata.subject_types_supported().is_empty()
+        || metadata.id_token_signing_alg_values_supported().is_empty()
+    {
+        return Err("invalid identity metadata".into());
+    }
+    provider_url(
+        metadata
+            .authorization_endpoint()
+            .ok_or("identity authorization endpoint missing")?
+            .as_str(),
+        development,
+    )?;
     provider_url(
         metadata
             .token_endpoint()
@@ -405,6 +419,56 @@ mod live_tests {
                 assert_eq!(credential.token.as_str(), "synthetic-upstream-credential")
             }
             server.abort();
+        }
+    }
+    #[tokio::test]
+    async fn native_login_rejects_incomplete_interactive_discovery() {
+        use axum::{routing::get, Json};
+        for missing in [
+            "response_types_supported",
+            "subject_types_supported",
+            "id_token_signing_alg_values_supported",
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let issuer = format!("http://{}", listener.local_addr().unwrap());
+            let config = serde_json::json!({"enabled":true,"issuer":issuer,"client_id":"collector-test","audience":"wk-collector"});
+            let mut document = serde_json::json!({"issuer":issuer,"authorization_endpoint":format!("{issuer}/authorize"),"token_endpoint":format!("{issuer}/token"),"jwks_uri":format!("{issuer}/keys"),"response_types_supported":["code"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["RS256"]});
+            document.as_object_mut().unwrap().remove(missing);
+            let key: serde_json::Value = serde_json::from_str(include_str!(
+                "../../server/tests/fixtures/synthetic-rsa-a.json"
+            ))
+            .unwrap();
+            let keys = serde_json::json!({"keys":[{"kty":"RSA","kid":"test","alg":"RS256","use":"sig","n":key["n"],"e":key["e"]}]});
+            let app = axum::Router::new()
+                .route(
+                    "/collector/config",
+                    get(move || {
+                        let config = config.clone();
+                        async move { Json(config) }
+                    }),
+                )
+                .route(
+                    "/.well-known/openid-configuration",
+                    get(move || {
+                        let document = document.clone();
+                        async move { Json(document) }
+                    }),
+                )
+                .route(
+                    "/keys",
+                    get(move || {
+                        let keys = keys.clone();
+                        async move { Json(keys) }
+                    }),
+                );
+            let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let result = begin(&issuer).await;
+            task.abort();
+            assert_eq!(
+                result.err().as_deref(),
+                Some("invalid identity metadata"),
+                "accepted missing {missing}"
+            );
         }
     }
 }

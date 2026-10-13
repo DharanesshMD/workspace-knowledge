@@ -24,7 +24,7 @@ zeroize="1"
 uuid={version="1",features=["v4"]}
 ed25519-dalek="2"
 hex="0.4"
-openidconnect={version="4.0.1",default-features=false}
+openidconnect.workspace = true
 [[bin]]
 name="wk-agent"
 path="src/main.rs"

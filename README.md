@@ -12,7 +12,7 @@ Git brings the code into your checkout. Workspace Knowledge brings the recorded 
 
 [Try the demo](#quickstart) · [Join a team](#join-a-team-server) · [Host a server](#host-a-team-server) · [Documentation](#documentation) · [Contribute](CONTRIBUTING.md)
 
-> **Source-only alpha candidate, not yet published:** the first scope is a Linux Docker server with macOS developers. Local portal and Claude Code 2.1.296 `Edit`/`Write` acceptance passed with synthetic fixtures. Capture remains partial; the runtime RSA audit and model-sensitive privacy qualification remain open. Automatic publication is disabled. Read the [limitations](#limitations-and-release-status), [alpha launch packet](docs/operations/public-alpha.md) and [unreleased changelog](CHANGELOG.md) before choosing a deployment.
+> **Source-only alpha candidate, not yet published:** the first scope is a Linux Docker server with macOS developers. Local portal and Claude Code 2.1.296 `Edit`/`Write` acceptance passed with synthetic fixtures. Capture remains partial; strict model-sensitive privacy qualification remains open. The RSA dependency has been removed; unsuppressed Cargo audit reports zero vulnerabilities and one informational maintenance warning. Automatic publication is disabled. Read the [limitations](#limitations-and-release-status), [alpha launch packet](docs/operations/public-alpha.md) and [unreleased changelog](CHANGELOG.md) before choosing a deployment.
 
 <img src="docs/assets/team-context-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
 
@@ -342,7 +342,7 @@ Screening and local inference reduce exposure, but they do not guarantee perfect
 
 Server pause blocks uploads immediately; local pause is pending until the collector receives it. An offline revoked collector may continue local capture until it observes revocation. Logical expiry and live-database cleanup do not instantly erase WAL or retained backups. See [device controls](docs/operations/install.md#renewal-and-device-controls), [retention](docs/operations/hosted-portal.md#physical-retention-worker) and [restore](docs/operations/restore.md).
 
-The known runtime dependency advisory **RUSTSEC-2023-0071** remains a release gate. Production security certification and penetration testing are pending. For sensitive findings, follow [SECURITY.md](SECURITY.md); do not put credentials or real chats in public issues.
+The earlier **RUSTSEC-2023-0071** dependency was removed using a pinned AWS-LC OIDC backend and PostgreSQL-only dependencies. Read the [dependency assessment](docs/security/rsa-runtime-disposition.md) for provenance, maintenance warning and test scope. Production security certification and penetration testing are pending. For sensitive findings, follow [SECURITY.md](SECURITY.md); do not put credentials or real chats in public issues.
 
 ## Server operations and sizing
 
@@ -433,11 +433,11 @@ The repository includes implementation and synthetic/local acceptance records. I
 | Knowledge completeness | Undocumented rationale and dependencies remain gaps; source-backed briefs cannot guarantee a safe change |
 | Identity/deployment | Production-provider OIDC/TLS acceptance and real-client remote OAuth certification remain |
 | Native distribution | Owned macOS source installation/Keychain/user-session startup passed; Apple signing/notarization and distributed installer acceptance remain |
-| Security | Runtime RSA advisory unresolved; strict local model-sensitive corpus failed; production security assessment remains |
+| Security | RSA dependency removed; one informational PEM-parser maintenance warning; strict model-sensitive corpus failed; production security assessment remains |
 | Capacity | Ten-minute local five-identity soak passed; target-server/team, long-duration capacity and protected-edit workload measurement remain |
 | Optional components | Semantic retrieval needs an approved embedding endpoint/evaluation; advisory assessment needs an approved endpoint; Enterprise capture needs entitlement and live acceptance |
 
-The first candidate targets a Linux Docker server and macOS developers. See the [bounded v0.1 checklist](docs/operations/v0.1-release.md) and [fresh readiness evidence](docs/reviews/2026-10-12-v0.1-readiness.md). Production identity testing is deferred; the runtime dependency audit remains a release blocker.
+The first candidate targets a Linux Docker server and macOS developers. See the [bounded v0.1 checklist](docs/operations/v0.1-release.md) and [earlier readiness evidence](docs/reviews/2026-10-12-v0.1-readiness.md). Production identity testing is deferred. See the [dependency remediation evidence](docs/reviews/2026-10-13-oidc-rsa-remediation.md) and exact-head PR checks for current audit status.
 
 Release work should prioritize these gates before broader support claims. The [completion matrix](docs/architecture/completion-matrix.md) and dated acceptance records distinguish implemented paths from externally verified behavior.
 

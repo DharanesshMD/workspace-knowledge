@@ -14,7 +14,7 @@ tokio = { version="1", features=["macros","rt-multi-thread","net","signal","time
 uuid = { version="1",features=["serde"] }
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-openidconnect = { version = "4.0.1", default-features = false }
+openidconnect.workspace = true
 rand = "0.8"
 wk-summarize={path="../summarize"}
 tower-http={version="0.6",features=["fs","set-header"]}
@@ -24,4 +24,4 @@ ed25519-dalek="2"
 hex="0.4"
 [dev-dependencies]
 http-body-util = "0.1"
-sqlx = {version="0.8",default-features=false,features=["runtime-tokio","postgres"]}
+sqlx = { package = "wk-postgres", path = "../postgres" }
