@@ -1,8 +1,8 @@
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import secrets
 import subprocess
 import tempfile
 import unittest
@@ -35,7 +35,10 @@ class SecretHistoryTests(unittest.TestCase):
             git("merge", "--no-ff", "--no-commit", "side")
             target = root / "crates/knowledge/tests/personal.rs"
             target.parent.mkdir(parents=True)
-            target.write_text("API_KEY=" + secrets.token_hex(24) + "\n")
+            # Stable nonfunctional fixture: random hex can miss the scanner's
+            # entropy/stopword filters, making the traversal control flaky.
+            canary = hashlib.sha256(b"workspace-knowledge-merge-fixture-v1").hexdigest()[:48]
+            target.write_text("API_KEY=" + canary + "\n")
             git("add", "."); git("commit", "-m", "synthetic merge-only canary")
             report = root / "report.json"
             result = subprocess.run(
