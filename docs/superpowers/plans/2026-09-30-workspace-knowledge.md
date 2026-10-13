@@ -10,7 +10,7 @@
 
 **Spec:** `../specs/2026-09-30-workspace-knowledge-design.md` (normative). This package is a new-project handoff, not an existing implementation.
 
-**Revision:** Follow the [capture addendum](../../../CONVERSATION-CAPTURE-ADDENDUM.md); execute Tasks 9A/9B after Task 9 and Task 10A after Task 10. These replace the cooperative-only assumption for eligible Enterprise Desktop chats.
+**Revision:** Follow the [capture addendum](../../design-history/CONVERSATION-CAPTURE-ADDENDUM.md); execute Tasks 9A/9B after Task 9 and Task 10A after Task 10. These replace the cooperative-only assumption for eligible Enterprise Desktop chats.
 
 ## Global Constraints
 

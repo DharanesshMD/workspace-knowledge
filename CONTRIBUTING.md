@@ -1,5 +1,7 @@
 # Contributing
 
+By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 Use synthetic fixtures only. Never submit team conversations, credentials, `.env` files, customer data, or captured client histories in issues, tests, screenshots or pull requests. Explain the privacy boundary and relevant negative tests for changes.
 
 ## Build and test

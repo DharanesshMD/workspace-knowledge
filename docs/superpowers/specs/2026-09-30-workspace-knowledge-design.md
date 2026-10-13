@@ -2,7 +2,7 @@
 
 Date: 2026-09-30. Status: proposed build baseline derived from the stakeholder conversation. Working name: Workspace Knowledge; CLI name: `wk` (check naming availability before public release). This is a specification, not an implemented product or tested compatibility claim.
 
-**Capture revision:** [Conversation-capture addendum](../../../CONVERSATION-CAPTURE-ADDENDUM.md) adds Enterprise Desktop capture, an instrumented chat alternative, explicit processing-boundary changes, and typed graph provenance. It supersedes conflicting earlier capture assumptions.
+**Capture revision:** [Conversation-capture addendum](../../design-history/CONVERSATION-CAPTURE-ADDENDUM.md) adds Enterprise Desktop capture, an instrumented chat alternative, explicit processing-boundary changes, and typed graph provenance. It supersedes conflicting earlier capture assumptions.
 
 ## 1. Product contract
 

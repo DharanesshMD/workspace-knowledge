@@ -13,7 +13,7 @@ The owner has confirmed monitoring GitHub private vulnerability reports after la
 ## Before integration
 
 - Review the final candidate SHA and its exact-head checks, not an older branch/main result. All applicable foundation, history and dependency checks must pass at the exact final revision. Investigate any failure; do not waive or suppress an advisory. Do not bypass repository protection rules or describe a failing audit as green.
-- Confirm [README](../../README.md), [CHANGELOG](../../CHANGELOG.md), [SECURITY](../../SECURITY.md), contributor templates, LICENSE/NOTICE and the publication review agree about scope and reporting.
+- Confirm [README](../../README.md), [CHANGELOG](../../CHANGELOG.md), [SECURITY](../../SECURITY.md), CODE_OF_CONDUCT, contributor templates, LICENSE/NOTICE and the publication review agree about scope and reporting.
 - Confirm the fresh-source CLI demo and existing script checks, and refresh history scanning for any new commits. A token scan is only one part of the privacy review.
 - Verify no captures, local credentials, generated database state, developer tooling or private evidence enter the merge or release assets.
 - Inventory **all retained GitHub Actions artifacts and run logs**, including runs from old workflow revisions. Before public visibility, confirm no unsigned binary/frontend candidate or private evidence artifact remains: require separately authorized deletion or confirmed expiry if found. Review retained logs for private output and metadata, resolve any unreviewed runs, and refresh the inventory after final CI. Deleting an artifact alone does not remove its run logs. Do not silently delete remote evidence or assume Git secret scanning covers Actions.

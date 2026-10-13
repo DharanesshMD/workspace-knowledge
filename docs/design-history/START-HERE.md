@@ -1,4 +1,4 @@
-> Implementation status: see [repository README](../README.md) and [build ledger](PROGRESS.md). The original planning package below predates implementation.
+> Implementation status: see [repository README](../../README.md) and [build ledger](PROGRESS.md). The original planning package below predates implementation.
 
 # Workspace Knowledge: agent build package
 
@@ -6,8 +6,8 @@ This package translates the product discussion into an open-source technical spe
 
 ## Read in order
 
-1. [Technical specification](docs/superpowers/specs/2026-09-30-workspace-knowledge-design.md)
-2. [Implementation plan](docs/superpowers/plans/2026-09-30-workspace-knowledge.md)
+1. [Technical specification](../superpowers/specs/2026-09-30-workspace-knowledge-design.md)
+2. [Implementation plan](../superpowers/plans/2026-09-30-workspace-knowledge.md)
 3. [Build-agent kickoff prompt](BUILD-AGENT-PROMPT.md)
 
 4. [Conversation capture and graph provenance revision](CONVERSATION-CAPTURE-ADDENDUM.md) — official Enterprise capture, instrumented chat, and new implementation tasks.

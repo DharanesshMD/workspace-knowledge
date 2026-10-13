@@ -428,7 +428,7 @@ Linux runners may need `npx playwright install --with-deps chromium`. See [CONTR
 | Operations | [Hosted portal](docs/operations/hosted-portal.md) · [Backup](docs/operations/backup.md) · [Restore](docs/operations/restore.md) · [Upgrade](docs/operations/upgrade.md) · [Uninstall](docs/operations/uninstall.md) |
 | Separate environment tooling | [OpenBao environment broker](docs/operations/environments.md) |
 | Security | [Threat model](docs/security/threat-model.md) · [Reporting](SECURITY.md) |
-| Project status | [Implementation/release gates](docs/architecture/completion-matrix.md) · [Hosted acceptance](docs/reviews/2026-10-10-hosted-operations-acceptance.md) · [Code-context acceptance](docs/reviews/2026-10-11-code-change-context-acceptance.md) |
+| Project status | [Implementation/release gates](docs/architecture/completion-matrix.md) · [Hosted acceptance](docs/reviews/2026-10-10-hosted-operations-acceptance.md) · [Code-context acceptance](docs/reviews/2026-10-11-code-change-context-acceptance.md) · [Design history](docs/design-history/README.md) |
 
 ## Limitations and release status
 
@@ -497,7 +497,7 @@ No. It records review of a bounded brief for a covered operation. It does not pr
 
 Contributions are welcome: reproducible bug reports, documentation improvements, adapter fixtures and tests that strengthen scope, identity and privacy boundaries are useful starting points.
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions and contribution policy. Use synthetic fixtures and include affected revisions/client versions in reports. Keep credentials, real conversations, customer data and private captures out of issues, screenshots and pull requests. Sign commits with `git commit -s` under the Developer Certificate of Origin.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions and contribution policy. Use synthetic fixtures and include affected revisions/client versions in reports. Keep credentials, real conversations, customer data and private captures out of issues, screenshots and pull requests. Sign commits with `git commit -s` under the Developer Certificate of Origin. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Use the [issue tracker](https://github.com/DharanesshMD/workspace-knowledge/issues) for non-sensitive bugs and proposals. Follow [SECURITY.md](SECURITY.md) for sensitive vulnerability reports.
 
