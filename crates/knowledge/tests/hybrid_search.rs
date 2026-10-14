@@ -290,3 +290,72 @@ async fn namespace_failures_retries_withdrawal_and_revocation_do_not_reuse_vecto
         Err(Error::NotFound)
     ));
 }
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
+async fn related_by_meaning_returns_other_developers_close_summaries() {
+    let f = common::setup().await;
+    let ns = namespace();
+    f.k.semantic_migrate().await.unwrap();
+    let near =
+        f.k.submit(&f.alice, "demo", card("near", vec!["backend"]))
+            .await
+            .unwrap();
+    let far =
+        f.k.submit(&f.alice, "demo", card("far", vec!["backend"]))
+            .await
+            .unwrap();
+    for c in [&near, &far] {
+        f.k.publish(&f.bob, "demo", c.id).await.unwrap();
+    }
+    for source in
+        f.k.semantic_pending(&f.alice.org, "demo", &ns)
+            .await
+            .unwrap()
+    {
+        let v = if source.id == near.id {
+            [1., 0., 0.]
+        } else {
+            [0., 1., 0.]
+        };
+        assert!(f
+            .k
+            .semantic_store(&f.alice.org, "demo", &ns, &source, &v)
+            .await
+            .unwrap());
+    }
+    let found =
+        f.k.related_by_meaning(&f.reader, "demo", &ns, &[1., 0., 0.], &[], 20)
+            .await
+            .unwrap();
+    assert_eq!(
+        found.iter().map(|n| n.card_id).collect::<Vec<_>>(),
+        vec![Some(near.id)]
+    );
+    assert_eq!(found[0].kind, "related");
+    assert_eq!(found[0].matched_by, "meaning");
+    assert_eq!(found[0].developer, "alice");
+    assert!(f
+        .k
+        .related_by_meaning(&f.alice, "demo", &ns, &[1., 0., 0.], &[], 20)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(f
+        .k
+        .related_by_meaning(&f.reader, "demo", &ns, &[1., 0., 0.], &[near.id], 20)
+        .await
+        .unwrap()
+        .is_empty());
+    f.k.withdraw(&f.alice, "demo", near.id, 1).await.unwrap();
+    assert!(f
+        .k
+        .related_by_meaning(&f.reader, "demo", &ns, &[1., 0., 0.], &[], 20)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(matches!(
+        f.k.related_by_meaning(&f.reader, "elsewhere", &ns, &[1., 0., 0.], &[], 20)
+            .await,
+        Err(Error::NotFound)
+    ));
+}

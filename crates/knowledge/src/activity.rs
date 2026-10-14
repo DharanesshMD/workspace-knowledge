@@ -435,7 +435,7 @@ impl Knowledge {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn card_notice(
+pub(crate) fn card_notice(
     kind: &'static str,
     by: &'static str,
     developer: String,
