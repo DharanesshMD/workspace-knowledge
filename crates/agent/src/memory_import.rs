@@ -305,6 +305,20 @@ impl Record {
         text + "\n" + &self.body
     }
 }
+/// Point the map entry at `draft` unless a concurrent import replaced this
+/// generation. Locks only around the map write, never across inference.
+fn link(dir: &Path, record: &Record, draft: &str) -> Result<bool, String> {
+    memory_map::update(dir, |map| {
+        Ok(match map.entries.get_mut(&record.key) {
+            Some(e) if e.generation == record.generation => {
+                e.record = None;
+                e.draft = Some(draft.to_string());
+                true
+            }
+            _ => false,
+        })
+    })
+}
 /// Draft pending memory records. Mirrors `journal_turns`: approval is
 /// re-checked around inference, and failed records stay pending until expiry.
 pub(crate) async fn draft_all(
@@ -343,6 +357,10 @@ pub(crate) async fn draft_all(
         ))?;
         let key = format!("draft:{hash}");
         if store.seen(&key)? {
+            // An interrupted run may have stored this draft without linking it.
+            if store.contains(&key, daemon::now()?)? && !link(dir, &record, &key)? {
+                store.ack(&key)?;
+            }
             store.ack(&id)?;
             continue;
         }
@@ -370,18 +388,7 @@ pub(crate) async fn draft_all(
                     Ok(old.map_or(encoded.clone(), |bytes| bytes.to_vec()))
                 })?;
                 store.ack(&id)?;
-                // Lock only around the map write, never across inference.
-                let tracked = memory_map::update(dir, |map| {
-                    Ok(match map.entries.get_mut(&record.key) {
-                        Some(e) if e.generation == record.generation => {
-                            e.record = None;
-                            e.draft = Some(key.clone());
-                            true
-                        }
-                        _ => false,
-                    })
-                })?;
-                if !tracked {
+                if !link(dir, &record, &key)? {
                     // A concurrent import replaced this generation; drop the stale draft.
                     store.ack(&key)?;
                     continue;
@@ -880,6 +887,53 @@ mod tests {
         );
         let other = map.entries.iter().find(|(k, _)| **k != key).unwrap().1;
         assert_eq!(other.draft.as_deref(), Some(drafts[0].as_str()));
+        server.abort();
+    }
+    #[tokio::test]
+    async fn drafts_left_behind_by_an_interrupted_run_are_relinked() {
+        let (url, server, sources) = model().await;
+        let mut f = fixture(&url);
+        std::fs::write(f.b.root.join("backend/CLAUDE.md"), "## Build\nRun tests.\n").unwrap();
+        let now = daemon::now().unwrap();
+        import(&mut f, &[], now).unwrap();
+        let key = first_key(BACKEND, "## Build\nRun tests.\n");
+        let id = record_id(&key, 1).unwrap();
+        let bytes = f.store.read_record(&id, now).unwrap().unwrap();
+        let policy = json!({"policy_revision": 1});
+        assert_eq!(
+            draft_all(&f.dir, &f.c, &f.b, &policy, &mut f.store)
+                .await
+                .unwrap(),
+            (1, 0)
+        );
+        let draft = memory_map::load(&f.dir).unwrap().entries[&key]
+            .draft
+            .clone()
+            .unwrap();
+        // Simulate a run interrupted after storing the draft: the record is
+        // still pending and the map still points at it.
+        assert!(f.store.enqueue(&id, &bytes, now, RECORD_TTL).unwrap());
+        memory_map::update(&f.dir, |m| {
+            let e = m.entries.get_mut(&key).unwrap();
+            e.record = Some(id.clone());
+            e.draft = None;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            draft_all(&f.dir, &f.c, &f.b, &policy, &mut f.store)
+                .await
+                .unwrap(),
+            (0, 0)
+        );
+        assert!(!f.store.contains(&id, now).unwrap(), "record consumed");
+        assert!(f.store.contains(&draft, now).unwrap(), "draft kept");
+        let e = &memory_map::load(&f.dir).unwrap().entries[&key];
+        assert_eq!(
+            (e.record.as_deref(), e.draft.as_deref()),
+            (None, Some(draft.as_str()))
+        );
+        assert_eq!(sources.lock().unwrap().len(), 1, "no second inference");
         server.abort();
     }
 }
