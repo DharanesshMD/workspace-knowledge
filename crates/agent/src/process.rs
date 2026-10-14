@@ -225,17 +225,24 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
     if v.get("memory").is_some() {
         if v["policy_hash"] != b.policy_hash || v["card"]["policy_revision"] != p["policy_revision"]
         {
-            return Err("source or policy changed; run memory import again".into());
+            return Err("policy changed; run memory import again".into());
         }
         if wk_summarize::sensitive(&v["card"].to_string()) {
             return Err("draft requires sensitive-content review".into());
         }
-        let response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
+        let mut response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
         if !owner_only {
+            // The server already accepted the summary, so a failed link never
+            // fails the submit. It is reported because the next import may
+            // then draft the same section again instead of linking an update.
+            let link = crate::memory_import::submitted(dir, id, &v, &response);
+            if let Some(object) = response.as_object_mut() {
+                object.insert(
+                    "memory_link".into(),
+                    json!(if link.is_ok() { "recorded" } else { "failed" }),
+                );
+            }
             s.ack(id)?;
-            // The server already accepted the summary; a failed map update
-            // only loses the `updates` link for a later edit.
-            let _ = crate::memory_import::submitted(dir, id, &v, &response);
         }
         return Ok(response);
     }

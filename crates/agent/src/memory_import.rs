@@ -1202,4 +1202,42 @@ mod tests {
         assert_eq!(scan["removed"], json!(["repo:backend/CLAUDE.md"]));
         server.abort();
     }
+    fn linked_entry(f: &Fixture) -> memory_map::Map {
+        memory_map::update(&f.dir, |m| {
+            m.entries.insert(
+                "k".into(),
+                Entry {
+                    label: "repo:backend/CLAUDE.md".into(),
+                    content: "c".into(),
+                    generation: 1,
+                    record: None,
+                    draft: Some("draft:current".into()),
+                    summary: None,
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+        memory_map::load(&f.dir).unwrap()
+    }
+    #[test]
+    fn submissions_of_a_replaced_draft_leave_the_map_unchanged() {
+        let f = fixture("http://127.0.0.1:9");
+        let before = linked_entry(&f);
+        let draft = json!({"memory": {"key": "k"}});
+        let response = json!({"card": {"id": "summary-1"}});
+        submitted(&f.dir, "draft:other", &draft, &response).unwrap();
+        assert_eq!(memory_map::load(&f.dir).unwrap(), before);
+    }
+    #[test]
+    fn responses_without_a_summary_id_leave_the_map_unchanged() {
+        let f = fixture("http://127.0.0.1:9");
+        let before = linked_entry(&f);
+        let draft = json!({"memory": {"key": "k"}});
+        assert_eq!(
+            submitted(&f.dir, "draft:current", &draft, &json!({"card": {}})),
+            Ok(())
+        );
+        assert_eq!(memory_map::load(&f.dir).unwrap(), before);
+    }
 }
