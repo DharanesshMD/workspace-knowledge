@@ -66,6 +66,16 @@ fn prompts_become_keywords_not_text() {
 }
 
 #[test]
+fn keywords_drop_question_words_and_keep_identifiers() {
+    assert_eq!(
+        keywords("Why must retries avoid repeating a payment for PAY-142 in RateLimiter?")
+            .as_deref(),
+        Some("retries avoid repeating payment pay 142 ratelimiter")
+    );
+    assert_eq!(keywords("How does it work, what should we do?"), None);
+}
+
+#[test]
 fn outputs_match_each_client_and_dedupe_per_session() {
     let notices = vec![
         json!({"card_id":"c1","text":"A changed web/app.tsx"}),

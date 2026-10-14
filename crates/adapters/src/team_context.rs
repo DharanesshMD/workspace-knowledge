@@ -65,7 +65,11 @@ pub fn keywords(prompt: &str) -> Option<String> {
     const STOP: &[&str] = &[
         "the", "and", "for", "with", "this", "that", "from", "into", "you", "can", "should",
         "need", "want", "please", "use", "make", "add", "all", "are", "not", "but", "have", "will",
-        "its",
+        "its", "why", "how", "what", "when", "where", "which", "does", "did", "could", "would",
+        "must", "there", "here", "about", "just", "like", "some", "any", "work", "we", "our",
+        "your", "they", "them", "was", "were", "has", "had", "been", "being", "onto", "over",
+        "under", "more", "most", "also", "very", "only", "then", "than", "these", "those", "who",
+        "whom", "whose",
     ];
     let mut seen = BTreeSet::new();
     let words: Vec<String> = prompt
