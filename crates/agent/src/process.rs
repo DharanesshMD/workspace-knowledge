@@ -40,6 +40,9 @@ pub async fn run(dir: &Path) -> Result<Value, String> {
         drafts += made;
         held += failed;
     }
+    let (made, failed) = crate::memory_import::draft_all(dir, &c, &b, &policy, &mut store).await?;
+    drafts += made;
+    held += failed;
 
     let owner_sync = crate::personal_sync::run(dir)
         .await

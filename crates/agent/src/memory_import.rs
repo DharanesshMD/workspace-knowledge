@@ -6,7 +6,7 @@ use crate::{
     memory_map::{self, Action, Entry},
     memory_sources::{self, Candidate},
     memory_split::{self, Section, SourceKind},
-    network, state,
+    network, process, state,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -291,6 +291,107 @@ pub(crate) fn import_with(
         "published": false,
         "next": "run `wk-agent process`, then review `wk-agent drafts`",
     }))
+}
+impl Record {
+    /// Model input: the label and heading path, never an absolute path.
+    fn source(&self) -> String {
+        let mut text = format!("Agent memory: {}\n", self.label);
+        if !self.heading.is_empty() {
+            text += &format!("Section: {}\n", self.heading.join(" > "));
+        }
+        if let Some(hints) = &self.hints {
+            text += &format!("Note: {hints}\n");
+        }
+        text + "\n" + &self.body
+    }
+}
+/// Draft pending memory records. Mirrors `journal_turns`: approval is
+/// re-checked around inference, and failed records stay pending until expiry.
+pub(crate) async fn draft_all(
+    dir: &Path,
+    c: &state::Config,
+    b: &Binding,
+    policy: &Value,
+    store: &mut LocalStore,
+) -> Result<(usize, usize), String> {
+    let ids = store.next_ids("memory", "memory:", daemon::now()?, 10)?;
+    let revision = policy["policy_revision"].as_u64().ok_or("invalid policy")?;
+    let (mut drafts, mut held) = (0, 0);
+    for id in ids {
+        if process::processing_current(dir, c, b).is_err() {
+            break;
+        }
+        let Some(bytes) = store.read_record(&id, daemon::now()?)? else {
+            continue;
+        };
+        let record: Record = serde_json::from_slice(&bytes).map_err(|_| "invalid memory record")?;
+        if record.policy_hash != b.policy_hash {
+            // Approval changed since import; the developer must import again.
+            store.ack(&id)?;
+            held += 1;
+            continue;
+        }
+        let hash = hex(&(
+            &id,
+            &record.heading,
+            &record.hints,
+            &record.body,
+            &b.policy_hash,
+            revision,
+            c.model.as_str(),
+            1,
+        ))?;
+        let key = format!("draft:{hash}");
+        if store.seen(&key)? {
+            store.ack(&id)?;
+            continue;
+        }
+        match wk_summarize::extract(&c.inference, &c.model, &record.source()).await {
+            Ok(extract) => {
+                if process::processing_current(dir, c, b).is_err() {
+                    break;
+                }
+                let card =
+                    wk_summarize::card(extract, hash, revision, vec![c.service.clone()], true)?;
+                let draft = json!({
+                    "card": card,
+                    "memory": {
+                        "key": record.key,
+                        "generation": record.generation,
+                        "label": record.label,
+                        "heading": record.heading,
+                        "updates": record.updates,
+                    },
+                    "policy_hash": b.policy_hash,
+                    "model": c.model,
+                });
+                let encoded = serde_json::to_vec(&draft).map_err(|_| "invalid draft")?;
+                store.update(&key, daemon::now()?, 3600, |old| {
+                    Ok(old.map_or(encoded.clone(), |bytes| bytes.to_vec()))
+                })?;
+                store.ack(&id)?;
+                // Lock only around the map write, never across inference.
+                let tracked = memory_map::update(dir, |map| {
+                    Ok(match map.entries.get_mut(&record.key) {
+                        Some(e) if e.generation == record.generation => {
+                            e.record = None;
+                            e.draft = Some(key.clone());
+                            true
+                        }
+                        _ => false,
+                    })
+                })?;
+                if !tracked {
+                    // A concurrent import replaced this generation; drop the stale draft.
+                    store.ack(&key)?;
+                    continue;
+                }
+                drafts += 1;
+            }
+            Err(_) => held += 1,
+        }
+    }
+    Ok((drafts, held))
 }
 
 #[cfg(test)]
@@ -628,5 +729,157 @@ mod tests {
         let f = fixture("http://127.0.0.1:9/v1/chat/completions");
         assert!(command(&f.dir, "import", false, &[]).await.is_err());
         assert!(!f.dir.join(memory_map::FILE).exists());
+    }
+    use std::sync::{Arc, Mutex};
+    async fn model() -> (String, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<String>>>) {
+        let sources = Arc::new(Mutex::new(Vec::new()));
+        let seen = sources.clone();
+        let app = axum::Router::new().route(
+            "/v1/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+                let seen = seen.clone();
+                async move {
+                    seen.lock().unwrap().push(
+                        body["messages"][1]["content"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    let summary = json!({
+                        "title": "Imported backend convention",
+                        "intent": "Keep a recorded backend convention available to teammates",
+                        "rationale": "The developer's agent memory recorded this convention",
+                        "decisions": ["Follow the recorded convention for backend changes"],
+                        "constraints": [], "open_questions": [], "sensitive": false
+                    });
+                    axum::Json(json!({"choices": [{"message": {"content": summary.to_string()}}]}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        (
+            url,
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() }),
+            sources,
+        )
+    }
+    #[tokio::test]
+    async fn process_drafts_records_once_without_absolute_paths() {
+        let (url, server, sources) = model().await;
+        let mut f = fixture(&url);
+        std::fs::write(
+            f.b.root.join("backend/CLAUDE.md"),
+            "## Build\nRun tests.\n## Retries\nReuse the idempotency key.\n",
+        )
+        .unwrap();
+        let note = memory_sources::notes_dir(&f.home, &f.b.root).join("deploy.md");
+        std::fs::write(
+            &note,
+            "---\nname: deploy\n---\nDeploys happen after the Tuesday sync.\n",
+        )
+        .unwrap();
+        let now = daemon::now().unwrap();
+        import_with(
+            &f.dir,
+            &f.b,
+            "backend",
+            &mut f.store,
+            Some(&f.home),
+            &[note],
+            now,
+        )
+        .unwrap();
+        let policy = json!({"policy_revision": 1});
+        assert_eq!(
+            draft_all(&f.dir, &f.c, &f.b, &policy, &mut f.store)
+                .await
+                .unwrap(),
+            (3, 0)
+        );
+        assert!(
+            f.store
+                .pending_ids("memory:", "", now, 100)
+                .unwrap()
+                .is_empty(),
+            "records consumed"
+        );
+        let drafts = f.store.pending_ids("draft:", "", now, 100).unwrap();
+        assert_eq!(drafts.len(), 3);
+        let base = f.dir.parent().unwrap().to_string_lossy().to_string();
+        for id in &drafts {
+            let draft: Value =
+                serde_json::from_slice(&f.store.read_record(id, now).unwrap().unwrap()).unwrap();
+            assert_eq!(draft["card"]["capture_completeness"], "complete");
+            assert_eq!(draft["card"]["service_ids"], json!(["backend"]));
+            assert!(
+                !draft.to_string().contains(&base),
+                "no absolute path in drafts"
+            );
+        }
+        let sent = sources.lock().unwrap().clone();
+        assert_eq!(sent.len(), 3);
+        assert!(sent
+            .iter()
+            .all(|s| !s.contains(&base) && s.starts_with("Agent memory: ")));
+        let map = memory_map::load(&f.dir).unwrap();
+        assert!(map
+            .entries
+            .values()
+            .all(|e| e.record.is_none() && e.draft.is_some()));
+        assert_eq!(
+            draft_all(&f.dir, &f.c, &f.b, &policy, &mut f.store)
+                .await
+                .unwrap(),
+            (0, 0)
+        );
+        server.abort();
+    }
+    #[tokio::test]
+    async fn drafts_for_a_replaced_generation_are_dropped() {
+        let (url, server, _) = model().await;
+        let mut f = fixture(&url);
+        std::fs::write(
+            f.b.root.join("backend/CLAUDE.md"),
+            "## Build\nRun tests.\n## Retries\nReuse the idempotency key.\n",
+        )
+        .unwrap();
+        let now = daemon::now().unwrap();
+        import(&mut f, &[], now).unwrap();
+        // A concurrent import replaces this section while the model is drafting.
+        let key = first_key(BACKEND, "## Build\nRun tests.\n");
+        memory_map::update(&f.dir, |m| {
+            let e = m.entries.get_mut(&key).unwrap();
+            e.generation += 1;
+            Ok(())
+        })
+        .unwrap();
+        let policy = json!({"policy_revision": 1});
+        assert_eq!(
+            draft_all(&f.dir, &f.c, &f.b, &policy, &mut f.store)
+                .await
+                .unwrap(),
+            (1, 0)
+        );
+        assert!(f
+            .store
+            .pending_ids("memory:", "", now, 100)
+            .unwrap()
+            .is_empty());
+        let drafts = f.store.pending_ids("draft:", "", now, 100).unwrap();
+        assert_eq!(drafts.len(), 1, "the stale draft is not left pending");
+        let map = memory_map::load(&f.dir).unwrap();
+        let replaced = &map.entries[&key];
+        assert_eq!(replaced.draft, None);
+        assert!(
+            replaced.record.is_some(),
+            "the newer generation stays tracked"
+        );
+        let other = map.entries.iter().find(|(k, _)| **k != key).unwrap().1;
+        assert_eq!(other.draft.as_deref(), Some(drafts[0].as_str()));
+        server.abort();
     }
 }
