@@ -168,7 +168,7 @@ pub fn list(dir: &Path, after: &str) -> Result<Value, String> {
             continue;
         };
         let v: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid private draft")?;
-        result.push(json!({"id":id,"card":v["card"],"model":v["model"]}));
+        result.push(crate::memory_import::draft_item(&id, &v));
     }
     Ok(json!({"private_drafts":result,"next_cursor":next_cursor}))
 }
@@ -221,6 +221,23 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
     let v: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid private draft")?;
     if owner_only {
         crate::personal_sync::payload(&v["card"])?;
+    }
+    if v.get("memory").is_some() {
+        if v["policy_hash"] != b.policy_hash || v["card"]["policy_revision"] != p["policy_revision"]
+        {
+            return Err("source or policy changed; run memory import again".into());
+        }
+        if wk_summarize::sensitive(&v["card"].to_string()) {
+            return Err("draft requires sensitive-content review".into());
+        }
+        let response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
+        if !owner_only {
+            s.ack(id)?;
+            // The server already accepted the summary; a failed map update
+            // only loses the `updates` link for a later edit.
+            let _ = crate::memory_import::submitted(dir, id, &v, &response);
+        }
+        return Ok(response);
     }
     if v.get("native_adapter").is_some() {
         let _guard = crate::native_process::validate_draft(dir, &v).await?;

@@ -406,6 +406,39 @@ pub(crate) async fn draft_all(
     }
     Ok((drafts, held))
 }
+/// One `wk-agent drafts` row. Memory drafts also show where they came from.
+pub(crate) fn draft_item(id: &str, v: &Value) -> Value {
+    let mut item = json!({"id": id, "card": v["card"], "model": v["model"]});
+    if let Some(m) = v.get("memory") {
+        item["memory"] =
+            json!({"label": m["label"], "heading": m["heading"], "updates": m["updates"]});
+    }
+    item
+}
+/// After a team submission, remember the summary so later edits link to it.
+pub(crate) fn submitted(
+    dir: &Path,
+    draft_id: &str,
+    draft: &Value,
+    response: &Value,
+) -> Result<(), String> {
+    let (Some(key), Some(summary)) = (
+        draft["memory"]["key"].as_str(),
+        response["card"]["id"].as_str(),
+    ) else {
+        return Ok(());
+    };
+    memory_map::update(dir, |map| {
+        if let Some(e) = map.entries.get_mut(key) {
+            if e.draft.as_deref() == Some(draft_id) {
+                e.summary = Some(summary.into());
+                e.draft = None;
+                e.record = None;
+            }
+        }
+        Ok(())
+    })
+}
 
 #[cfg(test)]
 mod tests {
@@ -1066,6 +1099,107 @@ mod tests {
         );
         assert!(f.store.contains(&id, now).unwrap());
         assert!(sources.lock().unwrap().is_empty());
+        server.abort();
+    }
+    #[test]
+    fn draft_items_show_memory_origin_without_internal_keys() {
+        let v = json!({"card": {"title": "T"}, "model": "m",
+            "memory": {"key": "k", "generation": 2, "label": "claude-memory:deploy.md",
+                       "heading": [], "updates": "summary-1"}});
+        let item = draft_item("draft:x", &v);
+        assert_eq!(
+            item["memory"],
+            json!({"label": "claude-memory:deploy.md", "heading": [], "updates": "summary-1"})
+        );
+        assert!(draft_item("draft:y", &json!({"card": {}, "model": "m"}))
+            .get("memory")
+            .is_none());
+    }
+    #[tokio::test]
+    async fn submitted_summaries_link_the_next_changed_section() {
+        let (url, server, _sources) = model().await;
+        let mut f = fixture(&url);
+        let file = f.b.root.join("backend/CLAUDE.md");
+        std::fs::write(
+            &file,
+            "## Build\nRun tests.\n## Retries\nReuse the idempotency key.\n",
+        )
+        .unwrap();
+        let now = daemon::now().unwrap();
+        let policy = json!({"policy_revision": 1});
+        import_with(
+            &f.dir,
+            &f.b,
+            "backend",
+            &mut f.store,
+            Some(&f.home),
+            &[],
+            now,
+        )
+        .unwrap();
+        draft_all(&f.dir, &f.c, &f.b, &policy, &mut f.store)
+            .await
+            .unwrap();
+        let first = f.store.pending_ids("draft:", "", now, 100).unwrap();
+        let retries = first
+            .iter()
+            .find(|id| {
+                let v: Value =
+                    serde_json::from_slice(&f.store.read_record(id, now).unwrap().unwrap())
+                        .unwrap();
+                v["memory"]["heading"] == json!(["Retries"])
+            })
+            .unwrap()
+            .clone();
+        let draft: Value =
+            serde_json::from_slice(&f.store.read_record(&retries, now).unwrap().unwrap()).unwrap();
+        submitted(
+            &f.dir,
+            &retries,
+            &draft,
+            &json!({"card": {"id": "summary-1"}}),
+        )
+        .unwrap();
+        f.store.ack(&retries).unwrap();
+        std::fs::write(
+            &file,
+            "## Build\nRun tests.\n## Retries\nReuse the idempotency key for refunds too.\n",
+        )
+        .unwrap();
+        let changed = import_with(
+            &f.dir,
+            &f.b,
+            "backend",
+            &mut f.store,
+            Some(&f.home),
+            &[],
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            (changed["written"].clone(), changed["unchanged"].clone()),
+            (json!(1), json!(1))
+        );
+        assert_eq!(
+            draft_all(&f.dir, &f.c, &f.b, &policy, &mut f.store)
+                .await
+                .unwrap(),
+            (1, 0)
+        );
+        let new: Vec<String> = f
+            .store
+            .pending_ids("draft:", "", now, 100)
+            .unwrap()
+            .into_iter()
+            .filter(|id| !first.contains(id))
+            .collect();
+        assert_eq!(new.len(), 1);
+        let v: Value =
+            serde_json::from_slice(&f.store.read_record(&new[0], now).unwrap().unwrap()).unwrap();
+        assert_eq!(v["memory"]["updates"], "summary-1");
+        std::fs::remove_file(&file).unwrap();
+        let scan = scan_with(&f.dir, &f.b, "backend", Some(&f.home)).unwrap();
+        assert_eq!(scan["removed"], json!(["repo:backend/CLAUDE.md"]));
         server.abort();
     }
 }
