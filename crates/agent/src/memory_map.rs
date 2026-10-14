@@ -73,8 +73,10 @@ pub fn decide(entry: Option<&Entry>, content: &str, pending: bool) -> Action {
 }
 pub fn load(dir: &Path) -> Result<Map, String> {
     let path = dir.join(FILE);
-    if std::fs::symlink_metadata(&path).is_err() {
-        return Ok(Map::default());
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Map::default()),
+        Err(_) => return Err("memory import map unavailable".into()),
     }
     let map: Map = serde_json::from_str(&state::read(&path, 4 * 1024 * 1024)?)
         .map_err(|_| "invalid memory import map")?;
@@ -135,6 +137,13 @@ mod tests {
         );
     }
     #[test]
+    fn unchanged_expired_record_is_rewritten_without_retiring_it() {
+        assert_eq!(
+            decide(Some(&entry(Some("memory:r"), None, None)), "c1", false),
+            write(3, None, &[])
+        );
+    }
+    #[test]
     fn changed_sections_retire_unsubmitted_work_and_link_submitted_summaries() {
         assert_eq!(
             decide(
@@ -169,5 +178,19 @@ mod tests {
         }
         std::fs::write(temp.path().join(FILE), r#"{"version":2,"entries":{}}"#).unwrap();
         assert!(load(temp.path()).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_state_directory_is_an_error_not_an_empty_map() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("state");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = load(&dir);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if unsafe { libc::geteuid() } != 0 {
+            assert_eq!(result, Err("memory import map unavailable".into()));
+        }
     }
 }
