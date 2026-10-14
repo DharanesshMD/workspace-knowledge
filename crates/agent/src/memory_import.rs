@@ -48,8 +48,11 @@ fn section_key(label: &str, s: &Section) -> Result<String, String> {
 fn content_hash(s: &Section) -> Result<String, String> {
     hex(&(&s.heading, &s.hints, &s.body))
 }
+/// Unique per write: the map tracks the ID, and draft keys hash it, so a
+/// re-import after a lost map never collides with an earlier, guarded draft.
 fn record_id(key: &str, generation: u32) -> Result<String, String> {
-    Ok(format!("memory:{}", hex(&(key, generation))?))
+    let nonce = format!("{:032x}", rand::random::<u128>());
+    Ok(format!("memory:{}", hex(&(key, generation, nonce))?))
 }
 /// Without a home folder there are no Claude Code notes; repository files still work.
 fn home() -> Option<PathBuf> {
@@ -278,13 +281,8 @@ pub(crate) fn import_with(
                         updates,
                     };
                     let bytes = serde_json::to_vec(&record).map_err(|_| "invalid memory record")?;
-                    // An interrupted earlier run may have left this identity behind
-                    // without recording it; replace that stale, undrafted record.
                     if !store.enqueue(&id, &bytes, now, RECORD_TTL)? {
-                        store.ack(&id)?;
-                        if !store.enqueue(&id, &bytes, now, RECORD_TTL)? {
-                            return Err("memory record identity unavailable".into());
-                        }
+                        return Err("memory record identity unavailable".into());
                     }
                     let summary = map.entries.get(&key).and_then(|e| e.summary.clone());
                     map.entries.insert(
@@ -716,6 +714,13 @@ mod tests {
         let sections = memory_split::split(SourceKind::Instructions, text);
         section_key(label, &sections[0]).unwrap()
     }
+    /// The pending record the map tracks for `key`.
+    fn tracked(f: &Fixture, key: &str) -> String {
+        memory_map::load(&f.dir).unwrap().entries[key]
+            .record
+            .clone()
+            .unwrap()
+    }
     fn record(f: &Fixture, id: &str, now: i64) -> Record {
         serde_json::from_slice(&f.store.read_record(id, now).unwrap().unwrap()).unwrap()
     }
@@ -775,7 +780,7 @@ mod tests {
         let now = daemon::now().unwrap();
         import(&mut f, &[], now).unwrap();
         let key = first_key(BACKEND, "## Build\nRun tests.\n");
-        let old = record_id(&key, 1).unwrap();
+        let old = tracked(&f, &key);
         assert!(f.store.contains(&old, now).unwrap());
         memory_map::update(&f.dir, |m| {
             m.entries.get_mut(&key).unwrap().summary = Some("s1".into());
@@ -786,7 +791,7 @@ mod tests {
         let out = import(&mut f, &[], now).unwrap();
         assert_eq!(out["written"], json!(1));
         assert!(!f.store.contains(&old, now).unwrap());
-        let new = record_id(&key, 2).unwrap();
+        let new = tracked(&f, &key);
         let r = record(&f, &new, now);
         assert_eq!((r.generation, r.updates.as_deref()), (2, Some("s1")));
         let map = memory_map::load(&f.dir).unwrap();
@@ -797,18 +802,26 @@ mod tests {
         );
     }
     #[test]
-    fn stale_records_with_the_same_identity_are_replaced() {
-        let mut f = fixture("http://127.0.0.1:9/v1/chat/completions");
-        std::fs::write(f.b.root.join("backend/CLAUDE.md"), "## Build\nRun tests.\n").unwrap();
+    fn every_written_record_has_a_unique_identity() {
+        let key = first_key(BACKEND, "## Build\nRun tests.\n");
+        assert_ne!(record_id(&key, 1).unwrap(), record_id(&key, 1).unwrap());
+    }
+    #[tokio::test]
+    async fn reimports_after_a_lost_map_draft_again() {
+        let (url, server, sources) = model().await;
+        let mut f = fixture(&url);
         let now = daemon::now().unwrap();
-        let id = record_id(&first_key(BACKEND, "## Build\nRun tests.\n"), 1).unwrap();
-        assert!(f.store.enqueue(&id, b"junk", now, RECORD_TTL).unwrap());
+        one_section(&mut f, now);
+        assert_eq!(draft(&mut f).await.unwrap(), (1, 0));
+        std::fs::remove_file(f.dir.join(memory_map::FILE)).unwrap();
         assert_eq!(import(&mut f, &[], now).unwrap()["written"], json!(1));
-        let r = record(&f, &id, now);
+        assert_eq!(draft(&mut f).await.unwrap(), (1, 0));
         assert_eq!(
-            (r.label.as_str(), r.heading.clone(), r.body.as_str()),
-            (BACKEND, vec!["Build".to_string()], "Run tests.")
+            f.store.pending_ids("draft:", "", now, 100).unwrap().len(),
+            2
         );
+        assert_eq!(sources.lock().unwrap().len(), 2);
+        server.abort();
     }
     #[test]
     fn scan_reports_unchanged_changed_and_removed_sources() {
@@ -1047,6 +1060,7 @@ mod tests {
         import(&mut f, &[], now).unwrap();
         // A concurrent import replaces this section while the model is drafting.
         let key = first_key(BACKEND, "## Build\nRun tests.\n");
+        let old = tracked(&f, &key);
         memory_map::update(&f.dir, |m| {
             let e = m.entries.get_mut(&key).unwrap();
             e.generation += 1;
@@ -1068,7 +1082,7 @@ mod tests {
         let drafts = f.store.pending_ids("draft:", "", now, 100).unwrap();
         assert_eq!(drafts.len(), 1, "only the other section's draft remains");
         assert!(
-            !f.store.contains(&record_id(&key, 1).unwrap(), now).unwrap(),
+            !f.store.contains(&old, now).unwrap(),
             "the replaced generation's record is consumed"
         );
         let map = memory_map::load(&f.dir).unwrap();
@@ -1090,7 +1104,7 @@ mod tests {
         let now = daemon::now().unwrap();
         import(&mut f, &[], now).unwrap();
         let key = first_key(BACKEND, "## Build\nRun tests.\n");
-        let id = record_id(&key, 1).unwrap();
+        let id = tracked(&f, &key);
         let bytes = f.store.read_record(&id, now).unwrap().unwrap();
         let policy = json!({"policy_revision": 1});
         assert_eq!(
@@ -1133,7 +1147,7 @@ mod tests {
         std::fs::write(f.b.root.join("backend/CLAUDE.md"), "## Build\nRun tests.\n").unwrap();
         import(f, &[], now).unwrap();
         let key = first_key(BACKEND, "## Build\nRun tests.\n");
-        let id = record_id(&key, 1).unwrap();
+        let id = tracked(f, &key);
         (key, id)
     }
     async fn draft(f: &mut Fixture) -> Result<(usize, usize), String> {
