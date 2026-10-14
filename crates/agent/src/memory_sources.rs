@@ -47,6 +47,10 @@ fn check(path: &Path) -> Option<&'static str> {
     }
     (meta.len() > MAX_FILE_BYTES).then_some("too_large")
 }
+/// The notes folder must be a real folder: a symlink could point anywhere.
+fn symlinked(dir: &Path) -> bool {
+    std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_symlink())
+}
 /// Instruction files in the agent's service folder. Workspace-root files are
 /// listed as rejected so `scan` can explain why they are not imported.
 pub fn repository(b: &Binding, service: &str) -> Vec<Candidate> {
@@ -79,6 +83,9 @@ pub fn repository(b: &Binding, service: &str) -> Vec<Candidate> {
 /// This project's Claude Code notes. Suggestions only: each needs `--file`.
 pub fn notes(home: &Path, root: &Path) -> Vec<Candidate> {
     let dir = notes_dir(home, root);
+    if symlinked(&dir) {
+        return vec![];
+    }
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return vec![];
     };
@@ -123,9 +130,11 @@ pub fn approve_file(
     {
         return Ok(found);
     }
-    let notes = notes_dir(home, &b.root)
-        .canonicalize()
-        .map_err(|_| "not_a_memory_source")?;
+    let notes = notes_dir(home, &b.root);
+    if symlinked(&notes) {
+        return Err("symlink");
+    }
+    let notes = notes.canonicalize().map_err(|_| "not_a_memory_source")?;
     let name = canonical
         .file_name()
         .and_then(|n| n.to_str())
@@ -141,11 +150,41 @@ pub fn approve_file(
         rejected: None,
     })
 }
+/// Reads through one handle that never follows a symlink and never reads
+/// more than one byte past the limit.
 pub fn read(c: &Candidate) -> Result<String, &'static str> {
+    use std::io::Read;
     if let Some(reason) = check(&c.path) {
         return Err(reason);
     }
-    String::from_utf8(std::fs::read(&c.path).map_err(|_| "unavailable")?).map_err(|_| "not_utf8")
+    let file = open_no_follow(&c.path)?;
+    if !file.metadata().map_err(|_| "unavailable")?.is_file() {
+        return Err("not_a_file");
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "unavailable")?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err("too_large");
+    }
+    String::from_utf8(bytes).map_err(|_| "not_utf8")
+}
+#[cfg(unix)]
+fn open_no_follow(path: &Path) -> Result<std::fs::File, &'static str> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|e| match e.raw_os_error() {
+            Some(libc::ELOOP) => "symlink",
+            _ => "unavailable",
+        })
+}
+#[cfg(not(unix))]
+fn open_no_follow(path: &Path) -> Result<std::fs::File, &'static str> {
+    std::fs::File::open(path).map_err(|_| "unavailable")
 }
 
 #[cfg(test)]
@@ -257,5 +296,41 @@ mod tests {
         std::fs::write(&path, [0xff, 0xfe]).unwrap();
         let candidate = approve_file(&home, &b, "backend", &path).unwrap();
         assert_eq!(read(&candidate), Err("not_utf8"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_notes_folders_are_refused() {
+        let (_t, home, b) = fixture();
+        let dir = notes_dir(&home, &b.root);
+        let target = home.join("elsewhere");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("x.md"), "secret").unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+        std::os::unix::fs::symlink(&target, &dir).unwrap();
+        assert!(notes(&home, &b.root).is_empty());
+        assert_eq!(
+            approve_file(&home, &b, "backend", &dir.join("x.md")),
+            Err("symlink")
+        );
+        assert_eq!(
+            approve_file(&home, &b, "backend", &target.join("x.md")),
+            Err("symlink")
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn read_refuses_symlinked_files() {
+        let (_t, home, b) = fixture();
+        let dir = notes_dir(&home, &b.root);
+        std::fs::write(dir.join("real.md"), "note").unwrap();
+        std::os::unix::fs::symlink(dir.join("real.md"), dir.join("link.md")).unwrap();
+        let candidate = Candidate {
+            label: "claude-memory:link.md".into(),
+            path: dir.join("link.md"),
+            kind: SourceKind::Note,
+            rejected: None,
+        };
+        assert_eq!(read(&candidate), Err("symlink"));
+        assert_eq!(open_no_follow(&dir.join("link.md")).err(), Some("symlink"));
     }
 }
