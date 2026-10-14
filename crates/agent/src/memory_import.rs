@@ -327,12 +327,17 @@ impl Record {
         text + "\n" + &self.body
     }
 }
-/// Point the map entry at `draft` unless a concurrent import replaced this
-/// generation. Locks only around the map write, never across inference.
-fn link(dir: &Path, record: &Record, draft: &str) -> Result<bool, String> {
+/// Point the map entry at `draft` only while it still tracks this work: not
+/// after a concurrent import replaced the generation, nor after a late
+/// duplicate run would overwrite a recorded submission. Locks only around the
+/// map write, never across inference.
+fn link(dir: &Path, id: &str, record: &Record, draft: &str) -> Result<bool, String> {
     memory_map::update(dir, |map| {
         Ok(match map.entries.get_mut(&record.key) {
-            Some(e) if e.generation == record.generation => {
+            Some(e)
+                if e.generation == record.generation
+                    && (e.record.as_deref() == Some(id) || e.draft.as_deref() == Some(draft)) =>
+            {
                 e.record = None;
                 e.draft = Some(draft.to_string());
                 true
@@ -385,7 +390,7 @@ pub(crate) async fn draft_all(
         let key = format!("draft:{hash}");
         if store.seen(&key)? {
             // An interrupted run may have stored this draft without linking it.
-            if store.contains(&key, daemon::now()?)? && !link(dir, &record, &key)? {
+            if store.contains(&key, daemon::now()?)? && !link(dir, &id, &record, &key)? {
                 store.ack(&key)?;
             }
             store.ack(&id)?;
@@ -414,7 +419,7 @@ pub(crate) async fn draft_all(
                 store.update(&key, daemon::now()?, 3600, |old| {
                     Ok(old.map_or(encoded.clone(), |bytes| bytes.to_vec()))
                 })?;
-                if !link(dir, &record, &key)? {
+                if !link(dir, &id, &record, &key)? {
                     // A concurrent import replaced this generation; drop the stale draft.
                     store.ack(&key)?;
                     store.ack(&id)?;
@@ -1157,6 +1162,28 @@ mod tests {
         );
         assert_eq!(sources.lock().unwrap().len(), 1, "no second inference");
         server.abort();
+    }
+    #[test]
+    fn late_links_never_overwrite_a_recorded_submission() {
+        let mut f = fixture("http://127.0.0.1:9");
+        let now = daemon::now().unwrap();
+        let (key, id) = one_section(&mut f, now);
+        let r = record(&f, &id, now);
+        assert!(link(&f.dir, &id, &r, "draft:first").unwrap());
+        assert!(link(&f.dir, &id, &r, "draft:first").unwrap(), "relink");
+        let v = json!({"memory": {"key": key}});
+        let response = json!({"card": {"id": "s1"}});
+        assert_eq!(submitted(&f.dir, "draft:first", &v, &response), Ok(true));
+        assert!(!link(&f.dir, &id, &r, "draft:late").unwrap());
+        let e = &memory_map::load(&f.dir).unwrap().entries[&key];
+        assert_eq!(
+            (
+                e.record.as_deref(),
+                e.draft.as_deref(),
+                e.summary.as_deref()
+            ),
+            (None, None, Some("s1"))
+        );
     }
     #[tokio::test]
     async fn undecodable_and_unknown_version_records_are_dropped_and_held() {
