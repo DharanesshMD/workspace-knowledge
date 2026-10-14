@@ -1,8 +1,71 @@
-//! Explicit loopback-only Ollama embeddings; no application credentials or cache.
+//! Explicit loopback-only Ollama embeddings; query vectors are cached in memory only.
 use serde_json::json;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use wk_knowledge::semantic::Namespace;
+const QUERY_CACHE: usize = 1024;
+const QUERY_TTL: Duration = Duration::from_secs(600);
+/// Recent query vectors keyed by whitespace-normalized text; never persisted or logged.
+#[derive(Default)]
+struct QueryCache {
+    entries: HashMap<String, (Vec<f32>, Instant, u64)>,
+    tick: u64,
+}
+impl QueryCache {
+    fn get(&mut self, key: &str, now: Instant) -> Option<Vec<f32>> {
+        self.tick += 1;
+        let tick = self.tick;
+        match self.entries.get_mut(key) {
+            Some((vector, at, used)) if now.duration_since(*at) < QUERY_TTL => {
+                *used = tick;
+                Some(vector.clone())
+            }
+            Some(_) => {
+                self.entries.remove(key);
+                None
+            }
+            None => None,
+        }
+    }
+    fn put(&mut self, key: String, vector: Vec<f32>, now: Instant) {
+        self.tick += 1;
+        if self.entries.len() >= QUERY_CACHE && !self.entries.contains_key(&key) {
+            if let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, _, used))| *used)
+                .map(|(k, _)| k.clone())
+            {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.entries.insert(key, (vector, now, self.tick));
+    }
+}
+/// Ollama `keep_alive`: an integer with `s`, `m` or `h`, at most 24 hours.
+pub fn parse_keep_alive(value: &str) -> Result<String, String> {
+    let invalid = || "invalid embedding keep_alive".to_string();
+    let Some(unit) = value.chars().last() else {
+        return Err(invalid());
+    };
+    let number = &value[..value.len() - unit.len_utf8()];
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    let n: u64 = number.parse().map_err(|_| invalid())?;
+    let seconds = match unit {
+        's' => n,
+        'm' => n.saturating_mul(60),
+        'h' => n.saturating_mul(3600),
+        _ => return Err(invalid()),
+    };
+    if seconds > 86_400 {
+        return Err("embedding keep_alive exceeds 24h".into());
+    }
+    Ok(value.to_string())
+}
 #[derive(Clone)]
 pub struct Config {
     pub endpoint: String,
@@ -65,6 +128,8 @@ pub struct Embeddings {
     endpoint: reqwest::Url,
     client: reqwest::Client,
     slots: Semaphore,
+    keep_alive: String,
+    cache: Mutex<QueryCache>,
 }
 impl Embeddings {
     pub fn new(config: Config) -> Result<Self, String> {
@@ -80,15 +145,60 @@ impl Embeddings {
             endpoint,
             client,
             slots: Semaphore::new(2),
+            keep_alive: "30m".into(),
+            cache: Mutex::default(),
         })
     }
+    /// Use an Ollama `keep_alive` already checked by [`parse_keep_alive`].
+    pub fn with_keep_alive(mut self, value: String) -> Self {
+        self.keep_alive = value;
+        self
+    }
     pub fn from_env() -> Result<Option<Self>, String> {
-        Config::parse(|name| std::env::var(name).ok())?
+        let keep_alive = std::env::var("WK_EMBEDDING_KEEP_ALIVE")
+            .ok()
+            .map(|value| parse_keep_alive(&value))
+            .transpose()?;
+        let embeddings = Config::parse(|name| std::env::var(name).ok())?
             .map(Self::new)
-            .transpose()
+            .transpose()?;
+        Ok(match (embeddings, keep_alive) {
+            (Some(embeddings), Some(value)) => Some(embeddings.with_keep_alive(value)),
+            (embeddings, _) => embeddings,
+        })
     }
     pub async fn embed_query(&self, text: &str) -> Result<Vec<f32>, &'static str> {
-        self.bounded_embed(text, true, Duration::from_secs(3)).await
+        self.embed_query_within(text, Duration::from_secs(3)).await
+    }
+    /// Cached query embedding within `deadline`. The cache holds vectors only, in memory.
+    pub async fn embed_query_within(
+        &self,
+        text: &str,
+        deadline: Duration,
+    ) -> Result<Vec<f32>, &'static str> {
+        screen(text, true)?;
+        let key = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if let Some(vector) = self
+            .cache
+            .lock()
+            .map_err(|_| "embedding_unavailable")?
+            .get(&key, Instant::now())
+        {
+            return Ok(vector);
+        }
+        let vector = self.bounded_embed(text, true, deadline).await?;
+        self.cache.lock().map_err(|_| "embedding_unavailable")?.put(
+            key,
+            vector.clone(),
+            Instant::now(),
+        );
+        Ok(vector)
+    }
+    /// Load the model before the first prompt; never cached.
+    pub async fn warm(&self) -> Result<(), &'static str> {
+        self.bounded_embed("warm up", true, Duration::from_secs(30))
+            .await
+            .map(|_| ())
     }
     pub async fn embed_document(&self, text: &str) -> Result<Vec<f32>, &'static str> {
         self.bounded_embed(text, false, Duration::from_secs(30))
@@ -100,12 +210,7 @@ impl Embeddings {
         query: bool,
         deadline: Duration,
     ) -> Result<Vec<f32>, &'static str> {
-        if text.trim().is_empty()
-            || text.len() > if query { 1024 } else { 16384 }
-            || wk_summarize::sensitive(text)
-        {
-            return Err("input_rejected");
-        }
+        screen(text, query)?;
         let _permit = self.slots.try_acquire().map_err(|_| "embedding_busy")?;
         tokio::time::timeout(deadline, self.embed(text, query))
             .await
@@ -142,7 +247,7 @@ impl Embeddings {
         } else {
             "search_document"
         };
-        let response=self.client.post(self.endpoint.clone()).json(&json!({"model":self.namespace.model,"input":format!("{prefix}: {text}"),"truncate":false,"keep_alive":"5m"}))
+        let response=self.client.post(self.endpoint.clone()).json(&json!({"model":self.namespace.model,"input":format!("{prefix}: {text}"),"truncate":false,"keep_alive":self.keep_alive}))
             .send().await.map_err(|_|"embedding_unavailable")?;
         let value = wk_summarize::bounded_json(response, 1024 * 1024)
             .await
@@ -164,5 +269,36 @@ impl Embeddings {
             .map_err(|_| "embedding_invalid_response")?;
         self.digest_current().await?;
         Ok(vector)
+    }
+}
+fn screen(text: &str, query: bool) -> Result<(), &'static str> {
+    if text.trim().is_empty()
+        || text.len() > if query { 1024 } else { 16384 }
+        || wk_summarize::sensitive(text)
+    {
+        return Err("input_rejected");
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn query_cache_expires_and_evicts_least_recently_used() {
+        let mut cache = QueryCache::default();
+        let start = Instant::now();
+        for i in 0..QUERY_CACHE {
+            cache.put(i.to_string(), vec![i as f32], start);
+        }
+        assert!(cache.get("0", start).is_some());
+        cache.put("new".into(), vec![0.], start);
+        assert_eq!(cache.entries.len(), QUERY_CACHE);
+        assert!(cache.get("0", start).is_some(), "recently used entry kept");
+        assert!(
+            cache.get("1", start).is_none(),
+            "least recently used evicted"
+        );
+        assert!(cache.get("new", start + QUERY_TTL).is_none(), "expired");
+        assert!(!cache.entries.contains_key("new"));
     }
 }
