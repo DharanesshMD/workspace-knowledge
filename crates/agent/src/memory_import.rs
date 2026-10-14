@@ -178,7 +178,8 @@ async fn import(dir: &Path, yes: bool, files: &[PathBuf]) -> Result<Value, Strin
 }
 /// Read every source and count sections before writing anything. Unreadable
 /// service-folder files are skipped and counted; a named `--file` that cannot
-/// be approved or read fails the whole run.
+/// be approved or read fails the whole run. Sections that vanished from a
+/// file read this run are retired; files not read this run are left alone.
 pub(crate) fn import_with(
     dir: &Path,
     b: &Binding,
@@ -216,16 +217,36 @@ pub(crate) fn import_with(
     let mut prepared = Vec::new();
     for (source, text) in &sources {
         for section in memory_split::split(source.kind, text) {
-            prepared.push((source.label.clone(), section));
+            prepared.push((
+                section_key(&source.label, &section)?,
+                source.label.clone(),
+                section,
+            ));
         }
     }
     if prepared.len() > MAX_SECTIONS {
         return Err("too_many_memory_sections".into());
     }
-    let (written, unchanged) = memory_map::update(dir, |map| {
+    let read: BTreeSet<&String> = sources.iter().map(|(s, _)| &s.label).collect();
+    let current: BTreeSet<String> = prepared.iter().map(|(key, ..)| key.clone()).collect();
+    let (written, unchanged, retired) = memory_map::update(dir, |map| {
         let (mut written, mut unchanged) = (0, 0);
-        for (label, section) in prepared {
-            let key = section_key(&label, &section)?;
+        // Sections gone from a file read this run (renamed or restructured
+        // headings) retire their unsubmitted work; submitted summaries stay.
+        let orphaned: Vec<String> = map
+            .entries
+            .iter()
+            .filter(|(key, e)| read.contains(&e.label) && !current.contains(*key))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &orphaned {
+            if let Some(e) = map.entries.remove(key) {
+                for id in e.record.iter().chain(e.draft.iter()) {
+                    store.ack(id)?;
+                }
+            }
+        }
+        for (key, label, section) in prepared {
             let content = content_hash(&section)?;
             let entry = map.entries.get(&key);
             let mut pending = false;
@@ -281,11 +302,12 @@ pub(crate) fn import_with(
                 }
             }
         }
-        Ok((written, unchanged))
+        Ok((written, unchanged, orphaned.len()))
     })?;
     Ok(json!({
         "written": written,
         "unchanged": unchanged,
+        "retired": retired,
         "rejected": rejected,
         "sources": sources.len(),
         "published": false,
@@ -758,6 +780,76 @@ mod tests {
         std::fs::remove_file(&note).unwrap();
         let after = scan();
         assert_eq!(after["removed"], json!(["claude-memory:deploy.md"]));
+    }
+    #[tokio::test]
+    async fn restructured_files_retire_orphaned_sections() {
+        let (url, server, _) = model().await;
+        let mut f = fixture(&url);
+        let path = f.b.root.join("backend/CLAUDE.md");
+        let old = "## Build\nRun tests.\n## Style\nUse rustfmt.\n";
+        std::fs::write(&path, old).unwrap();
+        let now = daemon::now().unwrap();
+        import(&mut f, &[], now).unwrap();
+        assert_eq!(draft(&mut f).await.unwrap(), (2, 0));
+        // Build is submitted, Style stays a draft, Deploy stays a record.
+        let build = first_key(BACKEND, old);
+        let submitted_draft = memory_map::load(&f.dir).unwrap().entries[&build]
+            .draft
+            .clone()
+            .unwrap();
+        let v: Value =
+            serde_json::from_slice(&f.store.read_record(&submitted_draft, now).unwrap().unwrap())
+                .unwrap();
+        submitted(&f.dir, &submitted_draft, &v, &json!({"card": {"id": "s1"}})).unwrap();
+        f.store.ack(&submitted_draft).unwrap();
+        std::fs::write(&path, format!("{old}## Deploy\nTuesdays.\n")).unwrap();
+        assert_eq!(import(&mut f, &[], now).unwrap()["written"], json!(1));
+        let drafts = f.store.pending_ids("draft:", "", now, 100).unwrap();
+        let records = f.store.pending_ids("memory:", "", now, 100).unwrap();
+        assert_eq!((drafts.len(), records.len()), (1, 1));
+        std::fs::write(&path, format!("# Title\n{old}## Deploy\nTuesdays.\n")).unwrap();
+        let out = import(&mut f, &[], now).unwrap();
+        assert_eq!(
+            (out["written"].clone(), out["retired"].clone()),
+            (json!(3), json!(3))
+        );
+        assert!(!f.store.contains(&drafts[0], now).unwrap(), "draft retired");
+        assert!(
+            !f.store.contains(&records[0], now).unwrap(),
+            "record retired"
+        );
+        assert_eq!(
+            f.store.pending_ids("memory:", "", now, 100).unwrap().len(),
+            3
+        );
+        let map = memory_map::load(&f.dir).unwrap();
+        assert_eq!(map.entries.len(), 3);
+        assert!(map
+            .entries
+            .values()
+            .all(|e| e.record.is_some() && e.summary.is_none()));
+        server.abort();
+    }
+    #[test]
+    fn sources_not_read_this_run_are_not_retired() {
+        let mut f = fixture("http://127.0.0.1:9/v1/chat/completions");
+        std::fs::write(f.b.root.join("backend/CLAUDE.md"), "## Build\nRun tests.\n").unwrap();
+        let agents = f.b.root.join("backend/AGENTS.md");
+        std::fs::write(&agents, "## Style\nUse rustfmt.\n").unwrap();
+        let now = daemon::now().unwrap();
+        import(&mut f, &[], now).unwrap();
+        std::fs::remove_file(&agents).unwrap();
+        let out = import(&mut f, &[], now).unwrap();
+        assert_eq!(
+            (out["unchanged"].clone(), out["retired"].clone()),
+            (json!(1), json!(0))
+        );
+        assert_eq!(
+            f.store.pending_ids("memory:", "", now, 100).unwrap().len(),
+            2
+        );
+        let scan = scan_with(&f.dir, &f.b, "backend", Some(f.home.as_path())).unwrap();
+        assert_eq!(scan["removed"], json!(["repo:backend/AGENTS.md"]));
     }
     #[test]
     fn rejected_sources_that_still_exist_are_not_removed() {
