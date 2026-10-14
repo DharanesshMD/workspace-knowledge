@@ -40,15 +40,18 @@ pub async fn run(dir: &Path) -> Result<Value, String> {
         drafts += made;
         held += failed;
     }
-    let (made, failed) = crate::memory_import::draft_all(dir, &c, &b, &policy, &mut store).await?;
-    drafts += made;
-    held += failed;
+    // A memory import problem never blocks session drafts or owner sync.
+    let memory = crate::memory_import::draft_all(dir, &c, &b, &policy, &mut store).await;
+    if let Ok((made, failed)) = memory {
+        drafts += made;
+        held += failed;
+    }
 
     let owner_sync = crate::personal_sync::run(dir)
         .await
         .unwrap_or_else(|_| json!({"enabled":false,"uploaded":0,"held":0,"status":"unavailable"}));
     Ok(
-        json!({"private_drafts_created":drafts,"held":held,"published":false,"owner_sync":owner_sync}),
+        json!({"private_drafts_created":drafts,"held":held,"memory_drafting":if memory.is_ok() {"ok"} else {"failed"},"published":false,"owner_sync":owner_sync}),
     )
 }
 // Re-read local permission and destination around every slow inference attempt.

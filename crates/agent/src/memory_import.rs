@@ -321,6 +321,8 @@ fn link(dir: &Path, record: &Record, draft: &str) -> Result<bool, String> {
 }
 /// Draft pending memory records. Mirrors `journal_turns`: approval is
 /// re-checked around inference, and failed records stay pending until expiry.
+/// A draft is linked in the map before its record is consumed, so an
+/// interrupted run leaves the record for the next run to relink.
 pub(crate) async fn draft_all(
     dir: &Path,
     c: &state::Config,
@@ -328,8 +330,8 @@ pub(crate) async fn draft_all(
     policy: &Value,
     store: &mut LocalStore,
 ) -> Result<(usize, usize), String> {
-    let ids = store.next_ids("memory", "memory:", daemon::now()?, 10)?;
     let revision = policy["policy_revision"].as_u64().ok_or("invalid policy")?;
+    let ids = store.next_ids("memory", "memory:", daemon::now()?, 10)?;
     let (mut drafts, mut held) = (0, 0);
     for id in ids {
         if process::processing_current(dir, c, b).is_err() {
@@ -338,13 +340,16 @@ pub(crate) async fn draft_all(
         let Some(bytes) = store.read_record(&id, daemon::now()?)? else {
             continue;
         };
-        let record: Record = serde_json::from_slice(&bytes).map_err(|_| "invalid memory record")?;
-        if record.policy_hash != b.policy_hash {
-            // Approval changed since import; the developer must import again.
-            store.ack(&id)?;
-            held += 1;
-            continue;
-        }
+        let record = match serde_json::from_slice::<Record>(&bytes) {
+            Ok(r) if r.version == 1 && r.policy_hash == b.policy_hash => r,
+            // Unreadable, or approval changed since import: the developer must
+            // import again. One bad record never blocks the others.
+            _ => {
+                store.ack(&id)?;
+                held += 1;
+                continue;
+            }
+        };
         let hash = hex(&(
             &id,
             &record.heading,
@@ -387,12 +392,13 @@ pub(crate) async fn draft_all(
                 store.update(&key, daemon::now()?, 3600, |old| {
                     Ok(old.map_or(encoded.clone(), |bytes| bytes.to_vec()))
                 })?;
-                store.ack(&id)?;
                 if !link(dir, &record, &key)? {
                     // A concurrent import replaced this generation; drop the stale draft.
                     store.ack(&key)?;
+                    store.ack(&id)?;
                     continue;
                 }
+                store.ack(&id)?;
                 drafts += 1;
             }
             Err(_) => held += 1,
@@ -404,6 +410,7 @@ pub(crate) async fn draft_all(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
     pub(super) struct Fixture {
         pub _temp: tempfile::TempDir,
         pub dir: PathBuf,
@@ -737,8 +744,13 @@ mod tests {
         assert!(command(&f.dir, "import", false, &[]).await.is_err());
         assert!(!f.dir.join(memory_map::FILE).exists());
     }
-    use std::sync::{Arc, Mutex};
     async fn model() -> (String, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<String>>>) {
+        model_flagging(false).await
+    }
+    /// `sensitive`: the model flags every summary, so inference fails.
+    async fn model_flagging(
+        sensitive: bool,
+    ) -> (String, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<String>>>) {
         let sources = Arc::new(Mutex::new(Vec::new()));
         let seen = sources.clone();
         let app = axum::Router::new().route(
@@ -757,7 +769,7 @@ mod tests {
                         "intent": "Keep a recorded backend convention available to teammates",
                         "rationale": "The developer's agent memory recorded this convention",
                         "decisions": ["Follow the recorded convention for backend changes"],
-                        "constraints": [], "open_questions": [], "sensitive": false
+                        "constraints": [], "open_questions": [], "sensitive": sensitive
                     });
                     axum::Json(json!({"choices": [{"message": {"content": summary.to_string()}}]}))
                 }
@@ -877,7 +889,11 @@ mod tests {
             .unwrap()
             .is_empty());
         let drafts = f.store.pending_ids("draft:", "", now, 100).unwrap();
-        assert_eq!(drafts.len(), 1, "the stale draft is not left pending");
+        assert_eq!(drafts.len(), 1, "only the other section's draft remains");
+        assert!(
+            !f.store.contains(&record_id(&key, 1).unwrap(), now).unwrap(),
+            "the replaced generation's record is consumed"
+        );
         let map = memory_map::load(&f.dir).unwrap();
         let replaced = &map.entries[&key];
         assert_eq!(replaced.draft, None);
@@ -934,6 +950,122 @@ mod tests {
             (None, Some(draft.as_str()))
         );
         assert_eq!(sources.lock().unwrap().len(), 1, "no second inference");
+        server.abort();
+    }
+    fn one_section(f: &mut Fixture, now: i64) -> (String, String) {
+        std::fs::write(f.b.root.join("backend/CLAUDE.md"), "## Build\nRun tests.\n").unwrap();
+        import(f, &[], now).unwrap();
+        let key = first_key(BACKEND, "## Build\nRun tests.\n");
+        let id = record_id(&key, 1).unwrap();
+        (key, id)
+    }
+    async fn draft(f: &mut Fixture) -> Result<(usize, usize), String> {
+        let policy = json!({"policy_revision": 1});
+        draft_all(&f.dir, &f.c, &f.b, &policy, &mut f.store).await
+    }
+    #[tokio::test]
+    async fn failed_map_links_keep_the_record_for_the_next_run() {
+        let (url, server, sources) = model().await;
+        let mut f = fixture(&url);
+        let now = daemon::now().unwrap();
+        let (key, id) = one_section(&mut f, now);
+        let map = std::fs::read(f.dir.join(memory_map::FILE)).unwrap();
+        std::fs::write(f.dir.join(memory_map::FILE), "{not json").unwrap();
+        assert!(draft(&mut f).await.is_err());
+        assert!(f.store.contains(&id, now).unwrap(), "record still pending");
+        let drafts = f.store.pending_ids("draft:", "", now, 100).unwrap();
+        assert_eq!(drafts.len(), 1, "the unlinked draft is kept");
+        std::fs::write(f.dir.join(memory_map::FILE), map).unwrap();
+        assert_eq!(draft(&mut f).await.unwrap(), (0, 0));
+        assert!(!f.store.contains(&id, now).unwrap(), "record consumed");
+        let e = &memory_map::load(&f.dir).unwrap().entries[&key];
+        assert_eq!(
+            (e.record.as_deref(), e.draft.as_deref()),
+            (None, Some(drafts[0].as_str()))
+        );
+        assert_eq!(sources.lock().unwrap().len(), 1, "no second inference");
+        server.abort();
+    }
+    #[tokio::test]
+    async fn undecodable_and_unknown_version_records_are_dropped_and_held() {
+        let (url, server, _) = model().await;
+        let mut f = fixture(&url);
+        let now = daemon::now().unwrap();
+        let (_, id) = one_section(&mut f, now);
+        let mut future = record(&f, &id, now);
+        future.version = 2;
+        let junk = format!("memory:{}", "0".repeat(64));
+        let versioned = format!("memory:{}", "1".repeat(64));
+        assert!(f.store.enqueue(&junk, b"junk", now, RECORD_TTL).unwrap());
+        let bytes = serde_json::to_vec(&future).unwrap();
+        assert!(f
+            .store
+            .enqueue(&versioned, &bytes, now, RECORD_TTL)
+            .unwrap());
+        assert_eq!(draft(&mut f).await.unwrap(), (1, 2));
+        assert!(f
+            .store
+            .pending_ids("memory:", "", now, 100)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            f.store.pending_ids("draft:", "", now, 100).unwrap().len(),
+            1
+        );
+        server.abort();
+    }
+    #[tokio::test]
+    async fn records_imported_under_another_approval_are_dropped_and_held() {
+        let (url, server, sources) = model().await;
+        let mut f = fixture(&url);
+        let now = daemon::now().unwrap();
+        let (_, id) = one_section(&mut f, now);
+        let mut stale = record(&f, &id, now);
+        stale.policy_hash = "older-approval".into();
+        f.store.ack(&id).unwrap();
+        let bytes = serde_json::to_vec(&stale).unwrap();
+        assert!(f.store.enqueue(&id, &bytes, now, RECORD_TTL).unwrap());
+        assert_eq!(draft(&mut f).await.unwrap(), (0, 1));
+        assert!(!f.store.contains(&id, now).unwrap(), "record dropped");
+        assert!(f
+            .store
+            .pending_ids("draft:", "", now, 100)
+            .unwrap()
+            .is_empty());
+        assert!(
+            sources.lock().unwrap().is_empty(),
+            "never sent to the model"
+        );
+        server.abort();
+    }
+    #[tokio::test]
+    async fn model_failures_keep_the_record_and_write_no_draft() {
+        let (url, server, _) = model_flagging(true).await;
+        let mut f = fixture(&url);
+        let now = daemon::now().unwrap();
+        let (_, id) = one_section(&mut f, now);
+        assert_eq!(draft(&mut f).await.unwrap(), (0, 1));
+        assert!(f.store.contains(&id, now).unwrap(), "record still pending");
+        assert!(f
+            .store
+            .pending_ids("draft:", "", now, 100)
+            .unwrap()
+            .is_empty());
+        server.abort();
+    }
+    #[tokio::test]
+    async fn invalid_policies_fail_before_any_record_is_read() {
+        let (url, server, sources) = model().await;
+        let mut f = fixture(&url);
+        let now = daemon::now().unwrap();
+        let (_, id) = one_section(&mut f, now);
+        let bad = json!({});
+        assert_eq!(
+            draft_all(&f.dir, &f.c, &f.b, &bad, &mut f.store).await,
+            Err("invalid policy".into())
+        );
+        assert!(f.store.contains(&id, now).unwrap());
+        assert!(sources.lock().unwrap().is_empty());
         server.abort();
     }
 }
