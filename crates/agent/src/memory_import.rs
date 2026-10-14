@@ -449,7 +449,9 @@ pub(crate) fn check_submit(
     policy_hash: &str,
     policy_revision: &Value,
 ) -> Result<(), String> {
-    if draft["policy_hash"] != policy_hash || draft["card"]["policy_revision"] != *policy_revision {
+    // A malformed policy reply must never consume a valid draft.
+    let revision = policy_revision.as_u64().ok_or("invalid policy")?;
+    if draft["policy_hash"] != policy_hash || draft["card"]["policy_revision"] != revision {
         store.ack(id)?;
         return Err("policy changed; run memory import again".into());
     }
@@ -1510,6 +1512,17 @@ mod tests {
             );
             assert!(!f.store.contains(&id, daemon::now().unwrap()).unwrap());
         }
+    }
+    #[test]
+    fn malformed_policies_fail_the_submit_and_keep_the_draft() {
+        let mut f = fixture("http://127.0.0.1:9");
+        let (id, v) = pending_draft(&mut f, card());
+        let hash = f.b.policy_hash.clone();
+        assert_eq!(
+            check_submit(&mut f.store, &id, &v, &hash, &Value::Null),
+            Err("invalid policy".into())
+        );
+        assert!(f.store.contains(&id, daemon::now().unwrap()).unwrap());
     }
     #[test]
     fn sensitive_cards_fail_the_submit_and_stay_pending() {
