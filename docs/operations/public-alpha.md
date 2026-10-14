@@ -1,6 +1,14 @@
 # Public source alpha launch packet
 
-Proposed label: **v0.1.0-alpha.1**. Status: **private candidate; not approved or published**. Scope: source evaluation for Linux Docker servers and macOS developers. This packet prepares a reviewable launch; writing it does not authorize the steps below.
+Label: **v0.1.0-alpha.1**. Status: **published as a source-only prerelease on 2026-10-14**. Scope: source evaluation for Linux Docker servers and macOS developers. The sections below are the runbook that was followed; the launch record states what actually happened.
+
+## Launch record
+
+- PR #1 merged into `main` as `038c935` (merge commit, all sign-offs preserved). Stale branches `feat/foundation` and `codex/cursor-native-capture` were deleted after confirming they were fully contained in `main`.
+- Before the visibility change: zero retained Actions artifacts, the candidate-build workflow disabled, and only normal CI runs queued (CI uploads no artifacts and uses no secrets).
+- Repository made public; private vulnerability reporting enabled and verified through the API; `main` protected with the nine CI checks required and force-push/deletion disabled.
+- Tag `v0.1.0-alpha.1` → `038c935`, published as a [GitHub prerelease](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.1) with no attached assets.
+- **CI caveat:** an account billing block stopped GitHub Actions from starting jobs on `038c935` and later commits. The tag relies on the all-green exact-head results for `627aba1`; the only change between that commit and `038c935` is the README clone instruction. The dependency audit passed on `038c935`; the Foundation checks have not yet run there. Re-run them once Actions can start jobs and record the result.
 
 ## Owner decisions required
 
@@ -36,7 +44,7 @@ GitHub's [private reporting documentation](https://docs.github.com/en/code-secur
 
 ## Evaluation from source
 
-While the repository is private, access is limited to authorized collaborators. Follow [quickstart](../../README.md#quickstart) for the current candidate or [installation](install.md) for a team evaluation. After the approved alpha tag exists, evaluators can clone that tag:
+Follow [quickstart](../../README.md#quickstart) for the default branch or [installation](install.md) for a team evaluation. To evaluate exactly the prerelease, clone its tag:
 
 ```sh
 git clone --branch v0.1.0-alpha.1 https://github.com/DharanesshMD/workspace-knowledge.git

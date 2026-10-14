@@ -1,8 +1,12 @@
 # Changelog
 
-Changes are recorded here for the first source-only alpha candidate. No tag or release has been published.
+All notable changes are recorded here.
 
-## Unreleased — proposed v0.1.0-alpha.1
+## Unreleased
+
+- Code of conduct, Dependabot updates, design-history docs layout and README title icon sizing.
+
+## [v0.1.0-alpha.1](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.1) — 2026-10-14 (source-only prerelease)
 
 ### Included
 

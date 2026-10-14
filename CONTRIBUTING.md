@@ -59,7 +59,7 @@ Production migration and identity provisioning are described in [server setup](d
 
 ## Alpha contribution scope
 
-The first publication candidate is source-only, targeting Linux Docker servers and macOS developers. See the [unreleased changelog](CHANGELOG.md) and [public-alpha runbook](docs/operations/public-alpha.md). Windows CI builds do not establish native installation or capture support. Report sensitive findings through [SECURITY.md](SECURITY.md), never public issues or PRs.
+The first published alpha is source-only, targeting Linux Docker servers and macOS developers. See the [changelog](CHANGELOG.md) and [public-alpha runbook](docs/operations/public-alpha.md). Windows CI builds do not establish native installation or capture support. Report sensitive findings through [SECURITY.md](SECURITY.md), never public issues or PRs.
 
 ## Contribution policy
 
