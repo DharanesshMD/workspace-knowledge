@@ -34,7 +34,7 @@ Notes and limits:
 
 - `scan` status `unchanged` means the content matches the last import; an unsubmitted draft that expired (drafts last one hour) is drafted again on the next `import`.
 - Service-folder files that are too large (over 64 KiB), symlinked or not UTF-8 are skipped and counted as `rejected`; an explicit `--file` that fails stops the import before anything is written. A run over 200 sections also stops before writing.
-- Claude Code notes are found only on macOS and Linux, only when `HOME` is set, and only when no folder below your home folder on the way to the notes (including `~/.claude`) is a symlink. Without them, `scan` lists no notes and may show earlier note labels under `removed`.
+- Claude Code note discovery is qualified only on macOS and Linux. Notes are found only when `HOME` is set and only when no folder below your home folder on the way to the notes (including `~/.claude`) is a symlink. Without them, `scan` lists no notes and may show earlier note labels under `removed`.
 - `wk-agent process` reports `memory_drafting: failed` if the owner-only `memory-import.json` in the state folder cannot be read; other drafting and owner synchronization continue. Restore that file's permissions or contents; deleting it makes the next import start over.
 
 ## Claude Desktop Enterprise
