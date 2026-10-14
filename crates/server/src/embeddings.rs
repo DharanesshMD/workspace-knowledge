@@ -124,6 +124,7 @@ impl Config {
     }
 }
 pub struct Embeddings {
+    /// Fixed for the life of the instance; the query cache relies on it.
     pub namespace: Namespace,
     endpoint: reqwest::Url,
     client: reqwest::Client,
@@ -171,6 +172,9 @@ impl Embeddings {
         self.embed_query_within(text, Duration::from_secs(3)).await
     }
     /// Cached query embedding within `deadline`. The cache holds vectors only, in memory.
+    ///
+    /// Cache hits skip the provider digest check for up to the 10-minute TTL; any provider
+    /// call that detects a model change clears the cache.
     pub async fn embed_query_within(
         &self,
         text: &str,
@@ -178,21 +182,17 @@ impl Embeddings {
     ) -> Result<Vec<f32>, &'static str> {
         screen(text, true)?;
         let key = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        if let Some(vector) = self
-            .cache
-            .lock()
-            .map_err(|_| "embedding_unavailable")?
-            .get(&key, Instant::now())
-        {
+        if let Some(vector) = self.cache().get(&key, Instant::now()) {
             return Ok(vector);
         }
         let vector = self.bounded_embed(text, true, deadline).await?;
-        self.cache.lock().map_err(|_| "embedding_unavailable")?.put(
-            key,
-            vector.clone(),
-            Instant::now(),
-        );
+        self.cache().put(key, vector.clone(), Instant::now());
         Ok(vector)
+    }
+    fn cache(&self) -> std::sync::MutexGuard<'_, QueryCache> {
+        self.cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
     /// Load the model before the first prompt; never cached.
     pub async fn warm(&self) -> Result<(), &'static str> {
@@ -212,9 +212,13 @@ impl Embeddings {
     ) -> Result<Vec<f32>, &'static str> {
         screen(text, query)?;
         let _permit = self.slots.try_acquire().map_err(|_| "embedding_busy")?;
-        tokio::time::timeout(deadline, self.embed(text, query))
+        let result = tokio::time::timeout(deadline, self.embed(text, query))
             .await
-            .map_err(|_| "embedding_timeout")?
+            .map_err(|_| "embedding_timeout")?;
+        if result == Err("embedding_model_changed") {
+            *self.cache() = QueryCache::default();
+        }
+        result
     }
     async fn digest_current(&self) -> Result<(), &'static str> {
         let mut url = self.endpoint.clone();
@@ -300,5 +304,30 @@ mod tests {
         );
         assert!(cache.get("new", start + QUERY_TTL).is_none(), "expired");
         assert!(!cache.entries.contains_key("new"));
+    }
+    #[tokio::test]
+    async fn a_poisoned_cache_lock_still_serves_queries() {
+        let e = Embeddings::new(Config {
+            endpoint: "http://127.0.0.1:9/api/embed".into(),
+            namespace: Namespace {
+                model: "nomic-embed-text:v1.5".into(),
+                digest: "a".repeat(64),
+                dimensions: 3,
+            },
+        })
+        .unwrap();
+        e.cache
+            .lock()
+            .unwrap()
+            .put("rate limiter".into(), vec![1., 0., 0.], Instant::now());
+        let _ = std::thread::scope(|s| {
+            s.spawn(|| {
+                let _guard = e.cache.lock().unwrap();
+                panic!("poison the cache lock");
+            })
+            .join()
+        });
+        assert!(e.cache.is_poisoned());
+        assert_eq!(e.embed_query("rate limiter").await, Ok(vec![1., 0., 0.]));
     }
 }
