@@ -15,9 +15,9 @@ Approved intent: solve the empty-on-day-one problem by turning a developer's exi
 
 Workspace-root instruction files are outside every approved service, so `scan` reports them as `rejected: outside_approved_service`. The agent is bound to one service and reads only that service's files, matching the service tag on its drafts.
 
-The encoded folder name replaces every character other than ASCII letters, digits and `-` in the canonical workspace root with `-`, matching Claude Code's convention. The mapping can collide, so the folder is only a suggestion; explicit `--file` approval is the authority. A `--file` must canonicalize into either the workspace (then it must pass scope) or exactly that encoded memory folder; anything else is rejected.
+The encoded folder name replaces every character other than ASCII letters, digits and `-` in the canonical workspace root with `-`, matching Claude Code's convention. The mapping can collide, so the folder is only a suggestion; explicit `--file` approval is the authority. Project-note discovery covers macOS and Linux; on Windows the folder encoding is not yet qualified. A `--file` must canonicalize into either the workspace (then it must pass scope) or exactly that encoded memory folder; anything else is rejected.
 
-Always excluded: the global `~/.claude/CLAUDE.md`, Codex's cross-project `~/.codex/memories`, other projects' memory folders, symlinks (the path or any component after canonicalization differing from the given path), non-UTF-8 files, files over 64 KiB and runs over 200 sections (the run fails before writing anything).
+Always excluded: the global `~/.claude/CLAUDE.md`, Codex's cross-project `~/.codex/memories`, other projects' memory folders, symlinks (a symlinked final name, or any symlink in the resolved location below the workspace root or home folder; other spellings that resolve inside the allowed location are accepted and read at their resolved path), non-UTF-8 files, files over 64 KiB and runs over 200 sections (the run fails before writing anything).
 
 ## Splitting
 

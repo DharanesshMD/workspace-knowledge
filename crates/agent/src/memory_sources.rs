@@ -362,6 +362,8 @@ mod tests {
             Err("not_a_memory_source")
         );
     }
+    // Unix only: the alpha supports macOS/Linux developers, and Windows verbatim paths differ.
+    #[cfg(unix)]
     #[test]
     fn non_canonical_spellings_resolve_to_the_canonical_note() {
         let (_t, home, b) = fixture();
