@@ -5,6 +5,8 @@ mod cursor_source;
 mod daemon;
 mod device;
 #[allow(dead_code)] // Wired into the CLI by the memory import task.
+mod memory_sources;
+#[allow(dead_code)] // Wired into the CLI by the memory import task.
 mod memory_split;
 mod native_login;
 mod network;
