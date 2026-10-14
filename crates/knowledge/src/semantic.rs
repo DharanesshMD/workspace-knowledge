@@ -240,7 +240,7 @@ impl Knowledge {
     }
     pub async fn semantic_ready(&self, a: &Actor, p: &str, ns: &Namespace) -> Result<bool, Error> {
         ns.validate()?;
-        let mut tx = self.code_tx(a, p).await?;
+        let mut tx = self.read_tx(a, p).await?;
         let services = self.semantic_services(&mut tx, a, p).await?;
         let exists: bool =
             sqlx::query_scalar("SELECT to_regclass('public.card_embeddings') IS NOT NULL")
@@ -267,7 +267,7 @@ impl Knowledge {
             return Err(Error::Invalid);
         }
         let encoded = ns.vector(vector)?;
-        let mut tx = self.code_tx(a, p).await?;
+        let mut tx = self.read_tx(a, p).await?;
         let services = self.semantic_services(&mut tx, a, p).await?;
         let cards = vector_candidates(&mut tx, a, p, &services, ns, &encoded, limit).await?;
         tx.commit().await.map_err(db)?;
@@ -286,7 +286,7 @@ impl Knowledge {
             return Err(Error::Invalid);
         }
         let encoded = ns.vector(vector)?;
-        let mut tx = self.code_tx(a, p).await?;
+        let mut tx = self.read_tx(a, p).await?;
         let services = self.semantic_services(&mut tx, a, p).await?;
         let semantic = vector_candidates(&mut tx, a, p, &services, ns, &encoded, 20).await?;
         let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND $4::text[] @> c.services AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND to_tsvector('simple',(c.body->>'title')||' '||(c.body->>'intent')||' '||(c.body->>'rationale')||' '||COALESCE(c.body->>'decisions','')||' '||COALESCE(c.body->>'constraints','')||' '||COALESCE(c.body->>'open_questions','')) @@ plainto_tsquery('simple',$5) ORDER BY ts_rank_cd(to_tsvector('simple',(c.body->>'title')||' '||(c.body->>'intent')||' '||(c.body->>'rationale')||' '||COALESCE(c.body->>'decisions','')||' '||COALESCE(c.body->>'constraints','')||' '||COALESCE(c.body->>'open_questions','')),plainto_tsquery('simple',$5)) DESC,c.id LIMIT 20")
@@ -316,6 +316,7 @@ impl Knowledge {
     }
     /// Published summaries by other developers that match `vector` by meaning,
     /// within the caller's services, excluding `exclude`. Cosine similarity >= 0.6.
+    /// Its scoping clauses must stay in sync with `vector_candidates`.
     pub async fn related_by_meaning(
         &self,
         a: &Actor,
@@ -329,7 +330,7 @@ impl Knowledge {
             return Err(Error::Invalid);
         }
         let encoded = ns.vector(vector)?;
-        let mut tx = self.code_tx(a, p).await?;
+        let mut tx = self.read_tx(a, p).await?;
         let services = self.semantic_services(&mut tx, a, p).await?;
         let now_ms: i64 = sqlx::query_scalar("SELECT (extract(epoch from now())*1000)::bigint")
             .fetch_one(&mut *tx)
@@ -356,6 +357,7 @@ impl Knowledge {
             .collect()
     }
 }
+// Its scoping clauses must stay in sync with `Knowledge::related_by_meaning`.
 async fn vector_candidates(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     a: &Actor,

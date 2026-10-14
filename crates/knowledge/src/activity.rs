@@ -38,7 +38,7 @@ pub struct Notice {
     /// `active` (working on it now), `changed` (published work touching these files) or
     /// `related` (similar intent, different files).
     pub kind: &'static str,
-    /// `file`, `folder` or `text`: how the notice matched.
+    /// `file`, `folder`, `text`, `meaning` or `both`: how the notice matched.
     pub matched_by: &'static str,
     pub developer: String,
     pub summary: String,

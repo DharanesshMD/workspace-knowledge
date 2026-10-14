@@ -85,12 +85,21 @@ impl Knowledge {
         actor: &Actor,
         product: &str,
     ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, Error> {
-        self.actor_tx_scoped(actor, Some(product)).await
+        self.actor_tx_scoped(actor, Some((product, false))).await
+    }
+    // `code_tx` for read-only work: the same product gate, held shared (see
+    // `share_administration`), so concurrent lookups do not serialize.
+    async fn read_tx(
+        &self,
+        actor: &Actor,
+        product: &str,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, Error> {
+        self.actor_tx_scoped(actor, Some((product, true))).await
     }
     async fn actor_tx_scoped(
         &self,
         actor: &Actor,
-        product: Option<&str>,
+        product: Option<(&str, bool)>,
     ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, Error> {
         let mut tx = self.pool.begin().await.map_err(db)?;
         sqlx::query("SELECT set_config('wk.org',$1,true),set_config('wk.user',$2,true)")
@@ -99,8 +108,10 @@ impl Knowledge {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
-        if let Some(p) = product {
-            Self::lock_administration(&mut tx, actor, p).await?;
+        match product {
+            Some((p, true)) => Self::share_administration(&mut tx, actor, p).await?,
+            Some((p, false)) => Self::lock_administration(&mut tx, actor, p).await?,
+            None => {}
         }
         self.lock_device(&mut tx, actor).await?;
         Ok(tx)

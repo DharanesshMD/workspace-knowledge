@@ -290,72 +290,179 @@ async fn namespace_failures_retries_withdrawal_and_revocation_do_not_reuse_vecto
         Err(Error::NotFound)
     ));
 }
+async fn stored(f: &common::Fixture, ns: &Namespace, vectors: &[(uuid::Uuid, [f32; 3])]) {
+    for source in
+        f.k.semantic_pending(&f.alice.org, "demo", ns)
+            .await
+            .unwrap()
+    {
+        let (_, v) = vectors.iter().find(|(id, _)| *id == source.id).unwrap();
+        assert!(f
+            .k
+            .semantic_store(&f.alice.org, "demo", ns, &source, v)
+            .await
+            .unwrap());
+    }
+}
+async fn published(f: &common::Fixture, key: &str, services: Vec<&str>) -> uuid::Uuid {
+    let c =
+        f.k.submit(&f.alice, "demo", card(key, services))
+            .await
+            .unwrap();
+    f.k.publish(&f.bob, "demo", c.id).await.unwrap();
+    c.id
+}
 #[tokio::test]
 #[ignore = "requires disposable pgvector PostgreSQL"]
 async fn related_by_meaning_returns_other_developers_close_summaries() {
     let f = common::setup().await;
     let ns = namespace();
     f.k.semantic_migrate().await.unwrap();
-    let near =
-        f.k.submit(&f.alice, "demo", card("near", vec!["backend"]))
-            .await
-            .unwrap();
-    let far =
-        f.k.submit(&f.alice, "demo", card("far", vec!["backend"]))
-            .await
-            .unwrap();
-    for c in [&near, &far] {
-        f.k.publish(&f.bob, "demo", c.id).await.unwrap();
-    }
-    for source in
-        f.k.semantic_pending(&f.alice.org, "demo", &ns)
-            .await
-            .unwrap()
-    {
-        let v = if source.id == near.id {
-            [1., 0., 0.]
-        } else {
-            [0., 1., 0.]
-        };
-        assert!(f
-            .k
-            .semantic_store(&f.alice.org, "demo", &ns, &source, &v)
-            .await
-            .unwrap());
-    }
-    let found =
-        f.k.related_by_meaning(&f.reader, "demo", &ns, &[1., 0., 0.], &[], 20)
-            .await
-            .unwrap();
+    let near = published(&f, "near", vec!["backend"]).await;
+    let far = published(&f, "far", vec!["backend"]).await;
+    // Cosine similarity 0.8 (distance 0.2) is inside the 0.6 floor; ~0.55 is outside it.
+    let close = published(&f, "close", vec!["backend"]).await;
+    let below = published(&f, "below", vec!["backend"]).await;
+    let frontend = published(&f, "frontend", vec!["frontend"]).await;
+    stored(
+        &f,
+        &ns,
+        &[
+            (near, [1., 0., 0.]),
+            (far, [0., 1., 0.]),
+            (close, [0.8, 0.6, 0.]),
+            (below, [0.55, 0.835, 0.]),
+            (frontend, [1., 0., 0.]),
+        ],
+    )
+    .await;
+    let related = |a: &wk_knowledge::Actor, exclude: Vec<uuid::Uuid>, limit: u32| {
+        let (k, ns, a) = (f.k.clone(), ns.clone(), a.clone());
+        async move {
+            k.related_by_meaning(&a, "demo", &ns, &[1., 0., 0.], &exclude, limit)
+                .await
+        }
+    };
+    let ids = |n: Vec<wk_knowledge::activity::Notice>| {
+        n.into_iter()
+            .map(|n| n.card_id.unwrap())
+            .collect::<Vec<_>>()
+    };
+    let found = related(&f.reader, vec![], 20).await.unwrap();
+    assert!(found
+        .iter()
+        .all(|n| n.kind == "related" && n.matched_by == "meaning" && n.developer == "alice"));
+    // The backend-only reader never sees the frontend card, even at distance 0.
+    assert_eq!(ids(found), vec![near, close]);
+    let mut wide = ids(related(&f.bob, vec![], 20).await.unwrap());
+    wide.sort();
+    let mut expected = vec![near, close, frontend];
+    expected.sort();
+    assert_eq!(wide, expected);
+    assert!(related(&f.alice, vec![], 20).await.unwrap().is_empty());
     assert_eq!(
-        found.iter().map(|n| n.card_id).collect::<Vec<_>>(),
-        vec![Some(near.id)]
+        ids(related(&f.reader, vec![near], 20).await.unwrap()),
+        vec![close]
     );
-    assert_eq!(found[0].kind, "related");
-    assert_eq!(found[0].matched_by, "meaning");
-    assert_eq!(found[0].developer, "alice");
-    assert!(f
-        .k
-        .related_by_meaning(&f.alice, "demo", &ns, &[1., 0., 0.], &[], 20)
-        .await
-        .unwrap()
-        .is_empty());
-    assert!(f
-        .k
-        .related_by_meaning(&f.reader, "demo", &ns, &[1., 0., 0.], &[near.id], 20)
-        .await
-        .unwrap()
-        .is_empty());
-    f.k.withdraw(&f.alice, "demo", near.id, 1).await.unwrap();
-    assert!(f
-        .k
-        .related_by_meaning(&f.reader, "demo", &ns, &[1., 0., 0.], &[], 20)
-        .await
-        .unwrap()
-        .is_empty());
+    for (exclude, limit) in [(vec![], 0), (vec![], 21), (vec![near; 101], 20)] {
+        assert!(matches!(
+            related(&f.reader, exclude, limit).await,
+            Err(Error::Invalid)
+        ));
+    }
+    f.k.withdraw(&f.alice, "demo", near, 1).await.unwrap();
+    assert_eq!(
+        ids(related(&f.reader, vec![], 20).await.unwrap()),
+        vec![close]
+    );
     assert!(matches!(
         f.k.related_by_meaning(&f.reader, "elsewhere", &ns, &[1., 0., 0.], &[], 20)
             .await,
         Err(Error::NotFound)
     ));
+}
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
+async fn semantic_reads_share_the_product_lock_but_wait_for_administration() {
+    let f = common::setup().await;
+    let ns = namespace();
+    f.k.semantic_migrate().await.unwrap();
+    let near = published(&f, "near", vec!["backend"]).await;
+    stored(&f, &ns, &[(near, [1., 0., 0.])]).await;
+    let gate = |mode: &str| {
+        format!("SELECT {mode}(hashtextextended(jsonb_build_array($1::text,$2::text,'administration')::text,0))")
+    };
+    let read = |k: wk_knowledge::Knowledge| {
+        let (a, ns) = (f.reader.clone(), ns.clone());
+        async move {
+            k.related_by_meaning(&a, "demo", &ns, &[1., 0., 0.], &[], 20)
+                .await
+        }
+    };
+    // Another reader holds the product gate: two more reads proceed without waiting.
+    let mut reader = f.pool.begin().await.unwrap();
+    sqlx::query(&gate("pg_advisory_xact_lock_shared"))
+        .bind(&f.reader.org)
+        .bind("demo")
+        .execute(&mut *reader)
+        .await
+        .unwrap();
+    let (one, two) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(read(f.k.clone()), read(f.k.clone()))
+    })
+    .await
+    .expect("concurrent semantic reads must not wait on each other");
+    assert_eq!(one.unwrap().len(), 1);
+    assert_eq!(two.unwrap().len(), 1);
+    reader.rollback().await.unwrap();
+    // An administration change holds the gate exclusively: a read waits for it.
+    let mut admin = f.pool.begin().await.unwrap();
+    sqlx::query(&gate("pg_advisory_xact_lock"))
+        .bind(&f.reader.org)
+        .bind("demo")
+        .execute(&mut *admin)
+        .await
+        .unwrap();
+    let app_name = format!("semantic_gate_{}", uuid::Uuid::new_v4().simple());
+    let selected = app_name.clone();
+    let waiting_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(move |conn, _| {
+            let selected = selected.clone();
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('application_name',$1,false)")
+                    .bind(selected)
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&std::env::var("WK_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let pending = tokio::spawn(read(wk_knowledge::Knowledge::from_pool(waiting_pool)));
+    let mut blocked = false;
+    for _ in 0..200 {
+        blocked = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock')")
+            .bind(&app_name)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+        if blocked {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        blocked,
+        "a semantic read must wait for an exclusive administration holder"
+    );
+    assert!(!pending.is_finished());
+    admin.rollback().await.unwrap();
+    let after = tokio::time::timeout(std::time::Duration::from_secs(5), pending)
+        .await
+        .expect("the read resumes once administration commits")
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.len(), 1);
 }
