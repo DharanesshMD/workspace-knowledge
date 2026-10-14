@@ -61,6 +61,7 @@ The useful result is a source-backed brief before a change. Its quality depends 
 | Capability | What developers can do |
 |---|---|
 | **My context** | Keep owner-only summaries and structured manual notes; edit, delete or submit an explicit copy for review |
+| **Agent memory import** | Turn existing `CLAUDE.md`, `AGENTS.md` and Claude Code project notes into private drafts for review ([setup](docs/adapters/setup.md#import-existing-agent-memory)) |
 | **Team context** | Browse published summaries by developer, service, date and file, within current membership scope |
 | **Code-change context** | Retrieve confirmed contributor names, reviewed rationale, source freshness and impact/test references for enrolled files |
 | **Optional edit confirmation** | Use a separate Claude Code pre-tool hook to require browser review for covered file operations |
