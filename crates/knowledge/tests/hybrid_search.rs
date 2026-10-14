@@ -441,18 +441,19 @@ async fn semantic_reads_share_the_product_lock_but_wait_for_administration() {
         .await
         .unwrap();
     let pending = tokio::spawn(read(wk_knowledge::Knowledge::from_pool(waiting_pool)));
-    let mut blocked = false;
-    for _ in 0..200 {
-        blocked = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock')")
+    // Wait until the read is seen queued on the advisory gate, bounded by a deadline.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let blocked = loop {
+        let waiting = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND wait_event='advisory')")
             .bind(&app_name)
             .fetch_one(&f.pool)
             .await
             .unwrap();
-        if blocked {
-            break;
+        if waiting || std::time::Instant::now() >= deadline {
+            break waiting;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    };
     assert!(
         blocked,
         "a semantic read must wait for an exclusive administration holder"
