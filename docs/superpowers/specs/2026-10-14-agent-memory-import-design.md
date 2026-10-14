@@ -4,7 +4,7 @@ Approved intent: solve the empty-on-day-one problem by turning a developer's exi
 
 ## Commands and sources
 
-`wk-agent --state-dir DIR memory scan` is read-only and makes no network request. It lists candidate sources with a label, kind, section count and status: `new`, `unchanged`, `changed`, `removed` (imported earlier, now missing) or `rejected` with a fixed reason. It never prints section text.
+`wk-agent --state-dir DIR memory scan` is read-only and makes no network request. It lists candidate sources with a label, kind, section count and status: `new`, `unchanged`, `changed`, `empty` (no sections), or `rejected` with a fixed reason; sources imported earlier and now missing are listed as `removed`. It never prints section text.
 
 `wk-agent --state-dir DIR memory import --yes [--file PATH]...` imports. Without `--yes` it fails before reading content.
 
@@ -27,7 +27,7 @@ Each section has a stable key: the source label, the heading path and the occurr
 
 ## Records and processing
 
-Import requires the same current enrollment, server policy check and clean capture state as `wk-agent import`. Each new or changed section is written to the encrypted local store as a dedicated record `memory:<sha256(key, generation)>` (one-day retention, like other private records) holding the label, heading path, hints, body, policy hash and generation. Memory records do not use the conversation journal: its event schema and path holds are built for conversations and would hold external notes.
+Import requires the same current enrollment, server policy check and clean capture state as `wk-agent import`. Each new or changed section is written to the encrypted local store as a dedicated record `memory:<sha256(key, generation, random nonce)>` (one-day retention, like other private records) holding the label, heading path, hints, body, policy hash and generation. Memory records do not use the conversation journal: its event schema and path holds are built for conversations and would hold external notes.
 
 `process` scans `memory:` records and drafts each one, then acknowledges the record. It reuses `wk_summarize::extract`, the `processing_current` re-checks around inference, the sensitive-content holds and `wk_summarize::card`. A whole note is present, so the card is marked complete. Draft metadata records the label and heading for `drafts` output only; the card body does not contain it. If owner synchronization was already enabled, these drafts follow that existing opt-in like any other draft. Nothing publishes automatically.
 
@@ -41,13 +41,14 @@ The encrypted store keeps records for at most one day and never reopens an expir
 | Unchanged, draft expired without submission | Increment the generation and write a new record |
 | Changed, draft not submitted | Acknowledge the old draft and record; increment the generation and write a new record |
 | Changed, already submitted | Increment the generation and write a new record whose draft carries `updates: <summary id>` |
+| Section gone from a file read this run (heading renamed or restructured) | Acknowledge its unsubmitted draft and record and drop it from the map (`retired`); a submitted summary is not withdrawn |
 | Source removed | Report in `scan`; withdraw nothing |
 
-Device-connected collectors may only send new summaries and owner notes, so an updated section is submitted as a **new** summary. `drafts` shows `updates: <summary id>`, and the reviewer retires the earlier summary with the existing supersede action. Successful submission records the returned summary ID in the map.
+Device-connected collectors may only send new summaries and owner notes, so an updated section is submitted as a **new** summary. `drafts` shows `updates: <summary id>`, and the reviewer retires the earlier summary with the existing supersede action. Successful submission records the returned summary ID in the map. Retired sections leave no link, so a restructured file's new sections are drafted without `updates`; the reviewer supersedes earlier summaries manually.
 
 ## Errors and privacy
 
-Existing gates apply unchanged: capture gaps block, policy is checked before files are read, approval is re-checked around each inference, and model failures or sensitive matches hold content without echoing it. `import` reports counts of written, unchanged, held and rejected sections. Imported memory may contain credentials or personal notes; the existing screening and owner review are the controls, and the docs tell developers to review drafts before submission.
+Existing gates apply unchanged: capture gaps block, policy is checked before files are read, approval is re-checked around each inference, and model failures or sensitive matches hold content without echoing it. `import` reports counts of written, unchanged and retired sections and of rejected files; `process` reports held records. A memory draft whose approval or policy revision changed is consumed when submission is attempted, so the next import drafts that section again. Imported memory may contain credentials or personal notes; the existing screening and owner review are the controls, and the docs tell developers to review drafts before submission.
 
 ## Testing and documentation
 
