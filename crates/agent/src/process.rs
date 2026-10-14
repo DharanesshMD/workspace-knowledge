@@ -223,28 +223,9 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
         crate::personal_sync::payload(&v["card"])?;
     }
     if v.get("memory").is_some() {
-        if v["policy_hash"] != b.policy_hash || v["card"]["policy_revision"] != p["policy_revision"]
-        {
-            return Err("policy changed; run memory import again".into());
-        }
-        if wk_summarize::sensitive(&v["card"].to_string()) {
-            return Err("draft requires sensitive-content review".into());
-        }
-        let mut response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
-        if !owner_only {
-            // The server already accepted the summary, so a failed link never
-            // fails the submit. It is reported because the next import may
-            // then draft the same section again instead of linking an update.
-            let link = crate::memory_import::submitted(dir, id, &v, &response);
-            if let Some(object) = response.as_object_mut() {
-                object.insert(
-                    "memory_link".into(),
-                    json!(if link.is_ok() { "recorded" } else { "failed" }),
-                );
-            }
-            s.ack(id)?;
-        }
-        return Ok(response);
+        crate::memory_import::check_submit(&mut s, id, &v, &b.policy_hash, &p["policy_revision"])?;
+        let response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
+        return crate::memory_import::finish_submit(dir, &mut s, id, &v, response, owner_only);
     }
     if v.get("native_adapter").is_some() {
         let _guard = crate::native_process::validate_draft(dir, &v).await?;

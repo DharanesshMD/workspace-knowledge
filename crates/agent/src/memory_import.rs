@@ -437,28 +437,75 @@ pub(crate) fn draft_item(id: &str, v: &Value) -> Value {
     }
     item
 }
+/// Before posting a memory draft. One drafted under another approval can never
+/// be submitted, so it is consumed and the next import drafts the section again.
+pub(crate) fn check_submit(
+    store: &mut LocalStore,
+    id: &str,
+    draft: &Value,
+    policy_hash: &str,
+    policy_revision: &Value,
+) -> Result<(), String> {
+    if draft["policy_hash"] != policy_hash || draft["card"]["policy_revision"] != *policy_revision {
+        store.ack(id)?;
+        return Err("policy changed; run memory import again".into());
+    }
+    if wk_summarize::sensitive(&draft["card"].to_string()) {
+        return Err("draft requires sensitive-content review".into());
+    }
+    Ok(())
+}
+/// After posting. Owner-only copies leave the draft for team review; a team
+/// submission records its summary, then consumes the draft. The server already
+/// accepted the summary, so a failed link never fails the submit. It is
+/// reported because the next import may then draft the section again instead
+/// of linking an update.
+pub(crate) fn finish_submit(
+    dir: &Path,
+    store: &mut LocalStore,
+    id: &str,
+    draft: &Value,
+    mut response: Value,
+    owner_only: bool,
+) -> Result<Value, String> {
+    if owner_only {
+        return Ok(response);
+    }
+    let link = match submitted(dir, id, draft, &response) {
+        Ok(true) => "recorded",
+        Ok(false) => "not_linked",
+        Err(_) => "failed",
+    };
+    store.ack(id)?;
+    if let Some(object) = response.as_object_mut() {
+        object.insert("memory_link".into(), json!(link));
+    }
+    Ok(response)
+}
 /// After a team submission, remember the summary so later edits link to it.
+/// True only if the map entry still pointed at this draft and was updated.
 pub(crate) fn submitted(
     dir: &Path,
     draft_id: &str,
     draft: &Value,
     response: &Value,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let (Some(key), Some(summary)) = (
         draft["memory"]["key"].as_str(),
         response["card"]["id"].as_str(),
     ) else {
-        return Ok(());
+        return Ok(false);
     };
     memory_map::update(dir, |map| {
-        if let Some(e) = map.entries.get_mut(key) {
-            if e.draft.as_deref() == Some(draft_id) {
+        Ok(match map.entries.get_mut(key) {
+            Some(e) if e.draft.as_deref() == Some(draft_id) => {
                 e.summary = Some(summary.into());
                 e.draft = None;
                 e.record = None;
+                true
             }
-        }
-        Ok(())
+            _ => false,
+        })
     })
 }
 
@@ -1294,7 +1341,7 @@ mod tests {
         assert_eq!(scan["removed"], json!(["repo:backend/CLAUDE.md"]));
         server.abort();
     }
-    fn linked_entry(f: &Fixture) -> memory_map::Map {
+    fn linked_entry(f: &Fixture, draft: &str) -> memory_map::Map {
         memory_map::update(&f.dir, |m| {
             m.entries.insert(
                 "k".into(),
@@ -1303,7 +1350,7 @@ mod tests {
                     content: "c".into(),
                     generation: 1,
                     record: None,
-                    draft: Some("draft:current".into()),
+                    draft: Some(draft.into()),
                     summary: None,
                 },
             );
@@ -1315,21 +1362,131 @@ mod tests {
     #[test]
     fn submissions_of_a_replaced_draft_leave_the_map_unchanged() {
         let f = fixture("http://127.0.0.1:9");
-        let before = linked_entry(&f);
+        let before = linked_entry(&f, "draft:current");
         let draft = json!({"memory": {"key": "k"}});
         let response = json!({"card": {"id": "summary-1"}});
-        submitted(&f.dir, "draft:other", &draft, &response).unwrap();
+        assert_eq!(
+            submitted(&f.dir, "draft:other", &draft, &response),
+            Ok(false)
+        );
         assert_eq!(memory_map::load(&f.dir).unwrap(), before);
     }
     #[test]
     fn responses_without_a_summary_id_leave_the_map_unchanged() {
         let f = fixture("http://127.0.0.1:9");
-        let before = linked_entry(&f);
+        let before = linked_entry(&f, "draft:current");
         let draft = json!({"memory": {"key": "k"}});
         assert_eq!(
             submitted(&f.dir, "draft:current", &draft, &json!({"card": {}})),
-            Ok(())
+            Ok(false)
         );
         assert_eq!(memory_map::load(&f.dir).unwrap(), before);
+    }
+    /// A pending team-or-owner memory draft for section `k`, linked in the map.
+    fn pending_draft(f: &mut Fixture, card: Value) -> (String, Value) {
+        let id = format!("draft:{}", "a".repeat(64));
+        let v = json!({"card": card, "memory": {"key": "k"},
+            "policy_hash": f.b.policy_hash, "model": "m"});
+        let bytes = serde_json::to_vec(&v).unwrap();
+        let now = daemon::now().unwrap();
+        assert!(f.store.enqueue(&id, &bytes, now, 3600).unwrap());
+        linked_entry(f, &id);
+        (id, v)
+    }
+    fn card() -> Value {
+        json!({"title": "Imported backend convention", "policy_revision": 1})
+    }
+    const CARD_ID: &str = "0b6f3c1e-2d4a-4f8e-9c5b-7a1d2e3f4a5b";
+    fn server_response() -> Value {
+        json!({"card": {"id": CARD_ID, "revision": 1, "body": {}, "published": false}})
+    }
+    #[test]
+    fn owner_only_submissions_keep_the_draft_and_the_map() {
+        let mut f = fixture("http://127.0.0.1:9");
+        let (id, v) = pending_draft(&mut f, card());
+        let before = memory_map::load(&f.dir).unwrap();
+        let response = json!({"synced": true});
+        assert_eq!(
+            finish_submit(&f.dir, &mut f.store, &id, &v, response.clone(), true),
+            Ok(response)
+        );
+        assert!(f.store.contains(&id, daemon::now().unwrap()).unwrap());
+        assert_eq!(memory_map::load(&f.dir).unwrap(), before);
+    }
+    #[test]
+    fn team_submissions_record_the_summary_then_consume_the_draft() {
+        let mut f = fixture("http://127.0.0.1:9");
+        let (id, v) = pending_draft(&mut f, card());
+        let out = finish_submit(&f.dir, &mut f.store, &id, &v, server_response(), false).unwrap();
+        assert_eq!(out["memory_link"], "recorded");
+        assert_eq!(out["card"]["id"], CARD_ID);
+        assert!(!f.store.contains(&id, daemon::now().unwrap()).unwrap());
+        let e = &memory_map::load(&f.dir).unwrap().entries["k"];
+        assert_eq!(
+            (
+                e.record.as_deref(),
+                e.draft.as_deref(),
+                e.summary.as_deref()
+            ),
+            (None, None, Some(CARD_ID))
+        );
+    }
+    #[test]
+    fn team_submissions_report_unlinked_and_failed_map_updates() {
+        let mut f = fixture("http://127.0.0.1:9");
+        let (id, v) = pending_draft(&mut f, card());
+        linked_entry(&f, "draft:other");
+        let out = finish_submit(&f.dir, &mut f.store, &id, &v, server_response(), false).unwrap();
+        assert_eq!(out["memory_link"], "not_linked");
+        assert!(!f.store.contains(&id, daemon::now().unwrap()).unwrap());
+        let (id, v) = pending_draft(&mut f, card());
+        f.store.ack(&id).unwrap();
+        let other = format!("draft:{}", "b".repeat(64));
+        let bytes = serde_json::to_vec(&v).unwrap();
+        assert!(f
+            .store
+            .enqueue(&other, &bytes, daemon::now().unwrap(), 3600)
+            .unwrap());
+        std::fs::write(f.dir.join(memory_map::FILE), "{not json").unwrap();
+        let out =
+            finish_submit(&f.dir, &mut f.store, &other, &v, server_response(), false).unwrap();
+        assert_eq!(out["memory_link"], "failed");
+        assert!(!f.store.contains(&other, daemon::now().unwrap()).unwrap());
+    }
+    #[test]
+    fn policy_changes_consume_the_draft_and_fail_the_submit() {
+        for (hash, revision) in [("older-approval", json!(1)), ("", json!(2))] {
+            let mut f = fixture("http://127.0.0.1:9");
+            let (id, v) = pending_draft(&mut f, card());
+            let hash = if hash.is_empty() {
+                f.b.policy_hash.clone()
+            } else {
+                hash.to_string()
+            };
+            assert_eq!(
+                check_submit(&mut f.store, &id, &v, &hash, &revision),
+                Err("policy changed; run memory import again".into())
+            );
+            assert!(!f.store.contains(&id, daemon::now().unwrap()).unwrap());
+        }
+    }
+    #[test]
+    fn sensitive_cards_fail_the_submit_and_stay_pending() {
+        let mut f = fixture("http://127.0.0.1:9");
+        let (id, v) = pending_draft(
+            &mut f,
+            json!({"title": "Rotate the password weekly", "policy_revision": 1}),
+        );
+        let hash = f.b.policy_hash.clone();
+        assert_eq!(
+            check_submit(&mut f.store, &id, &v, &hash, &json!(1)),
+            Err("draft requires sensitive-content review".into())
+        );
+        assert!(f.store.contains(&id, daemon::now().unwrap()).unwrap());
+        let clean = json!({"card": card(), "memory": {"key": "k"}, "policy_hash": hash});
+        assert_eq!(
+            check_submit(&mut f.store, &id, &clean, &hash, &json!(1)),
+            Ok(())
+        );
     }
 }
