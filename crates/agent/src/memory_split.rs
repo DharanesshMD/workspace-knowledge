@@ -17,14 +17,14 @@ impl SourceKind {
 pub struct Section {
     /// Heading path; empty for a note or for text before any heading.
     pub heading: Vec<String>,
-    /// Index among earlier sections with the same heading path.
+    /// Index among earlier headings with the same path.
     pub occurrence: usize,
     /// Note frontmatter `name`/`description`, used only as model hints.
     pub hints: Option<String>,
     pub body: String,
 }
 pub fn split(kind: SourceKind, text: &str) -> Vec<Section> {
-    let text = text.replace("\r\n", "\n");
+    let text = text.trim_start_matches('\u{feff}').replace("\r\n", "\n");
     match kind {
         SourceKind::Note => note(&text),
         SourceKind::Instructions => instructions(&text),
@@ -48,16 +48,19 @@ fn frontmatter(text: &str) -> (Option<String>, String) {
     if lines.next() != Some("---") {
         return (None, text.to_string());
     }
-    let mut meta = Vec::new();
+    let mut meta: Vec<&str> = Vec::new();
     for line in lines.by_ref() {
         if line == "---" {
             let hints: Vec<String> = meta
                 .iter()
-                .filter_map(|line: &&str| {
-                    let (key, value) = line.split_once(':')?;
+                .filter(|entry| !entry.starts_with([' ', '\t']))
+                .filter_map(|entry| {
+                    let (key, value) = entry.split_once(':')?;
                     let (key, value) = (key.trim(), value.trim().trim_matches('"'));
-                    (matches!(key, "name" | "description") && !value.is_empty())
-                        .then(|| format!("{key}: {value}"))
+                    (matches!(key, "name" | "description")
+                        && !value.is_empty()
+                        && !value.starts_with(['>', '|']))
+                    .then(|| format!("{key}: {value}"))
                 })
                 .collect();
             let body: Vec<&str> = lines.collect();
@@ -75,20 +78,30 @@ fn heading(line: &str) -> Option<(usize, String)> {
     if !(1..=6).contains(&level) || !line[level..].starts_with(' ') {
         return None;
     }
-    let title = line[level..].trim().trim_end_matches('#').trim();
+    let title = line[level..].trim();
+    // Closing hashes count only after a space, so `C#` keeps its hash.
+    let title = match title.trim_end_matches('#') {
+        t if t.is_empty() || t.ends_with(' ') => t.trim_end(),
+        _ => title,
+    };
     (!title.is_empty()).then(|| (level, title.to_string()))
 }
 fn instructions(text: &str) -> Vec<Section> {
-    let mut fenced = false;
+    // A fence closes only with the marker that opened it.
+    let mut fence: Option<&str> = None;
     let lines: Vec<(&str, Option<(usize, String)>)> = text
         .lines()
         .map(|line| {
             let trimmed = line.trim_start();
-            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-                fenced = !fenced;
+            if let Some(marker) = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m)) {
+                match fence {
+                    None => fence = Some(marker),
+                    Some(open) if open == marker => fence = None,
+                    Some(_) => {}
+                }
                 return (line, None);
             }
-            (line, if fenced { None } else { heading(line) })
+            (line, if fence.is_some() { None } else { heading(line) })
         })
         .collect();
     let mut counts = [0usize; 7];
@@ -104,34 +117,40 @@ fn instructions(text: &str) -> Vec<Section> {
     let mut sections = Vec::new();
     let mut parents: Vec<(usize, String)> = Vec::new();
     let mut current: Vec<String> = Vec::new();
+    // Every heading counts, even one with an empty body, so keys stay stable.
+    let mut seen: Vec<Vec<String>> = Vec::new();
+    let mut occurrence = 0;
     let mut body: Vec<&str> = Vec::new();
     for (line, found) in &lines {
         match (found, split_level) {
             (Some((level, title)), Some(at)) if *level == at => {
-                push(&mut sections, &current, &body);
+                push(&mut sections, &current, occurrence, &body);
                 body.clear();
                 current = parents.iter().map(|(_, t)| t.clone()).collect();
                 current.push(title.clone());
+                occurrence = seen.iter().filter(|p| **p == current).count();
+                seen.push(current.clone());
             }
             (Some((level, title)), Some(at)) if *level < at => {
-                push(&mut sections, &current, &body);
+                push(&mut sections, &current, occurrence, &body);
                 body.clear();
                 parents.retain(|(l, _)| l < level);
                 parents.push((*level, title.clone()));
                 current = parents.iter().map(|(_, t)| t.clone()).collect();
+                occurrence = seen.iter().filter(|p| **p == current).count();
+                seen.push(current.clone());
             }
             _ => body.push(*line),
         }
     }
-    push(&mut sections, &current, &body);
+    push(&mut sections, &current, occurrence, &body);
     sections
 }
-fn push(sections: &mut Vec<Section>, heading: &[String], body: &[&str]) {
+fn push(sections: &mut Vec<Section>, heading: &[String], occurrence: usize, body: &[&str]) {
     let text = body.join("\n").trim().to_string();
     if text.is_empty() {
         return;
     }
-    let occurrence = sections.iter().filter(|s| s.heading == heading).count();
     sections.push(Section {
         heading: heading.to_vec(),
         occurrence,
@@ -156,7 +175,7 @@ mod tests {
     fn note_drops_frontmatter_and_keeps_name_and_description_as_hints() {
         let s = split(
             SourceKind::Note,
-            "---\nname: retries\ndescription: \"Retry policy\"\nmetadata:\n  type: project\n---\nPayment retries reuse the idempotency key.\n",
+            "---\nname: retries\ndescription: \"Retry policy\"\nmetadata:\n  type: project\n  name: nested\n---\nPayment retries reuse the idempotency key.\n",
         );
         assert_eq!(s.len(), 1);
         assert_eq!(
@@ -198,6 +217,35 @@ mod tests {
             "## Notes\nOne.\n## Empty\n\n## Notes\nTwo.\n",
         );
         assert_eq!(headings(&s), vec![h(&["Notes"], 0), h(&["Notes"], 1)]);
+    }
+    #[test]
+    fn an_empty_duplicate_heading_still_counts_toward_occurrence() {
+        let s = split(SourceKind::Instructions, "## Notes\n\n## Notes\nTwo.\n");
+        assert_eq!(headings(&s), vec![h(&["Notes"], 1)]);
+    }
+    #[test]
+    fn a_fence_closes_only_with_the_marker_that_opened_it() {
+        let s = split(
+            SourceKind::Instructions,
+            "## A\n```md\n~~~\n## fake\n~~~\n```\n## B\nText.\n",
+        );
+        assert_eq!(headings(&s), vec![h(&["A"], 0), h(&["B"], 0)]);
+        assert!(s[0].body.contains("## fake"));
+    }
+    #[test]
+    fn closing_hashes_are_stripped_only_after_a_space() {
+        let s = split(
+            SourceKind::Instructions,
+            "## Using C#\nText.\n## Style ##\nMore.\n",
+        );
+        assert_eq!(headings(&s), vec![h(&["Using C#"], 0), h(&["Style"], 0)]);
+    }
+    #[test]
+    fn a_leading_byte_order_mark_is_ignored() {
+        let s = split(SourceKind::Note, "\u{feff}---\nname: a\n---\nBody");
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].body, "Body");
+        assert_eq!(s[0].hints.as_deref(), Some("name: a"));
     }
     #[test]
     fn text_without_headings_is_one_preamble_section() {
