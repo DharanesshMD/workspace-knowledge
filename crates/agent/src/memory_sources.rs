@@ -47,13 +47,25 @@ fn check(path: &Path) -> Option<&'static str> {
     }
     (meta.len() > MAX_FILE_BYTES).then_some("too_large")
 }
-/// The notes folder must be a real folder: a symlink could point anywhere.
-fn symlinked(dir: &Path) -> bool {
-    std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_symlink())
+/// This project's notes folder, only if no folder below the home folder is a
+/// symlink (a symlink could point anywhere). The home folder itself may be a
+/// symlink, but a dotfiles-symlinked `~/.claude` makes notes unavailable.
+fn real_notes_dir(home: &Path, root: &Path) -> Option<PathBuf> {
+    let expected = notes_dir(&home.canonicalize().ok()?, root);
+    (expected.canonicalize().ok()? == expected).then_some(expected)
+}
+fn note_name(name: &str) -> bool {
+    name.ends_with(".md") && name != "MEMORY.md"
+}
+fn control_chars(name: &str) -> bool {
+    name.chars().any(char::is_control)
 }
 /// Instruction files in the agent's service folder. Workspace-root files are
 /// listed as rejected so `scan` can explain why they are not imported.
 pub fn repository(b: &Binding, service: &str) -> Vec<Candidate> {
+    if !b.services.iter().any(|s| s == service) {
+        return vec![];
+    }
     let mut out = Vec::new();
     for name in INSTRUCTION_FILES {
         let root_file = b.root.join(name);
@@ -82,10 +94,9 @@ pub fn repository(b: &Binding, service: &str) -> Vec<Candidate> {
 }
 /// This project's Claude Code notes. Suggestions only: each needs `--file`.
 pub fn notes(home: &Path, root: &Path) -> Vec<Candidate> {
-    let dir = notes_dir(home, root);
-    if symlinked(&dir) {
+    let Some(dir) = real_notes_dir(home, root) else {
         return vec![];
-    }
+    };
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return vec![];
     };
@@ -93,7 +104,7 @@ pub fn notes(home: &Path, root: &Path) -> Vec<Candidate> {
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let name = entry.file_name().to_str()?.to_string();
-            (name.ends_with(".md") && name != "MEMORY.md").then(|| {
+            (note_name(&name) && !control_chars(&name)).then(|| {
                 let path = dir.join(&name);
                 Candidate {
                     label: format!("claude-memory:{name}"),
@@ -120,38 +131,36 @@ pub fn approve_file(
     if let Some(reason) = check(path) {
         return Err(reason);
     }
+    // Decided by resolved location: check() refused a symlinked final name,
+    // eligible() and real_notes_dir() refuse symlinked folders.
     let canonical = path.canonicalize().map_err(|_| "unavailable")?;
-    if canonical != path {
-        return Err("symlink");
-    }
-    if let Some(found) = repository(b, service)
-        .into_iter()
-        .find(|c| c.path == canonical && c.rejected.is_none())
-    {
-        return Ok(found);
-    }
-    let notes = notes_dir(home, &b.root);
-    if symlinked(&notes) {
-        return Err("symlink");
-    }
-    let notes = notes.canonicalize().map_err(|_| "not_a_memory_source")?;
     let name = canonical
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or("not_a_memory_source")?;
-    if canonical.parent() != Some(notes.as_path()) || !name.ends_with(".md") || name == "MEMORY.md"
+    if control_chars(name) {
+        return Err("invalid_name");
+    }
+    if let Some(found) = repository(b, service)
+        .into_iter()
+        .find(|c| c.rejected.is_none() && c.path.canonicalize().is_ok_and(|p| p == canonical))
     {
+        return Ok(found);
+    }
+    let notes = real_notes_dir(home, &b.root).ok_or("not_a_memory_source")?;
+    if canonical.parent() != Some(notes.as_path()) || !note_name(name) {
         return Err("not_a_memory_source");
     }
     Ok(Candidate {
         label: format!("claude-memory:{name}"),
-        path: canonical,
+        path: notes.join(name),
         kind: SourceKind::Note,
         rejected: None,
     })
 }
-/// Reads through one handle that never follows a symlink and never reads
-/// more than one byte past the limit.
+/// Reads through one handle that never follows a symlink, never waits on a
+/// FIFO and never reads more than one byte past the limit. `O_NOFOLLOW`
+/// protects only the final name; parent folders are validated at approval.
 pub fn read(c: &Candidate) -> Result<String, &'static str> {
     use std::io::Read;
     if let Some(reason) = check(&c.path) {
@@ -175,7 +184,7 @@ fn open_no_follow(path: &Path) -> Result<std::fs::File, &'static str> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
         .map_err(|e| match e.raw_os_error() {
             Some(libc::ELOOP) => "symlink",
@@ -310,11 +319,11 @@ mod tests {
         assert!(notes(&home, &b.root).is_empty());
         assert_eq!(
             approve_file(&home, &b, "backend", &dir.join("x.md")),
-            Err("symlink")
+            Err("not_a_memory_source")
         );
         assert_eq!(
             approve_file(&home, &b, "backend", &target.join("x.md")),
-            Err("symlink")
+            Err("not_a_memory_source")
         );
     }
     #[cfg(unix)]
@@ -332,5 +341,93 @@ mod tests {
         };
         assert_eq!(read(&candidate), Err("symlink"));
         assert_eq!(open_no_follow(&dir.join("link.md")).err(), Some("symlink"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_above_the_notes_folder_are_refused() {
+        let (_t, home, b) = fixture();
+        let project = notes_dir(&home, &b.root).parent().unwrap().to_path_buf();
+        let target = home.join("elsewhere");
+        std::fs::create_dir_all(target.join("memory")).unwrap();
+        std::fs::write(target.join("memory/x.md"), "secret").unwrap();
+        std::fs::remove_dir_all(&project).unwrap();
+        std::os::unix::fs::symlink(&target, &project).unwrap();
+        assert!(notes(&home, &b.root).is_empty());
+        assert_eq!(
+            approve_file(&home, &b, "backend", &project.join("memory/x.md")),
+            Err("not_a_memory_source")
+        );
+        assert_eq!(
+            approve_file(&home, &b, "backend", &target.join("memory/x.md")),
+            Err("not_a_memory_source")
+        );
+    }
+    #[test]
+    fn non_canonical_spellings_resolve_to_the_canonical_note() {
+        let (_t, home, b) = fixture();
+        let dir = notes_dir(&home, &b.root);
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("retries.md"), "note").unwrap();
+        let found = approve_file(&home, &b, "backend", &dir.join("sub/../retries.md")).unwrap();
+        assert_eq!(found.path, dir.join("retries.md"));
+        assert_eq!(found.label, "claude-memory:retries.md");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn fifos_are_rejected_without_blocking() {
+        use std::os::unix::ffi::OsStrExt;
+        let (_t, home, b) = fixture();
+        let fifo = notes_dir(&home, &b.root).join("pipe.md");
+        let c_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        assert_eq!(approve_file(&home, &b, "backend", &fifo), Err("not_a_file"));
+        let candidate = Candidate {
+            label: "claude-memory:pipe.md".into(),
+            path: fifo.clone(),
+            kind: SourceKind::Note,
+            rejected: None,
+        };
+        assert_eq!(read(&candidate), Err("not_a_file"));
+        // The open itself must not wait for a writer.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let opened = open_no_follow(&fifo).map(|f| f.metadata().unwrap().is_file());
+            tx.send(opened).unwrap();
+        });
+        let opened = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("opening a FIFO blocked");
+        assert_eq!(opened, Ok(false));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn control_characters_in_note_names_are_refused() {
+        let (_t, home, b) = fixture();
+        let dir = notes_dir(&home, &b.root);
+        std::fs::write(dir.join("bad\nname.md"), "note").unwrap();
+        std::fs::write(dir.join("good.md"), "note").unwrap();
+        let labels: Vec<_> = notes(&home, &b.root).into_iter().map(|c| c.label).collect();
+        assert_eq!(labels, vec!["claude-memory:good.md"]);
+        assert_eq!(
+            approve_file(&home, &b, "backend", &dir.join("bad\nname.md")),
+            Err("invalid_name")
+        );
+    }
+    #[test]
+    fn unapproved_services_have_no_repository_files() {
+        let (_t, _home, b) = fixture();
+        std::fs::write(b.root.join("CLAUDE.md"), "root").unwrap();
+        std::fs::create_dir_all(b.root.join("frontend")).unwrap();
+        std::fs::write(b.root.join("frontend/CLAUDE.md"), "other").unwrap();
+        assert!(repository(&b, "frontend").is_empty());
+    }
+    #[test]
+    fn read_rejects_files_that_grew_after_approval() {
+        let (_t, home, b) = fixture();
+        let path = notes_dir(&home, &b.root).join("grows.md");
+        std::fs::write(&path, "small").unwrap();
+        let candidate = approve_file(&home, &b, "backend", &path).unwrap();
+        std::fs::write(&path, "x".repeat(MAX_FILE_BYTES as usize + 1)).unwrap();
+        assert_eq!(read(&candidate), Err("too_large"));
     }
 }
