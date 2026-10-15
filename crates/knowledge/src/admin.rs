@@ -87,6 +87,20 @@ impl Knowledge {
             .bind(&a.org).bind(p).execute(&mut **tx).await.map_err(db)?;
         Ok(())
     }
+    // Shared form of the same gate for transactions that only read. Every writer and
+    // administration change (including wk_admin_ceiling in SQL) holds it exclusively, so
+    // a reader still never overlaps a change to roles, devices or memberships, while
+    // concurrent readers no longer queue behind each other. Never upgrade it in place:
+    // a transaction that may write must take the exclusive gate first.
+    pub(crate) async fn share_administration(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        a: &Actor,
+        p: &str,
+    ) -> Result<(), Error> {
+        sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtextextended(jsonb_build_array($1::text,$2::text,'administration')::text,0))")
+            .bind(&a.org).bind(p).execute(&mut **tx).await.map_err(db)?;
+        Ok(())
+    }
     /// Protected operator bootstrap; the application role cannot write this table.
     pub async fn admin_assign(&self, a: &Actor, p: &str, services: &[String]) -> Result<(), Error> {
         scope(p, services)?;

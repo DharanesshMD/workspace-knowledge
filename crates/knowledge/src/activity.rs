@@ -32,13 +32,28 @@ pub struct OverlapQuery {
 fn default_limit() -> u32 {
     8
 }
+impl OverlapQuery {
+    /// The request shape [`Knowledge::overlaps`] accepts; callers can check it before other work.
+    pub fn valid(&self) -> bool {
+        let query = self
+            .query
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        self.files.len() <= 100
+            && self.files.iter().all(|f| valid_path(f))
+            && query.is_none_or(|s| s.len() <= 1024)
+            && (!self.files.is_empty() || query.is_some())
+            && (1..=20).contains(&self.limit)
+    }
+}
 
 #[derive(Serialize, Debug, Clone)]
 pub struct Notice {
     /// `active` (working on it now), `changed` (published work touching these files) or
     /// `related` (similar intent, different files).
     pub kind: &'static str,
-    /// `file`, `folder` or `text`: how the notice matched.
+    /// `file`, `folder`, `text`, `meaning` or `both`: how the notice matched.
     pub matched_by: &'static str,
     pub developer: String,
     pub summary: String,
@@ -218,16 +233,10 @@ impl Knowledge {
         q: OverlapQuery,
     ) -> Result<Vec<Notice>, Error> {
         self.device_scope(product, &[])?;
-        let query = q.query.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        if q.files.len() > 100
-            || q.files.iter().any(|f| !valid_path(f))
-            || query.is_some_and(|s| s.len() > 1024)
-            || (q.files.is_empty() && query.is_none())
-            || q.limit == 0
-            || q.limit > 20
-        {
+        if !q.valid() {
             return Err(Error::Invalid);
         }
+        let query = q.query.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let mut tx = self.actor_tx(a).await?;
         let mut services: Vec<String> = sqlx::query_scalar(
             "SELECT services FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3",
@@ -332,12 +341,12 @@ impl Knowledge {
             let rows = sqlx::query(
                 "SELECT c.id,c.revision,c.author,c.body,(extract(epoch from c.created_at)*1000)::bigint AS at FROM cards c
                  JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$3
-                 WHERE c.org=$1 AND c.product=$2 AND c.author<>$3 AND c.published AND NOT c.withdrawn AND m.services @> c.services
+                 WHERE c.org=$1 AND c.product=$2 AND c.author<>$3 AND c.published AND NOT c.withdrawn AND m.services @> c.services AND $6::text[] @> c.services
                  AND EXISTS(SELECT 1 FROM jsonb_array_elements(c.body->'evidence') e WHERE e->>'kind'='file_observation'
                    AND (e->>'reference' = ANY($4) OR e->>'reference' LIKE ANY($5)))
                  ORDER BY c.created_at DESC LIMIT 50",
             )
-            .bind(&a.org).bind(product).bind(&a.user).bind(&distinctive).bind(&likes)
+            .bind(&a.org).bind(product).bind(&a.user).bind(&distinctive).bind(&likes).bind(&services)
             .fetch_all(&mut *tx).await.map_err(db)?;
             for r in rows {
                 let body: Value = r.try_get("body").map_err(db)?;
@@ -403,12 +412,12 @@ impl Knowledge {
             let rows = sqlx::query(
                 "SELECT c.id,c.revision,c.author,c.body,(extract(epoch from c.created_at)*1000)::bigint AS at FROM cards c
                  JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$3
-                 WHERE c.org=$1 AND c.product=$2 AND c.author<>$3 AND c.published AND NOT c.withdrawn AND m.services @> c.services
+                 WHERE c.org=$1 AND c.product=$2 AND c.author<>$3 AND c.published AND NOT c.withdrawn AND m.services @> c.services AND $5::text[] @> c.services
                  AND to_tsvector('simple',(c.body->>'title')||' '||(c.body->>'intent')||' '||(c.body->>'rationale')) @@ to_tsquery('simple',$4)
                  ORDER BY ts_rank(to_tsvector('simple',(c.body->>'title')||' '||(c.body->>'intent')||' '||(c.body->>'rationale')), to_tsquery('simple',$4)) DESC, c.created_at DESC
                  LIMIT 10",
             )
-            .bind(&a.org).bind(product).bind(&a.user).bind(&tsq)
+            .bind(&a.org).bind(product).bind(&a.user).bind(&tsq).bind(&services)
             .fetch_all(&mut *tx).await.map_err(db)?;
             for r in rows {
                 let id: uuid::Uuid = r.try_get("id").map_err(db)?;
@@ -435,7 +444,7 @@ impl Knowledge {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn card_notice(
+pub(crate) fn card_notice(
     kind: &'static str,
     by: &'static str,
     developer: String,

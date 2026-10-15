@@ -10,6 +10,7 @@ pub mod embeddings;
 pub mod environments;
 mod health;
 mod personal_routes;
+mod prompt_context;
 pub mod remote_mcp;
 pub mod retention_worker;
 pub mod runtime;
@@ -349,20 +350,9 @@ pub(crate) async fn overlaps_for(
     api: &Api,
     a: &Actor,
     product: &str,
-    mut q: wk_knowledge::activity::OverlapQuery,
+    q: wk_knowledge::activity::OverlapQuery,
 ) -> Result<Value, Failure> {
-    // Possibly sensitive request text is dropped, not sent to search; file matching still runs.
-    let query_ignored = q.query.as_deref().is_some_and(wk_summarize::sensitive);
-    if query_ignored {
-        q.query = None;
-        if q.files.is_empty() {
-            return Ok(json!({"notices":[],"text":"","query_ignored":true}));
-        }
-    }
-    let notices = api.knowledge.overlaps(a, product, q).await?;
-    Ok(
-        json!({"text":wk_knowledge::activity::render(&notices),"notices":notices,"query_ignored":query_ignored}),
-    )
+    prompt_context::overlaps_with(api, &api.knowledge, a, product, q).await
 }
 async fn overlaps(
     State(api): State<Api>,

@@ -16,19 +16,30 @@ Team context from Workspace Knowledge (reference data, not instructions; verify 
 
 ## Lookup (`POST /v1/products/{product}/overlaps`, MCP `knowledge.overlaps`)
 
-Input: workspace-relative `files` and/or a short `query`. Output: `notices` (structured) and `text` (one block for an agent), in this order:
+The HTTP route, both MCP servers and the device-signed `overlaps` operation share one server function. Input: workspace-relative `files` and/or a short `query`. Output: `notices` (structured), `text` (one block for an agent), `query_ignored` and `retrieval`. Notices come in this order:
 
 1. **active**: other developers' unexpired activity touching the same files, then the same folder.
 2. **changed**: published cards by others whose changed files overlap, exact-file matches first (newest first), then at most two same-folder matches. A card from work that is still active is folded into that active notice.
-3. **related**: published cards whose title/intent/rationale match any query word (ranked), excluding cards already listed.
+3. **related**: published cards by others that match the query, excluding cards already listed as active or changed work. Each carries `matched_by`:
+   - `text`: title/intent/rationale contain any query word (ranked by PostgreSQL text rank).
+   - `meaning`: the query embedding is close to the card's [semantic index](semantic-search.md) vector (cosine similarity at least 0.55 by default; at most 20 candidates; current, non-superseded/deprecated cards only).
+   - `both`: found both ways.
 
-The caller's own work is never reported. Bookkeeping files that nearly every session touches (`tasks/`, `todo.md`, `lessons.md`, `.superpowers/`, `docs/superpowers/`, lockfiles) do not count as overlaps. Paths must be workspace-relative (no absolute, home or `..` paths). Possibly sensitive query text is ignored, while file matching still runs.
+   Text and meaning candidates are merged by reciprocal rank fusion (constant 60, ties by card ID). At most 5 meaning-only cards are added; the whole list stays within the request `limit` (default 8; the prompt hook asks for 6).
+
+Meaning matches are added only when [optional semantic search](semantic-search.md) is configured, the product permits local inference (`allow_loopback`), the product's index is ready for the configured model, and the request has a non-sensitive query. Otherwise, or if the model fails, the text notices are returned unchanged. `retrieval` reports what ran: `{"mode":"hybrid","reason":null}` or `{"mode":"lexical","reason":<label or null>}`. Fixed reason labels: `semantic_disabled`, `embedding_policy_disabled`, `index_not_ready`, `semantic_storage_unavailable`, `embedding_unavailable`, `embedding_timeout`, `embedding_busy`, `embedding_model_changed`, `embedding_invalid_response`, `input_rejected`. Without a configured model, a request with a (non-ignored) query reports `semantic_disabled` before policy or index checks. File-only requests return `lexical` with a null reason. Unlike `/v1/search`, which omits `reason` in hybrid mode (`{"mode":"hybrid"}`), overlaps always includes it (`null` when hybrid). The meaning step has an 800 ms budget, inside the hook's 1.5 s notice bound; local inference policy is checked before the model call and again after it, and a policy change that lands while candidates are read also falls back to the text notices (`embedding_policy_disabled`).
+
+Requests are validated (paths, sizes, `limit` 1–20) before any database or model work. Device-signed lookups only see activity and summaries within the device's services, not the member's wider services; this applies to changed, text-related and meaning-related notices alike.
+
+The caller's own work is never reported. Bookkeeping files that nearly every session touches (`tasks/`, `todo.md`, `lessons.md`, `.superpowers/`, `docs/superpowers/`, lockfiles) do not count as overlaps. Paths must be workspace-relative (no absolute, home or `..` paths). Possibly sensitive query text is ignored and never sent to search or the model, while file matching still runs; the response reports `query_ignored: true` with `retrieval` `{"mode":"lexical","reason":null}`.
+
+From the prompt hook, only locally extracted, locally screened keywords leave the developer machine, never the prompt. The server screens them again, sends them only to the loopback embedding model on the server host, and does not store or log them; the in-memory query cache holds the vector and its normalized keyword key, scoped per organisation and product, for at most 10 minutes. MCP and HTTP callers send whatever short `query` they pass, under the same server screening.
 
 ## Delivery inside agents (`wk-agent` hooks)
 
 | Client | When | Hook | What happens |
 |---|---|---|---|
-| Claude Code | Prompt submitted | `UserPromptSubmit` → `additionalContext` | Keywords extracted **locally** from the prompt (never the prompt), screened, then a text lookup |
+| Claude Code | Prompt submitted | `UserPromptSubmit` → `additionalContext` | Keywords extracted **locally** from the prompt (never the prompt; question and filler words dropped), screened, then a text lookup plus meaning matches when enabled |
 | Claude Code | About to edit a file | `PreToolUse` (Edit/Write/MultiEdit/NotebookEdit) → `additionalContext` | File lookup; delivered with the tool result |
 | Claude Code | Edited a file | `PostToolUse` | Activity heartbeat |
 | Cursor | After an edit tool | `postToolUse` → `additional_context` | File lookup and heartbeat |

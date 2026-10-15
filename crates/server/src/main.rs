@@ -370,14 +370,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let collector_refresh = collector.as_ref().and_then(|c|c.oidc.clone()).map(|verifier| {
         tokio::spawn(async move {let mut interval=tokio::time::interval(wk_server::auth::REFRESH_INTERVAL);interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);interval.tick().await;loop {interval.tick().await;if verifier.refresh().await.is_err(){eprintln!("Collector OIDC key refresh failed; cached keys expire after five minutes");}}})
     });
+    let embeddings = wk_server::embeddings::Embeddings::from_env()?;
+    if embeddings.is_some() {
+        // A separate short-lived client loads the model in the background; startup never waits.
+        if let Ok(Some(warm)) = wk_server::embeddings::Embeddings::from_env() {
+            tokio::spawn(async move {
+                if let Err(reason) = warm.warm().await {
+                    eprintln!("Embedding warm-up skipped: {reason}");
+                }
+            });
+        }
+    }
     let mut router = wk_server::portal_router_with_embeddings(
-        knowledge,
-        tokens,
-        oidc,
-        origin,
-        browser,
-        collector,
-        wk_server::embeddings::Embeddings::from_env()?,
+        knowledge, tokens, oidc, origin, browser, collector, embeddings,
     )?;
     if let Ok(dir) = std::env::var("WK_WEB_DIR") {
         router = router.fallback_service(

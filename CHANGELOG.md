@@ -14,16 +14,19 @@ All notable changes are recorded here.
 - Private owner summaries and reviewed, scoped team summaries in a hosted portal; raw captured messages are not exposed through team retrieval.
 - Prominent owner device warnings for reported capture gaps, stale/missing reports and limited/unknown coverage, with explicit local recovery consequences; hook capture failures let development continue.
 - Optional pgvector/Nomic hybrid search of published current summaries, with revision-safe indexing, scoped retrieval and explicit keyword fallback; ordinary PostgreSQL/keyword installations remain supported.
+- With semantic search enabled, prompt-time overlap notices (HTTP, MCP and device-signed) add up to five summaries matched by meaning to the prompt keywords, labelled `matched_by` `meaning`/`both` with a `retrieval` mode and fallback reason; query vectors for search and overlaps are cached in memory per organisation and product, the model is kept loaded and warmed at startup, and device-signed lookups now honour the device's service limits for changed and text-related notices too (previously only activity did), drop possibly sensitive query text, and return `query_ignored` and `retrieval`. See the [acceptance report](docs/reviews/2026-10-14-semantic-prompt-context-acceptance.md).
 - Contributor attribution, revision-bound rationale and known impact references in advisory code-change briefs.
 - Optional Claude Code edit confirmation, locally tested with version 2.1.296 Edit/Write against an isolated synthetic model and enrolled browser flow.
 - OIDC portal/device workflows, authenticated API/MCP retrieval, device revocation and schema-17 backup/restore controls with synthetic/local acceptance.
 - Source setup, a real CLI synthetic demo, Linux/macOS/Windows build CI, PostgreSQL/browser suites and a bounded local five-identity soak.
 
 - Strict OIDC discovery/signature/claim regressions and positive/negative access-token-hash acceptance; no custom JWT protocol verifier.
+- `wk-agent memory scan|import`: private drafts from `CLAUDE.md`, `AGENTS.md` and explicitly approved Claude Code project notes, with re-import that skips unchanged sections and links updates to submitted summaries.
 
 ### Known limits
 
 - Linux Docker server + macOS developers is the alpha evaluation scope. Windows builds, universal capture, MultiEdit, cloud-backed hooks and Antigravity publication are not qualified.
+- rustls updated to 0.23.46 for RUSTSEC-2026-0346 (medium) and RUSTSEC-2026-0347/0348/0349 (low), published 2026-10-14.
 - RUSTSEC-2023-0071 package removed using the pinned Convex AWS-LC OIDC fork and PostgreSQL-only SQLx dependencies; audits remain unsuppressed. One informational rustls-pemfile maintenance warning remains.
 - The strict local Qwen model-sensitive corpus failed its contact-sensitive case. Application screening held the observed output; this is not model/privacy certification. Automatic publication remains disabled.
 - Production OIDC/TLS, real-server/team and long-duration capacity testing, Apple signing/notarization and binary distribution acceptance remain pending.

@@ -61,6 +61,7 @@ The useful result is a source-backed brief before a change. Its quality depends 
 | Capability | What developers can do |
 |---|---|
 | **My context** | Keep owner-only summaries and structured manual notes; edit, delete or submit an explicit copy for review |
+| **Agent memory import** | Turn existing `CLAUDE.md`, `AGENTS.md` and Claude Code project notes into private drafts for review ([setup](docs/adapters/setup.md#import-existing-agent-memory)) |
 | **Team context** | Browse published summaries by developer, service, date and file, within current membership scope |
 | **Code-change context** | Retrieve confirmed contributor names, reviewed rationale, source freshness and impact/test references for enrolled files |
 | **Optional edit confirmation** | Use a separate Claude Code pre-tool hook to require browser review for covered file operations |
@@ -289,7 +290,7 @@ Configuration remains labeled `configured_unverified` for each installation. An 
 
 Enable private hybrid retrieval with **pgvector inside PostgreSQL** and a reviewed local Nomic embedding model. Keyword search remains the default. Hybrid mode searches by both wording and meaning over published summaries; raw conversations, owner-only notes and unpublished drafts are excluded from the vector index. File/revision evidence still determines confirmed attribution and rationale applicability.
 
-Setup uses a separate optional migration, read-only runtime grants and a bounded operator index pass. HTTP, MCP and the portal report the retrieval mode and keyword fallback when the model or index is unavailable. Review [semantic setup, boundaries and evaluation](docs/architecture/semantic-search.md) before enabling it; model/network capacity and representative team quality require deployment-specific acceptance.
+Setup uses a separate optional migration, read-only runtime grants and a bounded operator index pass. HTTP, MCP and the portal report the retrieval mode and keyword fallback when the model or index is unavailable. When it is enabled, prompt-time team notices also include teammates' summaries that match the prompt's locally extracted keywords by meaning ([overlap notices](docs/architecture/overlap-notices.md)). Review [semantic setup, boundaries and evaluation](docs/architecture/semantic-search.md) before enabling it; model/network capacity and representative team quality require deployment-specific acceptance.
 
 Agents can retrieve authorized shared knowledge through `wk-mcp` over stdio or the server's authenticated stateless Streamable HTTP endpoint, `/mcp/{product}`. Remote requests authenticate independently and enforce route-bound product membership. MCP provides integration and retrieval; it does not capture conversations.
 

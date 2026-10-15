@@ -86,7 +86,10 @@ fn embedding_configuration_requires_literal_loopback_and_complete_model_pin() {
 async fn valid_pinned_model_embeds_only_bounded_query_or_document_inputs() {
     let (client, task, calls) = fixture("valid").await;
     assert_eq!(
-        client.embed_query("idempotency").await.unwrap(),
+        client
+            .embed_query("org", "demo", "idempotency")
+            .await
+            .unwrap(),
         vec![1., 0., 0.]
     );
     assert_eq!(
@@ -96,9 +99,12 @@ async fn valid_pinned_model_embeds_only_bounded_query_or_document_inputs() {
             .unwrap(),
         vec![1., 0., 0.]
     );
-    assert!(client.embed_query(&"x".repeat(1025)).await.is_err());
     assert!(client
-        .embed_query("password=PRIVATE_SYNTHETIC")
+        .embed_query("org", "demo", &"x".repeat(1025))
+        .await
+        .is_err());
+    assert!(client
+        .embed_query("org", "demo", "password=PRIVATE_SYNTHETIC")
         .await
         .is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -118,7 +124,10 @@ async fn untrusted_model_changes_and_invalid_embedding_responses_are_rejected() 
     ] {
         let (client, task, _) = fixture(mode).await;
         assert!(
-            client.embed_query("idempotency").await.is_err(),
+            client
+                .embed_query("org", "demo", "idempotency")
+                .await
+                .is_err(),
             "accepted {mode}"
         );
         task.abort();
@@ -128,7 +137,10 @@ async fn untrusted_model_changes_and_invalid_embedding_responses_are_rejected() 
 async fn stalled_embedding_does_not_block_keyword_fallback_deadline() {
     let (client, task, _) = fixture("slow").await;
     let now = std::time::Instant::now();
-    assert!(client.embed_query("idempotency").await.is_err());
+    assert!(client
+        .embed_query("org", "demo", "idempotency")
+        .await
+        .is_err());
     assert!(now.elapsed() < std::time::Duration::from_millis(3800));
     task.abort();
 }

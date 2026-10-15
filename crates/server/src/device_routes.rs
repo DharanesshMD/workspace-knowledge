@@ -348,14 +348,14 @@ async fn collect(
             json!({"cleared":true})
         }
         "overlaps" => {
-            let n = k
-                .overlaps(
-                    &who,
-                    &e.product,
-                    serde_json::from_value(e.request).map_err(|_| invalid())?,
-                )
-                .await?;
-            json!({"text":wk_knowledge::activity::render(&n),"notices":n})
+            crate::prompt_context::overlaps_with(
+                &api,
+                &k,
+                &who,
+                &e.product,
+                serde_json::from_value(e.request).map_err(|_| invalid())?,
+            )
+            .await?
         }
         "report" => {
             api.knowledge

@@ -4,6 +4,10 @@ mod cursor_capture;
 mod cursor_source;
 mod daemon;
 mod device;
+mod memory_import;
+mod memory_map;
+mod memory_sources;
+mod memory_split;
 mod native_login;
 mod network;
 mod personal_sync;
@@ -163,6 +167,16 @@ enum Command {
         session: String,
         #[arg(long)]
         approve_transcript: bool,
+    },
+    /// Import CLAUDE.md, AGENTS.md and Claude Code project notes as private drafts.
+    Memory {
+        /// scan | import
+        action: String,
+        #[arg(long)]
+        yes: bool,
+        /// Claude Code project note to include; repeat per file.
+        #[arg(long)]
+        file: Vec<PathBuf>,
     },
     Compliance {
         #[arg(long)]
@@ -523,6 +537,9 @@ async fn run(cli: Cli) -> Result<Value, String> {
             session,
             approve_transcript,
         } => chat::import(&state, &file, &session, approve_transcript).await,
+        Command::Memory { action, yes, file } => {
+            memory_import::command(&state, &action, yes, &file).await
+        }
         Command::Compliance { binding } => compliance::poll(&state, &binding).await,
     }
 }
@@ -539,6 +556,25 @@ mod native_process;
 mod cli_tests {
     use super::{Cli, Command};
     use clap::Parser;
+
+    #[test]
+    fn memory_command_accepts_repeated_explicit_files() {
+        let cli = Cli::try_parse_from([
+            "wk-agent",
+            "--state-dir",
+            "/private/wk",
+            "memory",
+            "import",
+            "--yes",
+            "--file",
+            "/notes/one.md",
+            "--file",
+            "/notes/two.md",
+        ])
+        .unwrap();
+        assert!(matches!(cli.command, Command::Memory { action, yes, file }
+            if action == "import" && yes && file.len() == 2));
+    }
 
     #[test]
     fn context_command_requires_explicit_files_and_parses_operation_class() {

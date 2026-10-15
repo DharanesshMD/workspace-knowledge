@@ -429,3 +429,55 @@ async fn concurrent_credential_registration_binds_one_installation() {
     assert_eq!(left.is_ok() as u8 + right.is_ok() as u8, 1);
     assert!(matches!(left, Err(Error::Denied)) || matches!(right, Err(Error::Denied)));
 }
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn device_bound_overlaps_exclude_cards_outside_the_device_services() {
+    let (k, a, b, _) = setup().await;
+    let mut body = input("frontend-overlap", &["frontend"]).body;
+    body.title = "Tenant limiter".into();
+    body.evidence = vec![serde_json::from_value(
+        serde_json::json!({"kind":"file_observation","reference":"frontend/limiter.ts"}),
+    )
+    .unwrap()];
+    let card = k.submit(&a, "demo", body).await.unwrap();
+    k.publish(&b, "demo", card.id).await.unwrap();
+    let d = k.device_register(&b, registration()).await.unwrap();
+    let guarded = k.device_bound(&d, DevicePermission::Read);
+    let changed = |files: &[&str]| wk_knowledge::activity::OverlapQuery {
+        files: files.iter().map(|f| f.to_string()).collect(),
+        query: None,
+        limit: 8,
+    };
+    let related = || wk_knowledge::activity::OverlapQuery {
+        files: vec![],
+        query: Some("tenant limiter".into()),
+        limit: 8,
+    };
+    let ids = |n: Vec<wk_knowledge::activity::Notice>| {
+        n.into_iter()
+            .map(|n| (n.kind, n.card_id))
+            .collect::<Vec<_>>()
+    };
+    // The account holds both services, so without the device it sees the card both ways.
+    assert_eq!(
+        ids(k
+            .overlaps(&b, "demo", changed(&["frontend/limiter.ts"]))
+            .await
+            .unwrap()),
+        vec![("changed", Some(card.id))]
+    );
+    assert_eq!(
+        ids(k.overlaps(&b, "demo", related()).await.unwrap()),
+        vec![("related", Some(card.id))]
+    );
+    assert!(guarded
+        .overlaps(&b, "demo", changed(&["frontend/limiter.ts"]))
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(guarded
+        .overlaps(&b, "demo", related())
+        .await
+        .unwrap()
+        .is_empty());
+}

@@ -23,7 +23,7 @@ pub(crate) async fn search_for(
         "embedding_policy_disabled"
     } else if let Some(client) = &api.embeddings {
         match api.knowledge.semantic_ready(a, p, &client.namespace).await {
-            Ok(true) => match client.embed_query(q).await {
+            Ok(true) => match client.embed_query(&a.org, p, q).await {
                 Ok(_)
                     if !api
                         .knowledge
