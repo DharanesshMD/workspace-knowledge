@@ -175,24 +175,31 @@ async fn late_policy_flip(
         };
         k.admin_policy_put(&admin, "demo", off).await.unwrap();
     });
+    // Only return the embedding once the policy change is queued, so it is ahead of the
+    // server's meaning query.
+    wait_blocked(&pool, holder, 1).await;
     tokio::spawn(async move {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while std::time::Instant::now() < deadline {
-            let waiting: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
-            )
-            .bind(holder)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            if waiting >= 2 {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        wait_blocked(&pool, holder, 2).await;
         gate.commit().await.unwrap();
         flip.await.unwrap();
     });
+}
+/// Waits up to 10 s until at least `n` sessions wait on locks held or queued ahead by `holder`.
+async fn wait_blocked(pool: &sqlx::PgPool, holder: i32, n: i64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+        )
+        .bind(holder)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if waiting >= n {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 }
 async fn send(app: &Router, query: &str, token: &str) -> (StatusCode, Value) {
     let response = app
