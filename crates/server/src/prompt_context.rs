@@ -5,7 +5,8 @@
 use crate::*;
 use std::time::Duration;
 use wk_knowledge::activity::{Notice, OverlapQuery};
-const PROMPT_BUDGET: Duration = Duration::from_millis(1500);
+/// Leaves margin under the 2 s collector client timeout; measured warm p95 is about 18 ms.
+const PROMPT_BUDGET: Duration = Duration::from_millis(800);
 const MEANING_CANDIDATES: u32 = 20;
 const MEANING_ADDED: usize = 5;
 /// Reciprocal-rank constant; ranks are zero-based, so the top result scores 1/61.
@@ -63,11 +64,12 @@ pub(crate) async fn overlaps_with(
         (Some(text), Some(client)) => match gate(k, a, product, client).await? {
             Some(reason) => (k.overlaps(a, product, q).await?, Err(Some(reason))),
             None => {
-                let (notices, vector) = tokio::join!(
-                    k.overlaps(a, product, q),
-                    client.embed_query_within(&text, PROMPT_BUDGET)
-                );
-                (notices?, vector.map(|v| (client, v)).map_err(Some))
+                // A failed text lookup returns at once; a failed embedding only drops meaning.
+                let (notices, vector) = tokio::try_join!(
+                    async { k.overlaps(a, product, q).await.map_err(Failure::from) },
+                    async { Ok(client.embed_query_within(text.trim(), PROMPT_BUDGET).await) }
+                )?;
+                (notices, vector.map(|v| (client, v)).map_err(Some))
             }
         },
     };
@@ -78,6 +80,8 @@ pub(crate) async fn overlaps_with(
             (notices, Some("embedding_policy_disabled"))
         }
         Ok((client, vector)) => {
+            // Changed cards dropped by the text lookup's caps are not excluded and may reappear
+            // as meaning matches; that is acceptable.
             let shown: Vec<uuid::Uuid> = notices
                 .iter()
                 .filter(|n| n.kind != "related")

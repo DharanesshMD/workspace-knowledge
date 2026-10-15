@@ -30,6 +30,7 @@ fn card() -> wk_contracts::CardSubmission {
 struct Model {
     requests: Arc<AtomicUsize>,
     embeds: Arc<AtomicUsize>,
+    delay: std::time::Duration,
     revocation: Option<(wk_knowledge::Knowledge, wk_knowledge::Actor)>,
 }
 async fn model(
@@ -47,11 +48,24 @@ async fn counted_model(
     Arc<AtomicUsize>,
     Arc<AtomicUsize>,
 ) {
+    delayed_model(revocation, std::time::Duration::ZERO).await
+}
+/// `/api/embed` answers only after `delay`.
+async fn delayed_model(
+    revocation: Option<(wk_knowledge::Knowledge, wk_knowledge::Actor)>,
+    delay: std::time::Duration,
+) -> (
+    Config,
+    tokio::task::JoinHandle<()>,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+) {
     let requests = Arc::new(AtomicUsize::new(0));
     let embeds = Arc::new(AtomicUsize::new(0));
     let state = Model {
         requests: requests.clone(),
         embeds: embeds.clone(),
+        delay,
         revocation,
     };
     let app = Router::new()
@@ -68,6 +82,7 @@ async fn counted_model(
                 |State(s): State<Model>, Json(input): Json<Value>| async move {
                     s.requests.fetch_add(1, Ordering::SeqCst);
                     s.embeds.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(s.delay).await;
                     assert_eq!(input["truncate"], false);
                     if let Some((k, a)) = s.revocation {
                         if a.user == "admin" {
@@ -372,12 +387,15 @@ async fn inference_policy_change_discards_results_and_stops_index_batch() {
     }
 }
 async fn overlap(app: &Router, token: &str, body: Value) -> (StatusCode, Value) {
+    overlap_in(app, token, "demo", body).await
+}
+async fn overlap_in(app: &Router, token: &str, product: &str, body: Value) -> (StatusCode, Value) {
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/products/demo/overlaps")
+                .uri(format!("/v1/products/{product}/overlaps"))
                 .header("content-type", "application/json")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::from(body.to_string()))
@@ -724,5 +742,199 @@ async fn invalid_prompt_overlaps_are_rejected_before_the_provider() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["retrieval"]["mode"], "hybrid");
     assert_eq!(embeds.load(Ordering::SeqCst), 1);
+    task.abort();
+}
+
+/// Publishes `body` (authored by alice) and stores its embedding as `[1,0,0]`.
+async fn indexed(f: &common::Fixture, body: wk_contracts::CardSubmission) -> String {
+    let c = f.k.submit(&f.alice, "demo", body).await.unwrap();
+    f.k.publish(&f.bob, "demo", c.id).await.unwrap();
+    for source in
+        f.k.semantic_pending(&f.alice.org, "demo", &ns())
+            .await
+            .unwrap()
+    {
+        f.k.semantic_store(&f.alice.org, "demo", &ns(), &source, &[1., 0., 0.])
+            .await
+            .unwrap();
+    }
+    c.id.to_string()
+}
+fn app_for(
+    f: &common::Fixture,
+    tokens: Vec<(String, wk_knowledge::Actor)>,
+    collector: Option<wk_server::device_routes::CollectorAuth>,
+    config: Config,
+) -> Router {
+    wk_server::portal_router_with_embeddings(
+        f.k.clone(),
+        tokens,
+        None,
+        Some(COLLECTOR_ORIGIN.into()),
+        None,
+        collector,
+        Some(Embeddings::new(config).unwrap()),
+    )
+    .unwrap()
+}
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
+async fn policy_disabled_during_inference_keeps_text_notices_only() {
+    let f = common::setup().await;
+    f.k.semantic_migrate().await.unwrap();
+    let id = indexed(&f, card()).await;
+    let (config, task, _, embeds) = counted_model(Some((f.k.clone(), f.admin.clone()))).await;
+    let app = app_for(&f, vec![("reader".into(), f.reader.clone())], None, config);
+    let (status, result) =
+        overlap(&app, "reader", json!({"query":"retries payment","limit":8})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        embeds.load(Ordering::SeqCst),
+        1,
+        "policy flipped mid-inference"
+    );
+    assert_eq!(
+        result["retrieval"],
+        json!({"mode":"lexical","reason":"embedding_policy_disabled"})
+    );
+    let found = related(&result, &id);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0]["matched_by"], "text");
+    assert!(!result.to_string().contains("\"meaning\""));
+    assert!(!result.to_string().contains("\"both\""));
+    task.abort();
+}
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
+async fn non_members_and_other_products_never_reach_the_provider() {
+    let f = common::setup().await;
+    f.k.semantic_migrate().await.unwrap();
+    indexed(&f, card()).await;
+    let (config, task, _, embeds) = counted_model(None).await;
+    let stranger = wk_knowledge::Actor {
+        org: f.alice.org.clone(),
+        user: "stranger".into(),
+    };
+    let app = app_for(
+        &f,
+        vec![
+            ("reader".into(), f.reader.clone()),
+            ("stranger".into(), stranger),
+        ],
+        None,
+        config,
+    );
+    let body = json!({"query":"duplicate money","limit":8});
+    assert_eq!(
+        overlap(&app, "stranger", body.clone()).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        overlap_in(&app, "reader", "other", body).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(embeds.load(Ordering::SeqCst), 0);
+    task.abort();
+}
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
+async fn a_device_never_sees_meaning_matches_outside_its_services() {
+    let f = common::setup().await;
+    f.k.semantic_migrate().await.unwrap();
+    let backend = indexed(&f, card()).await;
+    let mut body = card();
+    body.idempotency_key = "synthetic-frontend".into();
+    body.service_ids = vec!["frontend".into()];
+    let frontend = indexed(&f, body).await;
+    let (config, task, _, _) = counted_model(None).await;
+    let app = app_for(
+        &f,
+        vec![],
+        Some(wk_server::device_routes::CollectorAuth {
+            origin: COLLECTOR_ORIGIN.into(),
+            oidc: None,
+            tokens: vec![("collector".into(), f.bob.clone())],
+            client_id: None,
+        }),
+        config,
+    );
+    let key = ed25519_dalek::SigningKey::from_bytes(&[44; 32]);
+    let device = uuid::Uuid::new_v4();
+    let approval = "33".repeat(32);
+    let (status, _) = signed(
+        &app,
+        "/collector/register",
+        &key,
+        device,
+        json!({"id":device,"public_key":hex::encode(key.verifying_key().to_bytes()),"product":"demo","services":["frontend"],"approval_hash":approval}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    for query in ["duplicate money", "retries payment"] {
+        let (status, data) = signed(
+            &app,
+            "/collector/overlaps",
+            &key,
+            device,
+            json!({"product":"demo","approval_hash":approval,"request":{"query":query,"limit":8}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(data["retrieval"]["mode"], "hybrid");
+        assert!(related(&data, &backend).is_empty(), "{query}: {data}");
+        assert_eq!(related(&data, &frontend).len(), 1);
+    }
+    task.abort();
+}
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
+async fn a_changed_card_is_not_repeated_as_a_meaning_match() {
+    let f = common::setup().await;
+    f.k.semantic_migrate().await.unwrap();
+    let mut body = card();
+    body.evidence =
+        vec![
+            serde_json::from_value(json!({"kind":"file_observation","reference":"backend/x.rs"}))
+                .unwrap(),
+        ];
+    let id = indexed(&f, body).await;
+    let (config, task, _, _) = counted_model(None).await;
+    let app = app_for(&f, vec![("reader".into(), f.reader.clone())], None, config);
+    let (status, result) = overlap(
+        &app,
+        "reader",
+        json!({"files":["backend/x.rs"],"query":"duplicate money","limit":8}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["retrieval"]["mode"], "hybrid");
+    let found = related(&result, &id);
+    assert_eq!(found.len(), 1, "{result}");
+    assert_eq!(found[0]["kind"], "changed");
+    task.abort();
+}
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
+async fn a_slow_model_falls_back_to_text_within_the_hook_timeout() {
+    let f = common::setup().await;
+    f.k.semantic_migrate().await.unwrap();
+    let id = indexed(&f, card()).await;
+    let (config, task, _, embeds) = delayed_model(None, std::time::Duration::from_secs(5)).await;
+    let app = app_for(&f, vec![("reader".into(), f.reader.clone())], None, config);
+    let started = std::time::Instant::now();
+    let (status, result) =
+        overlap(&app, "reader", json!({"query":"retries payment","limit":8})).await;
+    let elapsed = started.elapsed();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(embeds.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        result["retrieval"],
+        json!({"mode":"lexical","reason":"embedding_timeout"})
+    );
+    assert_eq!(related(&result, &id)[0]["matched_by"], "text");
+    assert!(
+        elapsed < std::time::Duration::from_millis(1500),
+        "took {elapsed:?}; the hook client gives up at 2 s"
+    );
     task.abort();
 }
