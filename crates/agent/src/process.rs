@@ -40,12 +40,18 @@ pub async fn run(dir: &Path) -> Result<Value, String> {
         drafts += made;
         held += failed;
     }
+    // A memory import problem never blocks session drafts or owner sync.
+    let memory = crate::memory_import::draft_all(dir, &c, &b, &policy, &mut store).await;
+    if let Ok((made, failed)) = memory {
+        drafts += made;
+        held += failed;
+    }
 
     let owner_sync = crate::personal_sync::run(dir)
         .await
         .unwrap_or_else(|_| json!({"enabled":false,"uploaded":0,"held":0,"status":"unavailable"}));
     Ok(
-        json!({"private_drafts_created":drafts,"held":held,"published":false,"owner_sync":owner_sync}),
+        json!({"private_drafts_created":drafts,"held":held,"memory_drafting":if memory.is_ok() {"ok"} else {"failed"},"published":false,"owner_sync":owner_sync}),
     )
 }
 // Re-read local permission and destination around every slow inference attempt.
@@ -162,7 +168,7 @@ pub fn list(dir: &Path, after: &str) -> Result<Value, String> {
             continue;
         };
         let v: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid private draft")?;
-        result.push(json!({"id":id,"card":v["card"],"model":v["model"]}));
+        result.push(crate::memory_import::draft_item(&id, &v));
     }
     Ok(json!({"private_drafts":result,"next_cursor":next_cursor}))
 }
@@ -215,6 +221,11 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
     let v: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid private draft")?;
     if owner_only {
         crate::personal_sync::payload(&v["card"])?;
+    }
+    if v.get("memory").is_some() {
+        crate::memory_import::check_submit(&mut s, id, &v, &b.policy_hash, &p["policy_revision"])?;
+        let response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
+        return crate::memory_import::finish_submit(dir, &mut s, id, &v, response, owner_only);
     }
     if v.get("native_adapter").is_some() {
         let _guard = crate::native_process::validate_draft(dir, &v).await?;

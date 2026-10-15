@@ -22,6 +22,21 @@ Policy-auto remains disabled until the configured real model passes the privacy 
 
 An explicit export is `{ "schema_version":1, "workspace":"/work/product", "product":"PRODUCT", "session_id":"SOURCE_SESSION", "messages":[{"id":"m1","role":"user","text":"synthetic request"}] }`. Import only that file using `import --file ABS_FILE --session SOURCE_SESSION --approve-transcript`. Metadata must match the current binding. Imports remain partial and do not scan adjacent files.
 
+## Import existing agent memory
+
+Start with what your coding agents already know. `wk-agent --state-dir /absolute/private/state memory scan` lists the `CLAUDE.md`, `.claude/CLAUDE.md` and `AGENTS.md` files in your approved service folder and this project's Claude Code notes (`~/.claude/projects/<project>/memory/*.md`), with a status for each. It is offline and prints no file content. Workspace-root files are reported as outside the approved service.
+
+Import with `memory import --yes`, adding `--file ABSOLUTE_PATH` for each Claude Code note you choose. The global `~/.claude/CLAUDE.md`, Codex's cross-project memories and other projects' notes are refused. Each note or section (split at the highest heading level used more than once) becomes one encrypted private record; `wk-agent process` drafts it with your local model and the usual privacy screening, then `wk-agent drafts` shows each draft with its source. Nothing is shared until you submit a reviewed draft. With owner synchronization enabled, memory drafts upload as owner-only summaries like other drafts.
+
+Re-running the import skips unchanged sections, replaces unsubmitted drafts of changed sections and links a changed, already-submitted section to its earlier summary (`updates`), so a reviewer can supersede it. Renaming or restructuring headings retires the old unsubmitted drafts and creates new ones without an `updates` link; reviewers supersede earlier summaries manually. Deleted sources are reported, not withdrawn. Memory files can contain credentials or personal notes: review every draft before submission, including the source label and heading that `drafts` shows. A submission reports `memory_link`: `recorded` when the summary was linked for later updates, `not_linked` when a newer import had already replaced or retired that section, or `failed` if the local record could not be written. After `failed`, the next import may draft that section again, so do not submit it twice.
+
+Notes and limits:
+
+- `scan` status `unchanged` means the content matches the last import; an unsubmitted draft that expired (drafts last one hour) is drafted again on the next `import`.
+- Service-folder files that are too large (over 64 KiB), symlinked or not UTF-8 are skipped and counted as `rejected`; an explicit `--file` that fails stops the import before anything is written. A run over 200 sections also stops before writing.
+- Claude Code note discovery is qualified only on macOS and Linux. Notes are found only when `HOME` is set and only when no folder below your home folder on the way to the notes (including `~/.claude`) is a symlink. Without them, `scan` lists no notes and may show earlier note labels under `removed`.
+- `wk-agent process` reports `memory_drafting: failed` if the owner-only `memory-import.json` in the state folder cannot be read; other drafting and owner synchronization continue. Restore that file's permissions or contents; deleting it makes the next import start over.
+
 ## Claude Desktop Enterprise
 
 On an isolated broker user account only, set `WK_COMPLIANCE_BROKER=1` and a read-only `WK_COMPLIANCE_READ_KEY`. Run `compliance --binding EXACT_GRANT_FILE`. The grant contains `chat_id`, `provider_org`, `provider_user`, `root`, `service`, `approval_hash`, and Unix `expires_at`. It must be issued for an explicitly approved chat by the operator. The client retrieves only that chat, validates returned ownership, follows bounded message pagination, skips reasoning and attachment downloads, and never lists organization-wide chats. Text-only coverage remains partial. Source edits conflict with old event IDs and hold the session. Broad API entitlement is never treated as workspace consent. This pull command has no remotely exposed broker API; broker deployment/entitlement remains a certification prerequisite.
