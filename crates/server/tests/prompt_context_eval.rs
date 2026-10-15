@@ -10,6 +10,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
+use sqlx::Row;
 use std::time::Instant;
 use tower::ServiceExt;
 use wk_knowledge::semantic::Namespace;
@@ -105,6 +106,99 @@ fn percentile(outcomes: &[Outcome], p: f64) -> f64 {
 
 fn round(ms: f64) -> f64 {
     (ms * 10.0).round() / 10.0
+}
+
+fn r3(x: f64) -> f64 {
+    (x * 1000.0).round() / 1000.0
+}
+
+// Mirrors of the product's fusion constants, used only to replay fusion at other floors.
+const FLOORS: [f64; 5] = [0.40, 0.45, 0.50, 0.55, 0.60];
+const MEANING_CANDIDATES: usize = 20;
+const MEANING_ADDED: usize = 5;
+const RANK_CONSTANT: f64 = 61.0;
+const LIMIT: usize = 8;
+
+/// The text route's answer for a prompt: card IDs of non-related notices, how many notices are
+/// not related, and the related card IDs in order.
+struct TextNotices {
+    shown: Vec<String>,
+    others: usize,
+    related: Vec<String>,
+}
+
+async fn text_notices(app: &Router, keywords: &str) -> TextNotices {
+    let (result, _) = overlap(app, keywords).await;
+    let notices = result["notices"].as_array().unwrap();
+    let id = |n: &Value| n["card_id"].as_str().map(str::to_string);
+    let (related, others): (Vec<&Value>, Vec<&Value>) =
+        notices.iter().partition(|n| n["kind"] == "related");
+    TextNotices {
+        shown: others.iter().filter_map(|n| id(n)).collect(),
+        others: others.len(),
+        related: related.iter().filter_map(|n| id(n)).collect(),
+    }
+}
+
+/// Cosine similarity of `vector` to every current card vector the reader may see, highest
+/// first. Every fixture card is in the reader's `backend` service, so membership is implied.
+async fn similarities(f: &common::Fixture, ns: &Namespace, vector: &[f32]) -> Vec<(String, f64)> {
+    sqlx::query("SELECT c.id::text AS id, 1 - (e.embedding <=> $1::vector) AS sim FROM card_embeddings e JOIN cards c ON c.org=e.org AND c.product=e.product AND c.id=e.card_id AND c.revision=e.revision WHERE c.org=$2 AND c.product='demo' AND c.author<>$3 AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND e.model=$4 AND e.digest=$5 AND e.dimensions=$6 AND e.format=$7 AND e.status='ready' ORDER BY e.embedding <=> $1::vector, c.id")
+        .bind(serde_json::to_string(vector).unwrap())
+        .bind(&f.reader.org)
+        .bind(&f.reader.user)
+        .bind(&ns.model)
+        .bind(&ns.digest)
+        .bind(ns.dimensions as i32)
+        .bind(wk_knowledge::semantic::FORMAT)
+        .fetch_all(&f.pool)
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| (r.try_get("id").unwrap(), r.try_get("sim").unwrap()))
+        .collect()
+}
+
+/// Replays `fuse_related` on card IDs with meaning candidates at or above `floor`: the 1-based
+/// rank of `target` among the first five visible related notices, and whether meaning found it.
+fn simulate(
+    target: &str,
+    text: &TextNotices,
+    sims: &[(String, f64)],
+    floor: f64,
+) -> (Option<usize>, bool) {
+    let meaning: Vec<&String> = sims
+        .iter()
+        .filter(|(id, s)| *s >= floor && !text.shown.contains(id))
+        .take(MEANING_CANDIDATES)
+        .map(|(id, _)| id)
+        .collect();
+    let score = |rank: usize| 1.0 / (RANK_CONSTANT + rank as f64);
+    let mut related: Vec<(&String, f64)> = text
+        .related
+        .iter()
+        .enumerate()
+        .map(|(rank, id)| (id, score(rank)))
+        .collect();
+    let mut added = 0;
+    for (rank, &id) in meaning.iter().enumerate() {
+        if let Some((_, s)) = related.iter_mut().find(|(t, _)| *t == id) {
+            *s += score(rank);
+        } else if added < MEANING_ADDED {
+            added += 1;
+            related.push((id, score(rank)));
+        }
+    }
+    related.sort_by(|(a, x), (b, y)| y.total_cmp(x).then_with(|| a.cmp(b)));
+    let visible = LIMIT.saturating_sub(text.others).min(5);
+    let rank = related
+        .iter()
+        .take(visible)
+        .position(|(id, _)| id.as_str() == target);
+    (
+        rank.map(|r| r + 1),
+        meaning.iter().any(|id| id.as_str() == target),
+    )
 }
 
 fn fixture() -> Value {
@@ -270,7 +364,88 @@ async fn prompt_context_relevance_and_latency_with_a_real_model() {
             })
         })
         .collect();
-    let report = json!({
+    // Similarity floor calibration (report only). Keywords are embedded with the indexing client
+    // and compared with the stored card vectors in SQL; the sweep replays fusion (20 candidates,
+    // at most 5 meaning-only additions, limit 8) against the text route's real notices.
+    let names: std::collections::BTreeMap<&String, &String> =
+        cards.iter().map(|(id, card)| (card, id)).collect();
+    let unanswerable_cases: Vec<(String, String, String)> = fixture["unanswerable"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| {
+            let keywords = wk_adapters::team_context::keywords(item["query"].as_str().unwrap())
+                .expect("keywords");
+            (
+                item["id"].as_str().unwrap().to_string(),
+                keywords,
+                String::new(),
+            )
+        })
+        .collect();
+    let mut probes = Vec::new();
+    for (set, list) in [
+        ("paraphrase", &cases),
+        ("meaning_only", &meaning_cases),
+        ("unanswerable", &unanswerable_cases),
+    ] {
+        for (id, keywords, card) in list {
+            let vector = worker.embed_query(keywords).await.unwrap();
+            let sims = similarities(&f, &worker.namespace, &vector).await;
+            probes.push((set, id, card, text_notices(&text, keywords).await, sims));
+        }
+    }
+    let targets: Vec<Value> = probes
+        .iter()
+        .filter(|(set, ..)| *set != "unanswerable")
+        .map(|(set, id, card, _, sims)| {
+            let rank = sims.iter().position(|(c, _)| c == *card).unwrap();
+            let best_other = sims.iter().find(|(c, _)| c != *card).unwrap();
+            json!({"set": set, "id": id, "similarity": r3(sims[rank].1), "rank": rank + 1, "best_other": r3(best_other.1), "best_other_id": names[&best_other.0]})
+        })
+        .collect();
+    let closest: Vec<Value> = probes
+        .iter()
+        .filter(|(set, ..)| *set == "unanswerable")
+        .map(|(_, id, _, _, sims)| json!({"id": id, "max_similarity": r3(sims[0].1), "closest_id": names[&sims[0].0]}))
+        .collect();
+    let sweep: Vec<Value> = FLOORS
+        .iter()
+        .map(|&floor| {
+            let count = |set: &str, by_meaning: bool| {
+                probes
+                    .iter()
+                    .filter(|(s, ..)| *s == set)
+                    .filter(|(_, _, card, text, sims)| {
+                        let (rank, meaning) = simulate(card, text, sims, floor);
+                        rank.is_some() && (meaning || !by_meaning)
+                    })
+                    .count()
+            };
+            let leaks = probes
+                .iter()
+                .filter(|(s, _, _, text, sims)| {
+                    *s == "unanswerable"
+                        && sims.iter().any(|(c, x)| *x >= floor && !text.shown.contains(c))
+                })
+                .count();
+            json!({"floor": floor, "meaning_only_hits5": count("meaning_only", true), "paraphrase_meaning_hits5": count("paraphrase", true), "paraphrase_hits5": count("paraphrase", false), "unanswerable_leaks": leaks})
+        })
+        .collect();
+    let by_meaning =
+        |o: &&Outcome| o.rank.is_some() && (o.matched_by == "meaning" || o.matched_by == "both");
+    let calibration = json!({
+        "method": "fusion replayed on card IDs: text-route notices plus meaning candidates with similarity >= floor (<= 20, excluding non-related notices), reciprocal rank k=61, <= 5 meaning-only added, limit 8, hit = target among first 5 related; unanswerable leak = any visible card with similarity >= floor",
+        "router_observed_at_0_60": {
+            "meaning_only_hits5": meaning_hybrid.iter().filter(by_meaning).count(),
+            "paraphrase_meaning_hits5": warm.iter().filter(by_meaning).count(),
+        },
+        "sweep": sweep,
+        "targets": targets,
+        "unanswerable": closest,
+    });
+
+    let mut report = json!({
         "corpus": fixture["name"],
         "records": records,
         "paraphrases": cases.len(),
@@ -294,6 +469,7 @@ async fn prompt_context_relevance_and_latency_with_a_real_model() {
             "per_query": meaning_queries,
         },
     });
+    report["calibration"] = calibration;
     println!("{}", serde_json::to_string_pretty(&report).unwrap());
     drop((hybrid, text));
     common::cleanup_runtime(&f, pool, role).await;
