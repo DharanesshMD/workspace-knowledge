@@ -21,6 +21,7 @@ Changes are recorded here for the first source-only alpha candidate. No tag or r
 ### Known limits
 
 - Linux Docker server + macOS developers is the alpha evaluation scope. Windows builds, universal capture, MultiEdit, cloud-backed hooks and Antigravity publication are not qualified.
+- rustls updated to 0.23.46 for RUSTSEC-2026-0346 (medium) and RUSTSEC-2026-0347/0348/0349 (low), published 2026-10-14.
 - RUSTSEC-2023-0071 package removed using the pinned Convex AWS-LC OIDC fork and PostgreSQL-only SQLx dependencies; audits remain unsuppressed. One informational rustls-pemfile maintenance warning remains.
 - The strict local Qwen model-sensitive corpus failed its contact-sensitive case. Application screening held the observed output; this is not model/privacy certification. Automatic publication remains disabled.
 - Production OIDC/TLS, real-server/team and long-duration capacity testing, Apple signing/notarization and binary distribution acceptance remain pending.
