@@ -107,6 +107,52 @@ fn round(ms: f64) -> f64 {
     (ms * 10.0).round() / 10.0
 }
 
+fn fixture() -> Value {
+    serde_json::from_str(include_str!(
+        "../../../scripts/fixtures/semantic-search.json"
+    ))
+    .unwrap()
+}
+
+/// `(record id, prompt keywords)` for each `meaning_only` entry, checked to share no token with
+/// the record's title, intent or rationale, so text matching alone cannot find the record.
+fn meaning_only(fixture: &Value) -> Vec<(String, String)> {
+    let entries = fixture["meaning_only"].as_array().unwrap();
+    assert!(entries.len() >= 10);
+    entries
+        .iter()
+        .map(|entry| {
+            let id = entry["id"].as_str().unwrap();
+            let record = fixture["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["id"] == id)
+                .unwrap_or_else(|| panic!("unknown record {id}"));
+            let text = ["title", "intent", "rationale"]
+                .map(|field| record[field].as_str().unwrap().to_ascii_lowercase())
+                .join(" ");
+            let tokens: std::collections::BTreeSet<&str> = text
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .filter(|t| !t.is_empty())
+                .collect();
+            let keywords = wk_adapters::team_context::keywords(entry["query"].as_str().unwrap())
+                .expect("keywords");
+            let shared: Vec<&str> = keywords.split(' ').filter(|k| tokens.contains(k)).collect();
+            assert!(shared.is_empty(), "{id} shares {shared:?} with its record");
+            (id.to_string(), keywords)
+        })
+        .collect()
+}
+
+#[test]
+fn meaning_only_queries_share_no_words_with_their_record() {
+    let fixture = fixture();
+    let cases = meaning_only(&fixture);
+    let records: std::collections::BTreeSet<&String> = cases.iter().map(|(id, _)| id).collect();
+    assert!(records.len() >= 8);
+}
+
 #[tokio::test]
 #[ignore = "requires pgvector PostgreSQL and a real local Nomic model"]
 async fn prompt_context_relevance_and_latency_with_a_real_model() {
@@ -114,20 +160,19 @@ async fn prompt_context_relevance_and_latency_with_a_real_model() {
         eprintln!("skipped: set WK_EVAL_EMBEDDING_URL, WK_EVAL_EMBEDDING_MODEL and WK_EVAL_EMBEDDING_DIGEST to run the evaluation");
         return;
     };
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../scripts/fixtures/semantic-search.json"
-    ))
-    .unwrap();
+    let fixture = fixture();
+    let meaning_only = meaning_only(&fixture);
     let f = common::setup().await;
     f.k.semantic_migrate().await.unwrap();
 
     // Seed: alice submits each record, bob publishes it; the reader queries.
-    let mut cases = Vec::new();
+    let (mut cases, mut cards) = (Vec::new(), std::collections::BTreeMap::new());
     for record in fixture["records"].as_array().unwrap() {
         let id = record["id"].as_str().unwrap();
         let submission: wk_contracts::CardSubmission = serde_json::from_value(json!({"schema_version":1,"idempotency_key":format!("eval-{id}"),"policy_revision":1,"title":record["title"],"intent":record["intent"],"rationale":record["rationale"],"decisions":[],"constraints":[],"open_questions":[],"service_ids":["backend"],"evidence":[],"lifecycle":"proposed","capture_completeness":"complete","base_revision":null})).unwrap();
         let card = f.k.submit(&f.alice, "demo", submission).await.unwrap();
         f.k.publish(&f.bob, "demo", card.id).await.unwrap();
+        cards.insert(id.to_string(), card.id.to_string());
         if let Some(query) = record["query"].as_str() {
             let keywords = wk_adapters::team_context::keywords(query).expect("keywords");
             cases.push((id.to_string(), keywords, card.id.to_string()));
@@ -165,6 +210,34 @@ async fn prompt_context_relevance_and_latency_with_a_real_model() {
     let cold = run(&hybrid, &cases).await;
     let warm = run(&hybrid, &cases).await;
     let lexical = run(&text, &cases).await;
+
+    // Meaning-only prompts: no shared words, so only meaning can find the record. Reported, not
+    // gated. The first hybrid pass fills the query cache; the second is measured warm.
+    let meaning_cases: Vec<(String, String, String)> = meaning_only
+        .into_iter()
+        .map(|(id, keywords)| {
+            let card = cards[&id].clone();
+            (id, keywords, card)
+        })
+        .collect();
+    run(&hybrid, &meaning_cases).await;
+    let meaning_hybrid = run(&hybrid, &meaning_cases).await;
+    let meaning_text = run(&text, &meaning_cases).await;
+    let meaning_queries: Vec<Value> = meaning_cases
+        .iter()
+        .enumerate()
+        .map(|(i, (id, keywords, _))| {
+            json!({
+                "id": id,
+                "keywords": keywords,
+                "hybrid_rank": meaning_hybrid[i].rank,
+                "hybrid_matched_by": meaning_hybrid[i].matched_by,
+                "hybrid_mode": meaning_hybrid[i].mode,
+                "text_rank": meaning_text[i].rank,
+                "warm_ms": round(meaning_hybrid[i].ms),
+            })
+        })
+        .collect();
 
     // Leaks are meaning matches; text matches are counted for context only.
     let (mut leaks, mut text_related) = (Vec::new(), 0);
@@ -213,6 +286,13 @@ async fn prompt_context_relevance_and_latency_with_a_real_model() {
             "text": {"p50": round(percentile(&lexical, 50.0)), "p95": round(percentile(&lexical, 95.0))},
         },
         "queries": queries,
+        "meaning_only": {
+            "queries": meaning_cases.len(),
+            "hybrid_top5": hits(&meaning_hybrid),
+            "text_top5": hits(&meaning_text),
+            "hybrid_mrr_at_5": (mrr(&meaning_hybrid) * 1000.0).round() / 1000.0,
+            "per_query": meaning_queries,
+        },
     });
     println!("{}", serde_json::to_string_pretty(&report).unwrap());
     drop((hybrid, text));
