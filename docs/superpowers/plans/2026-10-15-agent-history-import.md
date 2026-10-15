@@ -139,4 +139,4 @@ covering: small session → one part; boundary at whole exchanges; leading assis
 ### Task 8: Verification
 
 - [ ] fmt, workspace clippy `-D warnings`, `cargo test --workspace --locked -- --include-ignored` (disposable pgvector DB), build, Python tests, demo, plain-PostgreSQL acceptance, integration, console tests, `cargo audit`.
-- [ ] Real-binary smoke test of `wk agent-history --client <each> list --workspace <this repo>` against the developer's real local history: output must contain only IDs, titles, counts and dates (no message text), and no sessions from other folders. Do not export or print real conversation text.
+- [ ] Real-binary smoke test of `wk agent-history --client <each> list --workspace <this repo>` against the developer's real local history, piping the JSON through a filter that prints only counts and field names (titles are the opening words of real prompts and must not be printed): confirm the output has no message-text fields and that every listed session's folder is inside the repository. Do not export, show or print real conversation text.
