@@ -21,7 +21,7 @@ One shared server function serves the HTTP route, the device route and MCP: it r
 Target: hybrid lookups complete in under 100 ms at p95 with a warm model on the synthetic corpus; a hard 800 ms budget for the query embedding, which leaves margin inside the hook's 1.5 s notice bound and 2 s request timeout, after which text results return alone (`reason: "embedding_timeout"`). Requests are validated before any model call.
 
 - **Warm model:** embedding requests send `keep_alive` (default 30 minutes, configurable with `WK_EMBEDDING_KEEP_ALIVE`, bounded 0 to 24 hours); when semantic search is configured, the server builds a separate short-lived embedding client at startup and issues one warm-up embedding from it in a background task, so startup never waits. Warm-up failure is logged as a fixed label. Invalid `WK_EMBEDDING_KEEP_ALIVE` or `WK_PROMPT_SIMILARITY_FLOOR` values refuse startup even when no model is configured.
-- **Query cache:** an in-memory LRU of 1,024 query vectors keyed by whitespace-normalized keywords (the namespace is fixed per client), 10-minute TTL. Never persisted or logged. Cache hits skip the digest check for up to the TTL; any provider call that detects a changed model clears the cache.
+- **Query cache:** an in-memory LRU of 1,024 query vectors keyed by organisation, product and whitespace-normalized keywords (the namespace is fixed per client), 10-minute TTL, shared with `/v1/search` questions under the same rules. Never persisted or logged. Cache hits skip the digest check for up to the TTL; any provider call that detects a changed model clears the cache.
 - **Index:** exact cosine scan remains (milliseconds at thousands of summaries). Re-evaluate an approximate index (HNSW with iterative filtered scans) above about 50,000 current summaries per product or if warm p95 exceeds 100 ms; no index change now. Semantic reads hold the product administration gate shared, so concurrent lookups do not serialize.
 - **Overload:** the existing two concurrent embedding slots without queuing apply; a busy provider yields text results (`reason: "embedding_busy"`).
 
@@ -34,7 +34,7 @@ Target: on the committed synthetic corpus, using keyword queries produced by the
 
 ## Privacy
 
-Unchanged: only keywords leave the developer machine; sensitive-looking keywords are dropped on the machine and again on the server; keywords are never stored or logged; the in-memory cache holds vectors only. Raw conversations, owner-only notes and unpublished drafts are never candidates.
+Unchanged: only keywords leave the developer machine; sensitive-looking keywords are dropped on the machine and again on the server; keywords are never stored or logged; the in-memory cache holds, per organisation and product, the normalized query text as its key and the vector, in memory only, for up to 10 minutes. Raw conversations, owner-only notes and unpublished drafts are never candidates.
 
 ## Testing
 

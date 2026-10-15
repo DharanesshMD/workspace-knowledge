@@ -64,14 +64,17 @@ Semantic reads (readiness checks, search and prompt-time candidates) hold the pr
 
 HTTP search adds `retrieval.mode` (`hybrid`/`lexical`) and fixed fallback reasons. Missing current vectors/schema, provider downtime, changed model, invalid responses, timeout or capacity return keyword results. Database/authorization failures are not reported as semantic success. Remote and stdio MCP preserve diagnostics; minimal context budgets may omit the reason and set `omitted:true` while retaining mode. The portal reports the completed search method; absent diagnostics remain unknown, and failed/new requests clear old status. Owner/private stores and shared-summary completeness labels are unchanged.
 
+Every semantic query, from search and from prompt-time overlap lookups alike, shares these rules:
+
+- **Query cache:** up to 1,024 query vectors for 10 minutes, in process memory only (never persisted or logged). Each entry is keyed by organisation, product and the whitespace-normalized query text, and holds that text as its key plus the vector; one organisation's queries are never cache hits for another, so response timing does not reveal them. Least recently used entries are evicted. A cache hit skips the provider digest check for up to the 10-minute lifetime; any provider call that detects a changed model clears the cache.
+- **Warm model:** every embedding request sends Ollama `keep_alive` (default `30m`; `WK_EMBEDDING_KEEP_ALIVE` takes an integer with `s`, `m` or `h`, at most 24 hours). At startup the server sends one warm-up embedding from a separate short-lived client in a background task; startup never waits, and a failure is logged as a fixed label.
+
 ## Prompt-time overlap notices
 
-When semantic search is enabled, the [overlap lookup](overlap-notices.md) used by the prompt hook, MCP `knowledge.overlaps` and device-signed collectors also adds related summaries that match the query keywords by meaning. The same configuration, local-inference policy and index readiness apply, and `retrieval` reports `hybrid` or `lexical` with the same fixed reasons. Differences from search:
+When semantic search is enabled, the [overlap lookup](overlap-notices.md) used by the prompt hook, MCP `knowledge.overlaps` and device-signed collectors also adds related summaries that match the query keywords by meaning. The same configuration, local-inference policy and index readiness apply, and `retrieval` reports `hybrid` or `lexical` with the same fixed reasons. The query cache and warm model above apply unchanged. The only differences from search:
 
 - **Similarity floor:** 0.55 by default, below search's 0.6, because short keyword lists embed less sharply than full questions. `WK_PROMPT_SIMILARITY_FLOOR` overrides it (0.3–0.95). The default was chosen on the small synthetic set in the [prompt context acceptance report](../reviews/2026-10-14-semantic-prompt-context-acceptance.md); it is a heuristic, not a confidence threshold.
 - **Budget:** the query embedding has 800 ms, running concurrently with the text lookup, so the result stays inside the hook's 1.5 s notice bound. On timeout the text notices return alone (`embedding_timeout`).
-- **Query cache:** up to 1,024 query vectors for 10 minutes, keyed by whitespace-normalized query text, in process memory only (never persisted or logged). Least recently used entries are evicted. A cache hit skips the provider digest check for up to the 10-minute lifetime; any provider call that detects a changed model clears the cache.
-- **Warm model:** every embedding request sends Ollama `keep_alive` (default `30m`; `WK_EMBEDDING_KEEP_ALIVE` takes an integer with `s`, `m` or `h`, at most 24 hours). At startup the server sends one warm-up embedding from a separate short-lived client in a background task; startup never waits, and a failure is logged as a fixed label.
 
 Invalid `WK_EMBEDDING_KEEP_ALIVE` or `WK_PROMPT_SIMILARITY_FLOOR` values refuse startup even when the embedding model is not configured.
 
