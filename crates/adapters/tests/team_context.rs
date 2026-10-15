@@ -72,7 +72,18 @@ fn keywords_drop_question_words_and_keep_identifiers() {
             .as_deref(),
         Some("retries avoid repeating payment pay 142 ratelimiter")
     );
-    assert_eq!(keywords("How does it work, what should we do?"), None);
+    assert_eq!(
+        keywords("How does it work, what should we do?").as_deref(),
+        Some("work")
+    );
+}
+
+#[test]
+fn work_is_kept_as_a_subject_word() {
+    assert_eq!(
+        keywords("Fix the work queue retry").as_deref(),
+        Some("fix work queue retry")
+    );
 }
 
 #[test]
