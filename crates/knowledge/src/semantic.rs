@@ -240,7 +240,7 @@ impl Knowledge {
     }
     pub async fn semantic_ready(&self, a: &Actor, p: &str, ns: &Namespace) -> Result<bool, Error> {
         ns.validate()?;
-        let mut tx = self.code_tx(a, p).await?;
+        let mut tx = self.read_tx(a, p).await?;
         let services = self.semantic_services(&mut tx, a, p).await?;
         let exists: bool =
             sqlx::query_scalar("SELECT to_regclass('public.card_embeddings') IS NOT NULL")
@@ -267,7 +267,7 @@ impl Knowledge {
             return Err(Error::Invalid);
         }
         let encoded = ns.vector(vector)?;
-        let mut tx = self.code_tx(a, p).await?;
+        let mut tx = self.read_tx(a, p).await?;
         let services = self.semantic_services(&mut tx, a, p).await?;
         let cards = vector_candidates(&mut tx, a, p, &services, ns, &encoded, limit).await?;
         tx.commit().await.map_err(db)?;
@@ -286,7 +286,7 @@ impl Knowledge {
             return Err(Error::Invalid);
         }
         let encoded = ns.vector(vector)?;
-        let mut tx = self.code_tx(a, p).await?;
+        let mut tx = self.read_tx(a, p).await?;
         let services = self.semantic_services(&mut tx, a, p).await?;
         let semantic = vector_candidates(&mut tx, a, p, &services, ns, &encoded, 20).await?;
         let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND $4::text[] @> c.services AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND to_tsvector('simple',(c.body->>'title')||' '||(c.body->>'intent')||' '||(c.body->>'rationale')||' '||COALESCE(c.body->>'decisions','')||' '||COALESCE(c.body->>'constraints','')||' '||COALESCE(c.body->>'open_questions','')) @@ plainto_tsquery('simple',$5) ORDER BY ts_rank_cd(to_tsvector('simple',(c.body->>'title')||' '||(c.body->>'intent')||' '||(c.body->>'rationale')||' '||COALESCE(c.body->>'decisions','')||' '||COALESCE(c.body->>'constraints','')||' '||COALESCE(c.body->>'open_questions','')),plainto_tsquery('simple',$5)) DESC,c.id LIMIT 20")
@@ -314,7 +314,56 @@ impl Knowledge {
             .map(|(c, _)| c)
             .collect())
     }
+    /// Published summaries by other developers that match `vector` by meaning,
+    /// within the caller's services, excluding `exclude`, with cosine similarity of at least
+    /// `min_similarity` (0.3 to 0.95). Its scoping clauses must stay in sync with
+    /// `vector_candidates`, which keeps its own 0.6 floor for search.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn related_by_meaning(
+        &self,
+        a: &Actor,
+        p: &str,
+        ns: &Namespace,
+        vector: &[f32],
+        exclude: &[uuid::Uuid],
+        limit: u32,
+        min_similarity: f32,
+    ) -> Result<Vec<crate::activity::Notice>, Error> {
+        if !(1..=20).contains(&limit)
+            || exclude.len() > 100
+            || !(0.3..=0.95).contains(&min_similarity)
+        {
+            return Err(Error::Invalid);
+        }
+        let encoded = ns.vector(vector)?;
+        let mut tx = self.read_tx(a, p).await?;
+        let services = self.semantic_services(&mut tx, a, p).await?;
+        let now_ms: i64 = sqlx::query_scalar("SELECT (extract(epoch from now())*1000)::bigint")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+        let rows=sqlx::query("SELECT c.id,c.revision,c.author,c.body,(extract(epoch from c.created_at)*1000)::bigint AS at FROM card_embeddings e JOIN cards c ON c.org=e.org AND c.product=e.product AND c.id=e.card_id AND c.revision=e.revision JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND $4::text[] @> c.services AND c.author<>$1 AND NOT (c.id = ANY($11::uuid[])) AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND e.model=$5 AND e.digest=$6 AND e.dimensions=$7 AND e.format=$8 AND e.status='ready' AND (e.embedding <=> $9::vector)<=1-$12::float8 ORDER BY e.embedding <=> $9::vector,c.id LIMIT $10")
+            .bind(&a.user).bind(&a.org).bind(p).bind(&services).bind(&ns.model).bind(&ns.digest).bind(ns.dimensions as i32).bind(FORMAT).bind(&encoded).bind(i64::from(limit)).bind(exclude).bind(f64::from(min_similarity)).fetch_all(&mut *tx).await.map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        rows.into_iter()
+            .map(|r| {
+                let body: serde_json::Value = r.try_get("body").map_err(db)?;
+                Ok(crate::activity::card_notice(
+                    "related",
+                    "meaning",
+                    r.try_get("author").map_err(db)?,
+                    r.try_get("id").map_err(db)?,
+                    r.try_get("revision").map_err(db)?,
+                    &body,
+                    vec![],
+                    r.try_get("at").map_err(db)?,
+                    now_ms,
+                ))
+            })
+            .collect()
+    }
 }
+// Its scoping clauses must stay in sync with `Knowledge::related_by_meaning`.
 async fn vector_candidates(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     a: &Actor,

@@ -1,0 +1,247 @@
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
+use serde_json::{json, Value};
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc, Mutex,
+};
+use std::time::Duration;
+use wk_knowledge::semantic::Namespace;
+use wk_server::embeddings::{parse_keep_alive, Config, Embeddings};
+use wk_server::embeddings::{parse_prompt_floor, PROMPT_FLOOR};
+
+fn ns() -> Namespace {
+    Namespace {
+        model: "nomic-embed-text:v1.5".into(),
+        digest: "a".repeat(64),
+        dimensions: 3,
+    }
+}
+#[derive(Clone)]
+struct Seen {
+    embeds: Arc<AtomicUsize>,
+    bodies: Arc<Mutex<Vec<Value>>>,
+    digest: Arc<Mutex<String>>,
+    failing: Arc<AtomicBool>,
+}
+async fn model() -> (Config, Seen) {
+    let seen = Seen {
+        embeds: Arc::default(),
+        bodies: Arc::default(),
+        digest: Arc::new(Mutex::new(ns().digest)),
+        failing: Arc::default(),
+    };
+    let app = Router::new()
+        .route(
+            "/api/tags",
+            get(|State(s): State<Seen>| async move {
+                let digest = s.digest.lock().unwrap().clone();
+                Json(json!({"models":[{"name":ns().model,"digest":digest}]}))
+            }),
+        )
+        .route(
+            "/api/embed",
+            post(
+                |State(s): State<Seen>, Json(body): Json<Value>| async move {
+                    s.embeds.fetch_add(1, Ordering::SeqCst);
+                    s.bodies.lock().unwrap().push(body);
+                    if s.failing.load(Ordering::SeqCst) {
+                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    }
+                    Json(json!({"model":ns().model,"embeddings":[[1.,0.,0.]]})).into_response()
+                },
+            ),
+        )
+        .with_state(seen.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/api/embed", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (
+        Config {
+            endpoint,
+            namespace: ns(),
+        },
+        seen,
+    )
+}
+#[tokio::test]
+async fn repeated_queries_are_served_from_the_cache() {
+    let (config, seen) = model().await;
+    let e = Embeddings::new(config).unwrap();
+    let a = e
+        .embed_query_within(
+            "org",
+            "demo",
+            "retries avoid repeating payment",
+            Duration::from_millis(1500),
+        )
+        .await
+        .unwrap();
+    let b = e
+        .embed_query_within(
+            "org",
+            "demo",
+            "retries  avoid repeating payment",
+            Duration::from_millis(1500),
+        )
+        .await
+        .unwrap();
+    assert_eq!(a, b);
+    assert_eq!(
+        seen.embeds.load(Ordering::SeqCst),
+        1,
+        "whitespace-normalized repeat is cached"
+    );
+    e.embed_query("org", "demo", "different words")
+        .await
+        .unwrap();
+    assert_eq!(seen.embeds.load(Ordering::SeqCst), 2);
+}
+#[tokio::test]
+async fn the_query_cache_is_scoped_per_organisation_and_product() {
+    let (config, seen) = model().await;
+    let e = Embeddings::new(config).unwrap();
+    for (org, product) in [("org", "demo"), ("other", "demo"), ("org", "shop")] {
+        e.embed_query(org, product, "rate limiter").await.unwrap();
+    }
+    assert_eq!(
+        seen.embeds.load(Ordering::SeqCst),
+        3,
+        "another tenant's query is never a cache hit"
+    );
+    e.embed_query("other", "demo", "rate  limiter")
+        .await
+        .unwrap();
+    assert_eq!(
+        seen.embeds.load(Ordering::SeqCst),
+        3,
+        "same scope is cached"
+    );
+}
+#[tokio::test]
+async fn documents_and_rejected_input_bypass_the_cache() {
+    let (config, seen) = model().await;
+    let e = Embeddings::new(config).unwrap();
+    e.embed_query("org", "demo", "idempotency key")
+        .await
+        .unwrap();
+    e.embed_document("idempotency key").await.unwrap();
+    e.embed_document("idempotency key").await.unwrap();
+    assert_eq!(seen.embeds.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        e.embed_query("org", "demo", "password=PRIVATE_SYNTHETIC")
+            .await,
+        Err("input_rejected")
+    );
+    assert_eq!(
+        seen.embeds.load(Ordering::SeqCst),
+        3,
+        "rejected input makes no request"
+    );
+}
+#[tokio::test]
+async fn requests_keep_the_model_loaded_and_warm_up_embeds_once() {
+    let (config, seen) = model().await;
+    let e = Embeddings::new(config.clone()).unwrap();
+    e.warm().await.unwrap();
+    assert_eq!(seen.embeds.load(Ordering::SeqCst), 1);
+    assert_eq!(seen.bodies.lock().unwrap()[0]["keep_alive"], "30m");
+    e.embed_query("org", "demo", "warm up").await.unwrap();
+    assert_eq!(
+        seen.embeds.load(Ordering::SeqCst),
+        2,
+        "warm-up is not cached"
+    );
+    let custom = Embeddings::new(config)
+        .unwrap()
+        .with_keep_alive("2h".into());
+    custom
+        .embed_query("org", "demo", "rate limiter")
+        .await
+        .unwrap();
+    assert_eq!(seen.bodies.lock().unwrap()[2]["keep_alive"], "2h");
+}
+#[tokio::test]
+async fn a_detected_model_change_clears_the_query_cache() {
+    let (config, seen) = model().await;
+    let e = Embeddings::new(config).unwrap();
+    e.embed_query("org", "demo", "payment retries")
+        .await
+        .unwrap();
+    *seen.digest.lock().unwrap() = "b".repeat(64);
+    assert_eq!(
+        e.embed_query("org", "demo", "different words").await,
+        Err("embedding_model_changed")
+    );
+    assert_eq!(
+        e.embed_query("org", "demo", "payment retries").await,
+        Err("embedding_model_changed"),
+        "cached vector from the old model is no longer served"
+    );
+}
+#[tokio::test]
+async fn failed_embeddings_are_not_cached() {
+    let (config, seen) = model().await;
+    let e = Embeddings::new(config).unwrap();
+    seen.failing.store(true, Ordering::SeqCst);
+    assert!(e.embed_query("org", "demo", "rate limiter").await.is_err());
+    assert_eq!(seen.embeds.load(Ordering::SeqCst), 1);
+    seen.failing.store(false, Ordering::SeqCst);
+    e.embed_query("org", "demo", "rate limiter").await.unwrap();
+    assert_eq!(
+        seen.embeds.load(Ordering::SeqCst),
+        2,
+        "recovered model is reached"
+    );
+    e.embed_query("org", "demo", "rate limiter").await.unwrap();
+    assert_eq!(seen.embeds.load(Ordering::SeqCst), 2, "success is cached");
+}
+#[test]
+fn keep_alive_values_are_bounded() {
+    assert_eq!(parse_keep_alive("30m").as_deref(), Ok("30m"));
+    assert_eq!(parse_keep_alive("24h").as_deref(), Ok("24h"));
+    assert_eq!(parse_keep_alive("0s").as_deref(), Ok("0s"));
+    for bad in ["25h", "1d", "-1m", "m", "30", "1500m", ""] {
+        assert!(parse_keep_alive(bad).is_err(), "{bad}");
+    }
+}
+#[test]
+fn the_prompt_similarity_floor_defaults_to_0_55_and_is_bounded() {
+    let vars = |floor: Option<&str>| {
+        let floor = floor.map(str::to_string);
+        move |name: &str| match name {
+            "WK_EMBEDDING_URL" => Some("http://127.0.0.1:11434/api/embed".to_string()),
+            "WK_EMBEDDING_MODEL" => Some("nomic-embed-text:v1.5".to_string()),
+            "WK_EMBEDDING_DIGEST" => Some("a".repeat(64)),
+            "WK_EMBEDDING_DIMENSIONS" => Some("3".to_string()),
+            "WK_PROMPT_SIMILARITY_FLOOR" => floor.clone(),
+            _ => None,
+        }
+    };
+    let floor = |value: Option<&str>| {
+        Embeddings::from_vars(vars(value)).map(|e| e.map(|e| e.prompt_floor()))
+    };
+    assert_eq!(PROMPT_FLOOR, 0.55);
+    assert_eq!(floor(None), Ok(Some(0.55)));
+    assert_eq!(floor(Some("0.6")), Ok(Some(0.6)));
+    assert_eq!(floor(Some("0.3")), Ok(Some(0.3)));
+    assert_eq!(floor(Some("0.95")), Ok(Some(0.95)));
+    for bad in ["0.29", "0.96", "1", "-0.5", "NaN", "inf", "abc", "", " 0.6"] {
+        assert!(parse_prompt_floor(bad).is_err(), "{bad}");
+        assert!(floor(Some(bad)).is_err(), "{bad} is a startup error");
+    }
+    // Without a model the floor is unused, but a bad value is still reported.
+    let unconfigured = |value: &'static str| {
+        move |name: &str| (name == "WK_PROMPT_SIMILARITY_FLOOR").then(|| value.to_string())
+    };
+    assert!(matches!(
+        Embeddings::from_vars(unconfigured("0.6")),
+        Ok(None)
+    ));
+    assert!(Embeddings::from_vars(unconfigured("2")).is_err());
+}

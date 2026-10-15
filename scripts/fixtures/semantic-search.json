@@ -143,5 +143,55 @@
       "id": "geography",
       "query": "Which mountain is the tallest in the world?"
     }
+  ],
+  "meaning_only": [
+    {
+      "id": "payments",
+      "query": "What stops a shopper being billed twice when the order form gets resubmitted?"
+    },
+    {
+      "id": "retries",
+      "query": "How do we throttle how often a flaky upstream gets hammered after a timeout?"
+    },
+    {
+      "id": "tenants",
+      "query": "Stop a single big customer hogging bandwidth so smaller accounts stay responsive"
+    },
+    {
+      "id": "cache",
+      "query": "Shoppers still see yesterday's cost once we edit it in the admin panel"
+    },
+    {
+      "id": "outbox",
+      "query": "Notifications go out for orders that were rolled back"
+    },
+    {
+      "id": "migration",
+      "query": "Renaming a table attribute breaks the previous version still running on some servers"
+    },
+    {
+      "id": "abort",
+      "query": "Switching quickly between workspaces shows stale data from the first one"
+    },
+    {
+      "id": "scope",
+      "query": "Can a contractor read decisions about systems outside their team?"
+    },
+    {
+      "id": "revision",
+      "query": "Two engineers saved the same doc and one person's work vanished"
+    },
+    {
+      "id": "pagination",
+      "query": "Infinite scroll shows some rows twice while new items arrive"
+    },
+    {
+      "id": "snapshot",
+      "query": "Approval for a patch should expire when the code underneath it is modified"
+    },
+    {
+      "id": "retention",
+      "query": "Chat logs from coding sessions must not leave the laptop"
+    }
   ]
 }
