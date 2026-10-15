@@ -60,12 +60,29 @@ Search checks membership before any provider request and rechecks it in final qu
 
 Requests have a3-second total semantic deadline,2 concurrent embedding operations per client/process, no queued overload and a1MiB response cap. Index calls have a30-second deadline. Input caps are1024 query bytes/16KiB document bytes, with `truncate:false`; inputs exceeding the provider's token window are held rather than silently shortened. Nomic's Ollama packaging may use a smaller context than its model-card maximum. Configure provider CPU/memory/queue limits separately; HTTP cancellation does not certify that provider computation stopped immediately.
 
+Semantic reads (readiness checks, search and prompt-time candidates) hold the product administration gate in shared mode: concurrent lookups do not queue behind each other, while role, device and membership changes still exclude them.
+
 HTTP search adds `retrieval.mode` (`hybrid`/`lexical`) and fixed fallback reasons. Missing current vectors/schema, provider downtime, changed model, invalid responses, timeout or capacity return keyword results. Database/authorization failures are not reported as semantic success. Remote and stdio MCP preserve diagnostics; minimal context budgets may omit the reason and set `omitted:true` while retaining mode. The portal reports the completed search method; absent diagnostics remain unknown, and failed/new requests clear old status. Owner/private stores and shared-summary completeness labels are unchanged.
+
+## Prompt-time overlap notices
+
+When semantic search is enabled, the [overlap lookup](overlap-notices.md) used by the prompt hook, MCP `knowledge.overlaps` and device-signed collectors also adds related summaries that match the query keywords by meaning. The same configuration, local-inference policy and index readiness apply, and `retrieval` reports `hybrid` or `lexical` with the same fixed reasons. Differences from search:
+
+- **Similarity floor:** 0.55 by default, below search's 0.6, because short keyword lists embed less sharply than full questions. `WK_PROMPT_SIMILARITY_FLOOR` overrides it (0.3–0.95). The default was chosen on the small synthetic set in the [prompt context acceptance report](../reviews/2026-10-14-semantic-prompt-context-acceptance.md); it is a heuristic, not a confidence threshold.
+- **Budget:** the query embedding has 800 ms, running concurrently with the text lookup, so the result stays inside the hook's 1.5 s notice bound. On timeout the text notices return alone (`embedding_timeout`).
+- **Query cache:** up to 1,024 query vectors for 10 minutes, keyed by whitespace-normalized query text, in process memory only (never persisted or logged). Least recently used entries are evicted. A cache hit skips the provider digest check for up to the 10-minute lifetime; any provider call that detects a changed model clears the cache.
+- **Warm model:** every embedding request sends Ollama `keep_alive` (default `30m`; `WK_EMBEDDING_KEEP_ALIVE` takes an integer with `s`, `m` or `h`, at most 24 hours). At startup the server sends one warm-up embedding from a separate short-lived client in a background task; startup never waits, and a failure is logged as a fixed label.
+
+Invalid `WK_EMBEDDING_KEEP_ALIVE` or `WK_PROMPT_SIMILARITY_FLOOR` values refuse startup even when the embedding model is not configured.
+
+Candidates are found by an exact cosine scan over current vectors for the caller's permitted services. On the synthetic corpus a warm lookup takes milliseconds. Re-evaluate an approximate index (HNSW with pgvector iterative filtered scans, so service filters do not starve results) when a product exceeds about 50,000 current summaries or warm prompt-time p95 exceeds 100 ms.
 
 ## Evaluate
 
 `scripts/semantic-eval.py` compares two explicitly selected literal-loopback APIs against the committed synthetic corpus. Set `WK_SEMANTIC_EVAL_SYNTHETIC=1` and a synthetic `WK_ACCESS_TOKEN`; `--seed` explicitly creates/publishes proposed fixture records in the development `demo` product. Use owned disposable databases only. Index those records before evaluating a hybrid-enabled API. Keep a second keyword-only API for a fair current-baseline comparison. Outputs include top1/top5/ranking and observed local latency for paraphrases/exact terms, plus unrelated-question empty-result checks.
 
 The current lexical baseline uses all-term `simple` full-text matching; verbose natural-language questions often fail that baseline. The comparison is not a claim against every optimized keyword system. Small synthetic results do not establish representative team accuracy, multilingual/code-heavy coverage, deployed-server capacity or guaranteed correctness. See the [dated semantic acceptance report](../reviews/2026-10-13-semantic-search-acceptance.md) for exact measured evidence.
+
+Prompt-time relevance and latency are measured by the opt-in Rust test `crates/server/tests/prompt_context_eval.rs` against the same fixture and a real local model; see the [prompt context acceptance report](../reviews/2026-10-14-semantic-prompt-context-acceptance.md).
 
 Primary references: [pgvector](https://github.com/pgvector/pgvector), [Ollama embed](https://docs.ollama.com/api/embed), [Ollama tags](https://docs.ollama.com/api/tags), [Nomic prefixes/model license](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5).
