@@ -32,6 +32,7 @@ struct Model {
     embeds: Arc<AtomicUsize>,
     delay: std::time::Duration,
     revocation: Option<(wk_knowledge::Knowledge, wk_knowledge::Actor)>,
+    late_flip: Option<(wk_knowledge::Knowledge, wk_knowledge::Actor, sqlx::PgPool)>,
 }
 async fn model(
     revocation: Option<(wk_knowledge::Knowledge, wk_knowledge::Actor)>,
@@ -60,6 +61,31 @@ async fn delayed_model(
     Arc<AtomicUsize>,
     Arc<AtomicUsize>,
 ) {
+    serve_model(revocation, None, delay).await
+}
+/// Disables the inference policy after the post-inference recheck but before the meaning
+/// query; see [`late_policy_flip`].
+async fn late_flip_model(
+    f: &common::Fixture,
+) -> (
+    Config,
+    tokio::task::JoinHandle<()>,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+) {
+    let flip = (f.k.clone(), f.admin.clone(), f.pool.clone());
+    serve_model(None, Some(flip), std::time::Duration::ZERO).await
+}
+async fn serve_model(
+    revocation: Option<(wk_knowledge::Knowledge, wk_knowledge::Actor)>,
+    late_flip: Option<(wk_knowledge::Knowledge, wk_knowledge::Actor, sqlx::PgPool)>,
+    delay: std::time::Duration,
+) -> (
+    Config,
+    tokio::task::JoinHandle<()>,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+) {
     let requests = Arc::new(AtomicUsize::new(0));
     let embeds = Arc::new(AtomicUsize::new(0));
     let state = Model {
@@ -67,6 +93,7 @@ async fn delayed_model(
         embeds: embeds.clone(),
         delay,
         revocation,
+        late_flip,
     };
     let app = Router::new()
         .route(
@@ -100,6 +127,9 @@ async fn delayed_model(
                             k.revoke(&a, "demo").await.unwrap();
                         }
                     }
+                    if let Some((k, admin, pool)) = s.late_flip {
+                        late_policy_flip(k, admin, pool).await;
+                    }
                     Json(json!({"model":ns().model,"embeddings":[[1.,0.,0.]]}))
                 },
             ),
@@ -117,6 +147,52 @@ async fn delayed_model(
         requests,
         embeds,
     )
+}
+/// Holds the product's administration gate, queues a policy change behind it and releases it
+/// only once another read queues behind that change. The post-inference policy recheck takes
+/// no gate and still passes; the meaning query, which shares the gate, sees the change.
+async fn late_policy_flip(
+    k: wk_knowledge::Knowledge,
+    admin: wk_knowledge::Actor,
+    pool: sqlx::PgPool,
+) {
+    // Let the concurrent text lookup finish first so it does not queue on the gate.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array($1::text,'demo','administration')::text,0))")
+        .bind(&admin.org)
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+    let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *gate)
+        .await
+        .unwrap();
+    let flip = tokio::spawn(async move {
+        let off = wk_knowledge::admin::ProductPolicy {
+            allow_loopback: false,
+            ..Default::default()
+        };
+        k.admin_policy_put(&admin, "demo", off).await.unwrap();
+    });
+    tokio::spawn(async move {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+            )
+            .bind(holder)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if waiting >= 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        gate.commit().await.unwrap();
+        flip.await.unwrap();
+    });
 }
 async fn send(app: &Router, query: &str, token: &str) -> (StatusCode, Value) {
     let response = app
@@ -802,6 +878,35 @@ async fn policy_disabled_during_inference_keeps_text_notices_only() {
     assert_eq!(found[0]["matched_by"], "text");
     assert!(!result.to_string().contains("\"meaning\""));
     assert!(!result.to_string().contains("\"both\""));
+    task.abort();
+}
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
+async fn policy_disabled_after_the_recheck_falls_back_instead_of_failing() {
+    let f = common::setup().await;
+    f.k.semantic_migrate().await.unwrap();
+    let id = indexed(&f, card()).await;
+    let (config, task, _, embeds) = late_flip_model(&f).await;
+    let app = app_for(&f, vec![("reader".into(), f.reader.clone())], None, config);
+    let (status, result) =
+        overlap(&app, "reader", json!({"query":"retries payment","limit":8})).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(embeds.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        result["retrieval"],
+        json!({"mode":"lexical","reason":"embedding_policy_disabled"})
+    );
+    let found = related(&result, &id);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0]["matched_by"], "text");
+    assert!(
+        !f.k.policy(&f.reader, "demo")
+            .await
+            .unwrap()
+            .restrictions
+            .allow_loopback,
+        "the policy changed during the request"
+    );
     task.abort();
 }
 #[tokio::test]

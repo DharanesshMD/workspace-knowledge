@@ -25,6 +25,8 @@ async fn gate(
     match k.semantic_ready(a, p, &client.namespace).await {
         Ok(true) => Ok(None),
         Ok(false) => Ok(Some("index_not_ready")),
+        // The policy changed since the check above; the text lookup reauthorizes.
+        Err(Error::Denied) => Ok(Some("embedding_policy_disabled")),
         Err(Error::Storage) => Ok(Some("semantic_storage_unavailable")),
         Err(e) => Err(e.into()),
     }
@@ -109,6 +111,12 @@ pub(crate) async fn overlaps_with(
                         query_ignored,
                         json!({"mode":"hybrid","reason":null}),
                     ))
+                }
+                // The policy changed after the recheck. Confirm the caller may still read
+                // the product, so revoked membership or devices stay errors.
+                Err(Error::Denied) => {
+                    k.policy(a, product).await?;
+                    (notices, Some("embedding_policy_disabled"))
                 }
                 Err(Error::Storage) => (notices, Some("semantic_storage_unavailable")),
                 Err(e) => return Err(e.into()),
