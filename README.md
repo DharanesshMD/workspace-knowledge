@@ -12,7 +12,7 @@ Git brings the code into your checkout. Workspace Knowledge brings the recorded 
 
 [Try the demo](#quickstart) · [Join a team](#join-a-team-server) · [Host a server](#host-a-team-server) · [Documentation](#documentation) · [Contribute](CONTRIBUTING.md)
 
-> **Source-only alpha, [v0.1.0-alpha.1](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.1) (prerelease):** the first scope is a Linux Docker server with macOS developers. Local portal and Claude Code 2.1.296 `Edit`/`Write` acceptance passed with synthetic fixtures. Capture remains partial; strict model-sensitive privacy qualification remains open. The RSA dependency has been removed; unsuppressed Cargo audit reports zero vulnerabilities and one informational maintenance warning. Automatic publication is disabled. Read the [limitations](#limitations-and-release-status), [alpha launch record](docs/operations/public-alpha.md) and [changelog](CHANGELOG.md) before choosing a deployment.
+> **Source-only alpha, [v0.1.0-alpha.2](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.2) (prerelease):** the first scope is a Linux Docker server with macOS developers. Local portal and Claude Code 2.1.296 `Edit`/`Write` acceptance passed with synthetic fixtures. Capture remains partial; strict model-sensitive privacy qualification remains open. The RSA dependency has been removed; unsuppressed Cargo audit reports zero vulnerabilities and one informational maintenance warning. Automatic publication is disabled. Read the [limitations](#limitations-and-release-status), [alpha launch record](docs/operations/public-alpha.md) and [changelog](CHANGELOG.md) before choosing a deployment.
 
 <img src="docs/assets/team-context-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
 
@@ -149,7 +149,7 @@ cargo build --locked -p wk-cli
 python scripts/demo.py
 ```
 
-These instructions target the default branch, `main`. Add `--branch v0.1.0-alpha.1` to evaluate exactly the published prerelease.
+These instructions target the default branch, `main`. Add `--branch v0.1.0-alpha.2` to evaluate exactly the published prerelease.
 
 The demo creates a temporary synthetic workspace, approves one service, rejects out-of-scope paths, replays a visible conversation fixture and checks that pause stops eligibility. Successful output ends with:
 

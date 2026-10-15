@@ -4,12 +4,15 @@ All notable changes are recorded here.
 
 ## Unreleased
 
-- Code of conduct, Dependabot updates, design-history docs layout and README title icon sizing.
+Nothing yet.
 
-## [v0.1.0-alpha.1](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.1) — 2026-10-14 (source-only prerelease)
+## [v0.1.0-alpha.2](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.2) — 2026-10-15 (source-only prerelease)
+
+First published prerelease. It supersedes v0.1.0-alpha.1, which was tagged on 2026-10-14 but never published and predates the rustls security update.
 
 ### Included
 
+- Code of conduct, Dependabot updates, design-history docs layout and README title icon sizing.
 - Explicit product-folder approval, private local capture boundaries and client/version capability reporting.
 - Private owner summaries and reviewed, scoped team summaries in a hosted portal; raw captured messages are not exposed through team retrieval.
 - Prominent owner device warnings for reported capture gaps, stale/missing reports and limited/unknown coverage, with explicit local recovery consequences; hook capture failures let development continue.

@@ -8,7 +8,7 @@ Include the affected revision, a synthetic minimal reproduction, impact and rele
 
 ## Supported security scope
 
-There is no supported production release yet. [v0.1.0-alpha.1](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.1) is a source-only prerelease for Linux Docker servers and macOS developers; use synthetic or disposable environments while evaluating it. Production OIDC/TLS, a real-server/team pilot, signed macOS distribution and a broader model-sensitive privacy corpus remain pending. Automatic publication is disabled; code-context retrieval is advisory, and the optional Claude hook covers only the locally tested Edit/Write surface.
+There is no supported production release yet. [v0.1.0-alpha.2](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.2) is a source-only prerelease for Linux Docker servers and macOS developers; use synthetic or disposable environments while evaluating it. Production OIDC/TLS, a real-server/team pilot, signed macOS distribution and a broader model-sensitive privacy corpus remain pending. Automatic publication is disabled; code-context retrieval is advisory, and the optional Claude hook covers only the locally tested Edit/Write surface.
 
 The previous **RUSTSEC-2023-0071** package was removed from the runtime graph and full lockfile. Unsuppressed Cargo audit reports zero vulnerabilities and one informational unmaintained-PEM-parser warning; that is not comprehensive security certification. Read the [remediation and fork maintenance assessment](docs/security/rsa-runtime-disposition.md), [threat model](docs/security/threat-model.md) and [restore boundaries](docs/operations/restore.md).
 
