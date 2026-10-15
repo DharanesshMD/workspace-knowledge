@@ -32,6 +32,21 @@ pub struct OverlapQuery {
 fn default_limit() -> u32 {
     8
 }
+impl OverlapQuery {
+    /// The request shape [`Knowledge::overlaps`] accepts; callers can check it before other work.
+    pub fn valid(&self) -> bool {
+        let query = self
+            .query
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        self.files.len() <= 100
+            && self.files.iter().all(|f| valid_path(f))
+            && query.is_none_or(|s| s.len() <= 1024)
+            && (!self.files.is_empty() || query.is_some())
+            && (1..=20).contains(&self.limit)
+    }
+}
 
 #[derive(Serialize, Debug, Clone)]
 pub struct Notice {
@@ -218,16 +233,10 @@ impl Knowledge {
         q: OverlapQuery,
     ) -> Result<Vec<Notice>, Error> {
         self.device_scope(product, &[])?;
-        let query = q.query.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        if q.files.len() > 100
-            || q.files.iter().any(|f| !valid_path(f))
-            || query.is_some_and(|s| s.len() > 1024)
-            || (q.files.is_empty() && query.is_none())
-            || q.limit == 0
-            || q.limit > 20
-        {
+        if !q.valid() {
             return Err(Error::Invalid);
         }
+        let query = q.query.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let mut tx = self.actor_tx(a).await?;
         let mut services: Vec<String> = sqlx::query_scalar(
             "SELECT services FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3",

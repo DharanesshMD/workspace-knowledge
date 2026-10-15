@@ -48,6 +48,10 @@ pub(crate) async fn overlaps_with(
             );
         }
     }
+    // Reject before any database or provider work, with the error the text lookup would give.
+    if !q.valid() {
+        return Err(Error::Invalid.into());
+    }
     let limit = q.limit as usize;
     let text = q.query.clone().filter(|s| !s.trim().is_empty());
     let (notices, meaning) = match (text, &api.embeddings) {

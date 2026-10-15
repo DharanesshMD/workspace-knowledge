@@ -682,3 +682,47 @@ async fn prompt_overlaps_without_a_model_report_semantic_disabled() {
         json!({"mode":"lexical","reason":"semantic_disabled"})
     );
 }
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
+async fn invalid_prompt_overlaps_are_rejected_before_the_provider() {
+    let f = common::setup().await;
+    f.k.semantic_migrate().await.unwrap();
+    let c = f.k.submit(&f.alice, "demo", card()).await.unwrap();
+    f.k.publish(&f.bob, "demo", c.id).await.unwrap();
+    let source =
+        f.k.semantic_pending(&f.alice.org, "demo", &ns())
+            .await
+            .unwrap()
+            .remove(0);
+    f.k.semantic_store(&f.alice.org, "demo", &ns(), &source, &[1., 0., 0.])
+        .await
+        .unwrap();
+    let (config, task, _, embeds) = counted_model(None).await;
+    let app = wk_server::portal_router_with_embeddings(
+        f.k.clone(),
+        vec![("reader".into(), f.reader.clone())],
+        None,
+        None,
+        None,
+        None,
+        Some(Embeddings::new(config).unwrap()),
+    )
+    .unwrap();
+    for body in [
+        json!({"files":["/etc/passwd"],"query":"duplicate money","limit":8}),
+        json!({"query":"duplicate money","limit":0}),
+        json!({"query":"duplicate money","limit":21}),
+    ] {
+        let (status, result) = overlap(&app, "reader", body).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(result, json!({"error":"invalid_request"}));
+    }
+    assert_eq!(embeds.load(Ordering::SeqCst), 0);
+    // The same request with valid fields does reach the model.
+    let (status, result) =
+        overlap(&app, "reader", json!({"query":"duplicate money","limit":8})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["retrieval"]["mode"], "hybrid");
+    assert_eq!(embeds.load(Ordering::SeqCst), 1);
+    task.abort();
+}
