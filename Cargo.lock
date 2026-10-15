@@ -4002,6 +4002,7 @@ dependencies = [
  "tower",
  "tower-http",
  "uuid",
+ "wk-adapters",
  "wk-contracts",
  "wk-knowledge",
  "wk-postgres",

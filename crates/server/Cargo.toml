@@ -23,5 +23,6 @@ tower = {version="0.5",features=["util"]}
 ed25519-dalek="2"
 hex="0.4"
 [dev-dependencies]
+wk-adapters = { path = "../adapters" }
 http-body-util = "0.1"
 sqlx = { package = "wk-postgres", path = "../postgres" }
