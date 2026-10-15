@@ -320,7 +320,7 @@ async fn related_by_meaning_returns_other_developers_close_summaries() {
     f.k.semantic_migrate().await.unwrap();
     let near = published(&f, "near", vec!["backend"]).await;
     let far = published(&f, "far", vec!["backend"]).await;
-    // Cosine similarity 0.8 (distance 0.2) is inside the 0.6 floor; ~0.55 is outside it.
+    // At a 0.6 floor, cosine similarity 0.8 (distance 0.2) is inside and ~0.55 is outside.
     let close = published(&f, "close", vec!["backend"]).await;
     let below = published(&f, "below", vec!["backend"]).await;
     let frontend = published(&f, "frontend", vec!["frontend"]).await;
@@ -339,7 +339,7 @@ async fn related_by_meaning_returns_other_developers_close_summaries() {
     let related = |a: &wk_knowledge::Actor, exclude: Vec<uuid::Uuid>, limit: u32| {
         let (k, ns, a) = (f.k.clone(), ns.clone(), a.clone());
         async move {
-            k.related_by_meaning(&a, "demo", &ns, &[1., 0., 0.], &exclude, limit)
+            k.related_by_meaning(&a, "demo", &ns, &[1., 0., 0.], &exclude, limit, 0.6)
                 .await
         }
     };
@@ -370,13 +370,26 @@ async fn related_by_meaning_returns_other_developers_close_summaries() {
             Err(Error::Invalid)
         ));
     }
+    // The caller's floor decides: at 0.5 the ~0.55 card is found too, after the closer ones.
+    let at = |floor: f32| {
+        let (k, ns, a) = (f.k.clone(), ns.clone(), f.reader.clone());
+        async move {
+            k.related_by_meaning(&a, "demo", &ns, &[1., 0., 0.], &[], 20, floor)
+                .await
+        }
+    };
+    assert_eq!(ids(at(0.5).await.unwrap()), vec![near, close, below]);
+    assert_eq!(ids(at(0.85).await.unwrap()), vec![near]);
+    for floor in [0.29, 0.951, f32::NAN, f32::INFINITY] {
+        assert!(matches!(at(floor).await, Err(Error::Invalid)), "{floor}");
+    }
     f.k.withdraw(&f.alice, "demo", near, 1).await.unwrap();
     assert_eq!(
         ids(related(&f.reader, vec![], 20).await.unwrap()),
         vec![close]
     );
     assert!(matches!(
-        f.k.related_by_meaning(&f.reader, "elsewhere", &ns, &[1., 0., 0.], &[], 20)
+        f.k.related_by_meaning(&f.reader, "elsewhere", &ns, &[1., 0., 0.], &[], 20, 0.6)
             .await,
         Err(Error::NotFound)
     ));
@@ -395,7 +408,7 @@ async fn semantic_reads_share_the_product_lock_but_wait_for_administration() {
     let read = |k: wk_knowledge::Knowledge| {
         let (a, ns) = (f.reader.clone(), ns.clone());
         async move {
-            k.related_by_meaning(&a, "demo", &ns, &[1., 0., 0.], &[], 20)
+            k.related_by_meaning(&a, "demo", &ns, &[1., 0., 0.], &[], 20, 0.6)
                 .await
         }
     };

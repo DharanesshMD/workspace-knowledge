@@ -1,6 +1,7 @@
 //! Opt-in relevance and latency evaluation of prompt-time overlap notices against a real local
 //! Nomic model. Set `WK_EVAL_EMBEDDING_URL`, `WK_EVAL_EMBEDDING_MODEL` and
-//! `WK_EVAL_EMBEDDING_DIGEST` (768 dimensions) plus `WK_TEST_DATABASE_URL` to run it.
+//! `WK_EVAL_EMBEDDING_DIGEST` (768 dimensions) plus `WK_TEST_DATABASE_URL` to run it. The prompt
+//! similarity floor is the product default unless `WK_PROMPT_SIMILARITY_FLOOR` overrides it.
 #[path = "../../knowledge/tests/common/mod.rs"]
 mod common;
 use axum::{
@@ -14,7 +15,7 @@ use sqlx::Row;
 use std::time::Instant;
 use tower::ServiceExt;
 use wk_knowledge::semantic::Namespace;
-use wk_server::embeddings::{Config, Embeddings};
+use wk_server::embeddings::{parse_prompt_floor, Config, Embeddings};
 
 fn config() -> Option<Config> {
     let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
@@ -298,15 +299,21 @@ async fn prompt_context_relevance_and_latency_with_a_real_model() {
         )
         .unwrap()
     };
-    let hybrid = router(Some(Embeddings::new(config).unwrap()));
+    let mut client = Embeddings::new(config).unwrap();
+    if let Ok(value) = std::env::var("WK_PROMPT_SIMILARITY_FLOOR") {
+        client = client.with_prompt_floor(parse_prompt_floor(&value).unwrap());
+    }
+    // Rounded for the report: the f32 floor widens to 0.550000011920929 in JSON.
+    let floor = r3(f64::from(client.prompt_floor()));
+    let hybrid = router(Some(client));
     let text = router(None);
 
     let cold = run(&hybrid, &cases).await;
     let warm = run(&hybrid, &cases).await;
     let lexical = run(&text, &cases).await;
 
-    // Meaning-only prompts: no shared words, so only meaning can find the record. Reported, not
-    // gated. The first hybrid pass fills the query cache; the second is measured warm.
+    // Meaning-only prompts: no shared words, so only meaning can find the record. The first
+    // hybrid pass fills the query cache; the second is measured warm.
     let meaning_cases: Vec<(String, String, String)> = meaning_only
         .into_iter()
         .map(|(id, keywords)| {
@@ -436,7 +443,8 @@ async fn prompt_context_relevance_and_latency_with_a_real_model() {
         |o: &&Outcome| o.rank.is_some() && (o.matched_by == "meaning" || o.matched_by == "both");
     let calibration = json!({
         "method": "fusion replayed on card IDs: text-route notices plus meaning candidates with similarity >= floor (<= 20, excluding non-related notices), reciprocal rank k=61, <= 5 meaning-only added, limit 8, hit = target among first 5 related; unanswerable leak = any visible card with similarity >= floor",
-        "router_observed_at_0_60": {
+        "router_observed": {
+            "floor": floor,
             "meaning_only_hits5": meaning_hybrid.iter().filter(by_meaning).count(),
             "paraphrase_meaning_hits5": warm.iter().filter(by_meaning).count(),
         },
@@ -447,6 +455,7 @@ async fn prompt_context_relevance_and_latency_with_a_real_model() {
 
     let mut report = json!({
         "corpus": fixture["name"],
+        "prompt_floor": floor,
         "records": records,
         "paraphrases": cases.len(),
         "top5_hits": {"hybrid": hits(&warm), "hybrid_cold": hits(&cold), "text": hits(&lexical)},
@@ -475,7 +484,15 @@ async fn prompt_context_relevance_and_latency_with_a_real_model() {
     common::cleanup_runtime(&f, pool, role).await;
 
     assert!(hits(&warm) >= 11, "hybrid top-5 hits below 11 of 12");
-    assert!(report["unanswerable_leaks"] == 0, "unanswerable leaks");
+    assert!(
+        hits(&meaning_hybrid) >= 9,
+        "meaning-only hybrid top-5 hits below 9 of {} at floor {floor}",
+        meaning_cases.len()
+    );
+    assert!(
+        report["unanswerable_leaks"] == 0,
+        "unanswerable leaks at floor {floor}"
+    );
     assert!(
         percentile(&warm, 95.0) < 100.0,
         "warm p95 is not below 100 ms"

@@ -95,6 +95,7 @@ pub(crate) async fn overlaps_with(
                     &vector,
                     &shown,
                     MEANING_CANDIDATES,
+                    client.prompt_floor(),
                 )
                 .await
             {

@@ -315,8 +315,10 @@ impl Knowledge {
             .collect())
     }
     /// Published summaries by other developers that match `vector` by meaning,
-    /// within the caller's services, excluding `exclude`. Cosine similarity >= 0.6.
-    /// Its scoping clauses must stay in sync with `vector_candidates`.
+    /// within the caller's services, excluding `exclude`, with cosine similarity of at least
+    /// `min_similarity` (0.3 to 0.95). Its scoping clauses must stay in sync with
+    /// `vector_candidates`, which keeps its own 0.6 floor for search.
+    #[allow(clippy::too_many_arguments)]
     pub async fn related_by_meaning(
         &self,
         a: &Actor,
@@ -325,8 +327,12 @@ impl Knowledge {
         vector: &[f32],
         exclude: &[uuid::Uuid],
         limit: u32,
+        min_similarity: f32,
     ) -> Result<Vec<crate::activity::Notice>, Error> {
-        if !(1..=20).contains(&limit) || exclude.len() > 100 {
+        if !(1..=20).contains(&limit)
+            || exclude.len() > 100
+            || !(0.3..=0.95).contains(&min_similarity)
+        {
             return Err(Error::Invalid);
         }
         let encoded = ns.vector(vector)?;
@@ -336,8 +342,8 @@ impl Knowledge {
             .fetch_one(&mut *tx)
             .await
             .map_err(db)?;
-        let rows=sqlx::query("SELECT c.id,c.revision,c.author,c.body,(extract(epoch from c.created_at)*1000)::bigint AS at FROM card_embeddings e JOIN cards c ON c.org=e.org AND c.product=e.product AND c.id=e.card_id AND c.revision=e.revision JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND $4::text[] @> c.services AND c.author<>$1 AND NOT (c.id = ANY($11::uuid[])) AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND e.model=$5 AND e.digest=$6 AND e.dimensions=$7 AND e.format=$8 AND e.status='ready' AND (e.embedding <=> $9::vector)<=0.4 ORDER BY e.embedding <=> $9::vector,c.id LIMIT $10")
-            .bind(&a.user).bind(&a.org).bind(p).bind(&services).bind(&ns.model).bind(&ns.digest).bind(ns.dimensions as i32).bind(FORMAT).bind(&encoded).bind(i64::from(limit)).bind(exclude).fetch_all(&mut *tx).await.map_err(db)?;
+        let rows=sqlx::query("SELECT c.id,c.revision,c.author,c.body,(extract(epoch from c.created_at)*1000)::bigint AS at FROM card_embeddings e JOIN cards c ON c.org=e.org AND c.product=e.product AND c.id=e.card_id AND c.revision=e.revision JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND $4::text[] @> c.services AND c.author<>$1 AND NOT (c.id = ANY($11::uuid[])) AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND e.model=$5 AND e.digest=$6 AND e.dimensions=$7 AND e.format=$8 AND e.status='ready' AND (e.embedding <=> $9::vector)<=1-$12::float8 ORDER BY e.embedding <=> $9::vector,c.id LIMIT $10")
+            .bind(&a.user).bind(&a.org).bind(p).bind(&services).bind(&ns.model).bind(&ns.digest).bind(ns.dimensions as i32).bind(FORMAT).bind(&encoded).bind(i64::from(limit)).bind(exclude).bind(f64::from(min_similarity)).fetch_all(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;
         rows.into_iter()
             .map(|r| {

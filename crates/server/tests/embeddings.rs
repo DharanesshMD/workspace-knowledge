@@ -13,6 +13,7 @@ use std::sync::{
 use std::time::Duration;
 use wk_knowledge::semantic::Namespace;
 use wk_server::embeddings::{parse_keep_alive, Config, Embeddings};
+use wk_server::embeddings::{parse_prompt_floor, PROMPT_FLOOR};
 
 fn ns() -> Namespace {
     Namespace {
@@ -173,4 +174,39 @@ fn keep_alive_values_are_bounded() {
     for bad in ["25h", "1d", "-1m", "m", "30", "1500m", ""] {
         assert!(parse_keep_alive(bad).is_err(), "{bad}");
     }
+}
+#[test]
+fn the_prompt_similarity_floor_defaults_to_0_55_and_is_bounded() {
+    let vars = |floor: Option<&str>| {
+        let floor = floor.map(str::to_string);
+        move |name: &str| match name {
+            "WK_EMBEDDING_URL" => Some("http://127.0.0.1:11434/api/embed".to_string()),
+            "WK_EMBEDDING_MODEL" => Some("nomic-embed-text:v1.5".to_string()),
+            "WK_EMBEDDING_DIGEST" => Some("a".repeat(64)),
+            "WK_EMBEDDING_DIMENSIONS" => Some("3".to_string()),
+            "WK_PROMPT_SIMILARITY_FLOOR" => floor.clone(),
+            _ => None,
+        }
+    };
+    let floor = |value: Option<&str>| {
+        Embeddings::from_vars(vars(value)).map(|e| e.map(|e| e.prompt_floor()))
+    };
+    assert_eq!(PROMPT_FLOOR, 0.55);
+    assert_eq!(floor(None), Ok(Some(0.55)));
+    assert_eq!(floor(Some("0.6")), Ok(Some(0.6)));
+    assert_eq!(floor(Some("0.3")), Ok(Some(0.3)));
+    assert_eq!(floor(Some("0.95")), Ok(Some(0.95)));
+    for bad in ["0.29", "0.96", "1", "-0.5", "NaN", "inf", "abc", "", " 0.6"] {
+        assert!(parse_prompt_floor(bad).is_err(), "{bad}");
+        assert!(floor(Some(bad)).is_err(), "{bad} is a startup error");
+    }
+    // Without a model the floor is unused, but a bad value is still reported.
+    let unconfigured = |value: &'static str| {
+        move |name: &str| (name == "WK_PROMPT_SIMILARITY_FLOOR").then(|| value.to_string())
+    };
+    assert!(matches!(
+        Embeddings::from_vars(unconfigured("0.6")),
+        Ok(None)
+    ));
+    assert!(Embeddings::from_vars(unconfigured("2")).is_err());
 }

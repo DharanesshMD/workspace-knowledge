@@ -66,6 +66,18 @@ pub fn parse_keep_alive(value: &str) -> Result<String, String> {
     }
     Ok(value.to_string())
 }
+/// Default cosine similarity floor for prompt-time meaning matches. Keyword prompts embed less
+/// sharply than full questions, so this sits below search's 0.6; calibrated with
+/// `tests/prompt_context_eval.rs`.
+pub const PROMPT_FLOOR: f32 = 0.55;
+/// `WK_PROMPT_SIMILARITY_FLOOR`: a cosine similarity from 0.3 to 0.95.
+pub fn parse_prompt_floor(value: &str) -> Result<f32, String> {
+    value
+        .parse::<f32>()
+        .ok()
+        .filter(|v| (0.3..=0.95).contains(v))
+        .ok_or_else(|| "invalid prompt similarity floor".to_string())
+}
 #[derive(Clone)]
 pub struct Config {
     pub endpoint: String,
@@ -130,6 +142,7 @@ pub struct Embeddings {
     client: reqwest::Client,
     slots: Semaphore,
     keep_alive: String,
+    prompt_floor: f32,
     cache: Mutex<QueryCache>,
 }
 impl Embeddings {
@@ -147,6 +160,7 @@ impl Embeddings {
             client,
             slots: Semaphore::new(2),
             keep_alive: "30m".into(),
+            prompt_floor: PROMPT_FLOOR,
             cache: Mutex::default(),
         })
     }
@@ -155,18 +169,37 @@ impl Embeddings {
         self.keep_alive = value;
         self
     }
+    /// Use a prompt similarity floor already checked by [`parse_prompt_floor`].
+    pub fn with_prompt_floor(mut self, value: f32) -> Self {
+        self.prompt_floor = value;
+        self
+    }
+    /// Minimum cosine similarity for prompt-time meaning matches.
+    pub fn prompt_floor(&self) -> f32 {
+        self.prompt_floor
+    }
     pub fn from_env() -> Result<Option<Self>, String> {
-        let keep_alive = std::env::var("WK_EMBEDDING_KEEP_ALIVE")
-            .ok()
+        Self::from_vars(|name| std::env::var(name).ok())
+    }
+    /// [`Self::from_env`] over any variable source. Optional settings are checked even when no
+    /// model is configured, so a bad value is always a startup error.
+    pub fn from_vars(mut get: impl FnMut(&str) -> Option<String>) -> Result<Option<Self>, String> {
+        let keep_alive = get("WK_EMBEDDING_KEEP_ALIVE")
             .map(|value| parse_keep_alive(&value))
             .transpose()?;
-        let embeddings = Config::parse(|name| std::env::var(name).ok())?
-            .map(Self::new)
+        let prompt_floor = get("WK_PROMPT_SIMILARITY_FLOOR")
+            .map(|value| parse_prompt_floor(&value))
             .transpose()?;
-        Ok(match (embeddings, keep_alive) {
-            (Some(embeddings), Some(value)) => Some(embeddings.with_keep_alive(value)),
-            (embeddings, _) => embeddings,
-        })
+        let Some(mut embeddings) = Config::parse(&mut get)?.map(Self::new).transpose()? else {
+            return Ok(None);
+        };
+        if let Some(value) = keep_alive {
+            embeddings = embeddings.with_keep_alive(value);
+        }
+        if let Some(value) = prompt_floor {
+            embeddings = embeddings.with_prompt_floor(value);
+        }
+        Ok(Some(embeddings))
     }
     pub async fn embed_query(&self, text: &str) -> Result<Vec<f32>, &'static str> {
         self.embed_query_within(text, Duration::from_secs(3)).await

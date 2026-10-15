@@ -938,3 +938,60 @@ async fn a_slow_model_falls_back_to_text_within_the_hook_timeout() {
     );
     task.abort();
 }
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
+async fn prompt_overlaps_use_the_prompt_floor_and_search_keeps_its_own() {
+    let f = common::setup().await;
+    f.k.semantic_migrate().await.unwrap();
+    let c = f.k.submit(&f.alice, "demo", card()).await.unwrap();
+    f.k.publish(&f.bob, "demo", c.id).await.unwrap();
+    let id = c.id.to_string();
+    let source =
+        f.k.semantic_pending(&f.alice.org, "demo", &ns())
+            .await
+            .unwrap()
+            .remove(0);
+    // Cosine similarity 0.57 to the fake model's [1,0,0]: above 0.55, below search's 0.6.
+    let y = (1f32 - 0.57 * 0.57).sqrt();
+    f.k.semantic_store(&f.alice.org, "demo", &ns(), &source, &[0.57, y, 0.])
+        .await
+        .unwrap();
+    let (config, task, _) = model(None).await;
+    let app = |client: Embeddings| {
+        wk_server::portal_router_with_embeddings(
+            f.k.clone(),
+            vec![("reader".into(), f.reader.clone())],
+            None,
+            None,
+            None,
+            None,
+            Some(client),
+        )
+        .unwrap()
+    };
+    let default = app(Embeddings::new(config.clone()).unwrap());
+    let (_, result) = overlap(
+        &default,
+        "reader",
+        json!({"query":"duplicate money","limit":8}),
+    )
+    .await;
+    assert_eq!(result["retrieval"]["mode"], "hybrid");
+    assert_eq!(related(&result, &id)[0]["matched_by"], "meaning");
+    let (status, result) = send(&default, "duplicate money", "reader").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["retrieval"]["mode"], "hybrid");
+    assert_eq!(result["cards"], json!([]), "search keeps its 0.6 floor");
+    let strict = app(Embeddings::new(config)
+        .unwrap()
+        .with_prompt_floor(wk_server::embeddings::parse_prompt_floor("0.6").unwrap()));
+    let (_, result) = overlap(
+        &strict,
+        "reader",
+        json!({"query":"duplicate money","limit":8}),
+    )
+    .await;
+    assert_eq!(result["retrieval"]["mode"], "hybrid");
+    assert!(related(&result, &id).is_empty(), "configured floor is used");
+    task.abort();
+}
