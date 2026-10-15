@@ -397,7 +397,10 @@ async fn prompt_context_relevance_and_latency_with_a_real_model() {
         ("unanswerable", &unanswerable_cases),
     ] {
         for (id, keywords, card) in list {
-            let vector = worker.embed_query(keywords).await.unwrap();
+            let vector = worker
+                .embed_query(&f.reader.org, "demo", keywords)
+                .await
+                .unwrap();
             let sims = similarities(&f, &worker.namespace, &vector).await;
             probes.push((set, id, card, text_notices(&text, keywords).await, sims));
         }

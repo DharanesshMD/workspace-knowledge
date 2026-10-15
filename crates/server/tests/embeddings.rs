@@ -75,6 +75,8 @@ async fn repeated_queries_are_served_from_the_cache() {
     let e = Embeddings::new(config).unwrap();
     let a = e
         .embed_query_within(
+            "org",
+            "demo",
             "retries avoid repeating payment",
             Duration::from_millis(1500),
         )
@@ -82,6 +84,8 @@ async fn repeated_queries_are_served_from_the_cache() {
         .unwrap();
     let b = e
         .embed_query_within(
+            "org",
+            "demo",
             "retries  avoid repeating payment",
             Duration::from_millis(1500),
         )
@@ -93,19 +97,45 @@ async fn repeated_queries_are_served_from_the_cache() {
         1,
         "whitespace-normalized repeat is cached"
     );
-    e.embed_query("different words").await.unwrap();
+    e.embed_query("org", "demo", "different words")
+        .await
+        .unwrap();
     assert_eq!(seen.embeds.load(Ordering::SeqCst), 2);
+}
+#[tokio::test]
+async fn the_query_cache_is_scoped_per_organisation_and_product() {
+    let (config, seen) = model().await;
+    let e = Embeddings::new(config).unwrap();
+    for (org, product) in [("org", "demo"), ("other", "demo"), ("org", "shop")] {
+        e.embed_query(org, product, "rate limiter").await.unwrap();
+    }
+    assert_eq!(
+        seen.embeds.load(Ordering::SeqCst),
+        3,
+        "another tenant's query is never a cache hit"
+    );
+    e.embed_query("other", "demo", "rate  limiter")
+        .await
+        .unwrap();
+    assert_eq!(
+        seen.embeds.load(Ordering::SeqCst),
+        3,
+        "same scope is cached"
+    );
 }
 #[tokio::test]
 async fn documents_and_rejected_input_bypass_the_cache() {
     let (config, seen) = model().await;
     let e = Embeddings::new(config).unwrap();
-    e.embed_query("idempotency key").await.unwrap();
+    e.embed_query("org", "demo", "idempotency key")
+        .await
+        .unwrap();
     e.embed_document("idempotency key").await.unwrap();
     e.embed_document("idempotency key").await.unwrap();
     assert_eq!(seen.embeds.load(Ordering::SeqCst), 3);
     assert_eq!(
-        e.embed_query("password=PRIVATE_SYNTHETIC").await,
+        e.embed_query("org", "demo", "password=PRIVATE_SYNTHETIC")
+            .await,
         Err("input_rejected")
     );
     assert_eq!(
@@ -121,7 +151,7 @@ async fn requests_keep_the_model_loaded_and_warm_up_embeds_once() {
     e.warm().await.unwrap();
     assert_eq!(seen.embeds.load(Ordering::SeqCst), 1);
     assert_eq!(seen.bodies.lock().unwrap()[0]["keep_alive"], "30m");
-    e.embed_query("warm up").await.unwrap();
+    e.embed_query("org", "demo", "warm up").await.unwrap();
     assert_eq!(
         seen.embeds.load(Ordering::SeqCst),
         2,
@@ -130,21 +160,26 @@ async fn requests_keep_the_model_loaded_and_warm_up_embeds_once() {
     let custom = Embeddings::new(config)
         .unwrap()
         .with_keep_alive("2h".into());
-    custom.embed_query("rate limiter").await.unwrap();
+    custom
+        .embed_query("org", "demo", "rate limiter")
+        .await
+        .unwrap();
     assert_eq!(seen.bodies.lock().unwrap()[2]["keep_alive"], "2h");
 }
 #[tokio::test]
 async fn a_detected_model_change_clears_the_query_cache() {
     let (config, seen) = model().await;
     let e = Embeddings::new(config).unwrap();
-    e.embed_query("payment retries").await.unwrap();
+    e.embed_query("org", "demo", "payment retries")
+        .await
+        .unwrap();
     *seen.digest.lock().unwrap() = "b".repeat(64);
     assert_eq!(
-        e.embed_query("different words").await,
+        e.embed_query("org", "demo", "different words").await,
         Err("embedding_model_changed")
     );
     assert_eq!(
-        e.embed_query("payment retries").await,
+        e.embed_query("org", "demo", "payment retries").await,
         Err("embedding_model_changed"),
         "cached vector from the old model is no longer served"
     );
@@ -154,16 +189,16 @@ async fn failed_embeddings_are_not_cached() {
     let (config, seen) = model().await;
     let e = Embeddings::new(config).unwrap();
     seen.failing.store(true, Ordering::SeqCst);
-    assert!(e.embed_query("rate limiter").await.is_err());
+    assert!(e.embed_query("org", "demo", "rate limiter").await.is_err());
     assert_eq!(seen.embeds.load(Ordering::SeqCst), 1);
     seen.failing.store(false, Ordering::SeqCst);
-    e.embed_query("rate limiter").await.unwrap();
+    e.embed_query("org", "demo", "rate limiter").await.unwrap();
     assert_eq!(
         seen.embeds.load(Ordering::SeqCst),
         2,
         "recovered model is reached"
     );
-    e.embed_query("rate limiter").await.unwrap();
+    e.embed_query("org", "demo", "rate limiter").await.unwrap();
     assert_eq!(seen.embeds.load(Ordering::SeqCst), 2, "success is cached");
 }
 #[test]

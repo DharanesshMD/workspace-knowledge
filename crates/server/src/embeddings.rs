@@ -7,7 +7,8 @@ use tokio::sync::Semaphore;
 use wk_knowledge::semantic::Namespace;
 const QUERY_CACHE: usize = 1024;
 const QUERY_TTL: Duration = Duration::from_secs(600);
-/// Recent query vectors keyed by whitespace-normalized text; never persisted or logged.
+/// Recent query vectors keyed by organisation, product and whitespace-normalized text, so
+/// one tenant's query never times as a hit for another; never persisted or logged.
 #[derive(Default)]
 struct QueryCache {
     entries: HashMap<String, (Vec<f32>, Instant, u64)>,
@@ -201,20 +202,30 @@ impl Embeddings {
         }
         Ok(Some(embeddings))
     }
-    pub async fn embed_query(&self, text: &str) -> Result<Vec<f32>, &'static str> {
-        self.embed_query_within(text, Duration::from_secs(3)).await
+    pub async fn embed_query(
+        &self,
+        org: &str,
+        product: &str,
+        text: &str,
+    ) -> Result<Vec<f32>, &'static str> {
+        self.embed_query_within(org, product, text, Duration::from_secs(3))
+            .await
     }
-    /// Cached query embedding within `deadline`. The cache holds vectors only, in memory.
+    /// Cached query embedding within `deadline`. The cache is in memory only, keyed by
+    /// `org`, `product` and the whitespace-normalized text.
     ///
     /// Cache hits skip the provider digest check for up to the 10-minute TTL; any provider
     /// call that detects a model change clears the cache.
     pub async fn embed_query_within(
         &self,
+        org: &str,
+        product: &str,
         text: &str,
         deadline: Duration,
     ) -> Result<Vec<f32>, &'static str> {
         screen(text, true)?;
-        let key = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let key = format!("{org}\0{product}\0{normalized}");
         if let Some(vector) = self.cache().get(&key, Instant::now()) {
             return Ok(vector);
         }
@@ -349,10 +360,11 @@ mod tests {
             },
         })
         .unwrap();
-        e.cache
-            .lock()
-            .unwrap()
-            .put("rate limiter".into(), vec![1., 0., 0.], Instant::now());
+        e.cache.lock().unwrap().put(
+            "org\0demo\0rate limiter".into(),
+            vec![1., 0., 0.],
+            Instant::now(),
+        );
         let _ = std::thread::scope(|s| {
             s.spawn(|| {
                 let _guard = e.cache.lock().unwrap();
@@ -361,6 +373,9 @@ mod tests {
             .join()
         });
         assert!(e.cache.is_poisoned());
-        assert_eq!(e.embed_query("rate limiter").await, Ok(vec![1., 0., 0.]));
+        assert_eq!(
+            e.embed_query("org", "demo", "rate limiter").await,
+            Ok(vec![1., 0., 0.])
+        );
     }
 }

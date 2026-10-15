@@ -67,7 +67,11 @@ pub(crate) async fn overlaps_with(
                 // A failed text lookup returns at once; a failed embedding only drops meaning.
                 let (notices, vector) = tokio::try_join!(
                     async { k.overlaps(a, product, q).await.map_err(Failure::from) },
-                    async { Ok(client.embed_query_within(text.trim(), PROMPT_BUDGET).await) }
+                    async {
+                        Ok(client
+                            .embed_query_within(&a.org, product, text.trim(), PROMPT_BUDGET)
+                            .await)
+                    }
                 )?;
                 (notices, vector.map(|v| (client, v)).map_err(Some))
             }
