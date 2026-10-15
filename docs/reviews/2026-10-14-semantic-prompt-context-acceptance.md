@@ -2,6 +2,8 @@
 
 Scope: source implementation on macOS, release build, PostgreSQL with pgvector and a real local Ollama `nomic-embed-text:v1.5` (768 dimensions) on one machine. Only the committed synthetic corpus `synthetic-feature-reuse-v1` (`scripts/fixtures/semantic-search.json`) was used. No real conversation corpus was indexed.
 
+Re-run on 2026-10-15 after query-cache keys were scoped per organisation and product and "work" was kept as a prompt keyword: relevance hits, the floor sweep and the unanswerable result are unchanged; the MRR range and latency below include those runs.
+
 ## What was measured
 
 Prompt-time overlap lookups (`POST /v1/products/{product}/overlaps`) through the real HTTP router, with the hook's own keyword extractor (`wk_adapters::team_context::keywords`) turning each question into the query. Sixteen published records (twelve targets, four distractors) were indexed. Query sets:
@@ -17,7 +19,7 @@ A hit is the target card among the first five related notices. Hybrid runs use t
 | Query set | Text only | Hybrid |
 | --- | --- | --- |
 | 12 paraphrases, target in top five | 12/12 (MRR@5 0.958) | 12/12 (MRR@5 1.0) |
-| 12 meaning-only prompts, target in top five | 0/12 | 11/12 (MRR@5 about 0.48–0.53 across runs) |
+| 12 meaning-only prompts, target in top five | 0/12 | 11/12 (MRR@5 about 0.48–0.56 across runs) |
 | 5 unanswerable questions, meaning matches shown | — | 0 (highest similarity 0.48) |
 
 The meaning-only miss was "Can a contractor read decisions about systems outside their team?" (record `scope`). Meaning-only targets are usually found but often not ranked first, which the MRR reflects.
@@ -42,11 +44,11 @@ Sequential lookups in one process, milliseconds:
 
 | Run | p50 | p95 |
 | --- | --- | --- |
-| Hybrid, cold (empty query cache, model already loaded by indexing) | 29.1 | 60.7 |
-| Hybrid, warm (query cache filled) | 14.8 | 18.8 |
-| Text only | 2.7 | 4.0 |
+| Hybrid, cold (empty query cache, model already loaded by indexing) | 31.3 | 61.8 |
+| Hybrid, warm (query cache filled) | 15.0 | 18.2 |
+| Text only | 2.7 | 4.9 |
 
-Warm p95 reached up to 38 ms in other runs while the machine was under load. All runs were below the 100 ms warm p95 target and well within the 800 ms embedding budget. A cold model load (first request after Ollama unloads the model) was not measured; the startup warm-up and 30-minute `keep_alive` exist to avoid it.
+Warm p95 was 18–20 ms in two more runs and reached up to 38 ms in other runs while the machine was under load. All runs were below the 100 ms warm p95 target and well within the 800 ms embedding budget. A cold model load (first request after Ollama unloads the model) was not measured; the startup warm-up and 30-minute `keep_alive` exist to avoid it.
 
 ## Reproduce
 
