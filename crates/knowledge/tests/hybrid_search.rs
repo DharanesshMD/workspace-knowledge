@@ -396,6 +396,55 @@ async fn related_by_meaning_returns_other_developers_close_summaries() {
 }
 #[tokio::test]
 #[ignore = "requires disposable pgvector PostgreSQL"]
+async fn related_by_meaning_skips_superseded_and_deprecated_cards() {
+    let f = common::setup().await;
+    let ns = namespace();
+    f.k.semantic_migrate().await.unwrap();
+    let current = published(&f, "current", vec!["backend"]).await;
+    let superseded = published(&f, "superseded", vec!["backend"]).await;
+    let deprecated = published(&f, "deprecated", vec!["backend"]).await;
+    stored(
+        &f,
+        &ns,
+        &[
+            (current, [0.9, 0.1, 0.]),
+            (superseded, [1., 0., 0.]),
+            (deprecated, [1., 0., 0.]),
+        ],
+    )
+    .await;
+    // A body change clears stored vectors; put a close current-revision one back, so the
+    // query's own lifecycle filter is what excludes these cards.
+    for (id, lifecycle) in [(superseded, "superseded"), (deprecated, "deprecated")] {
+        sqlx::query(
+            "UPDATE cards SET body=jsonb_set(body,'{lifecycle}',to_jsonb($2::text)) WHERE id=$1",
+        )
+        .bind(id)
+        .bind(lifecycle)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO card_embeddings(org,product,card_id,revision,model,digest,dimensions,format,embedding,status) SELECT org,product,id,revision,$2,$3,$4,$5,'[1,0,0]'::vector,'ready' FROM cards WHERE id=$1")
+            .bind(id)
+            .bind(&ns.model)
+            .bind(&ns.digest)
+            .bind(ns.dimensions as i32)
+            .bind(wk_knowledge::semantic::FORMAT)
+            .execute(&f.pool)
+            .await
+            .unwrap();
+    }
+    let found =
+        f.k.related_by_meaning(&f.reader, "demo", &ns, &[1., 0., 0.], &[], 20, 0.6)
+            .await
+            .unwrap();
+    assert_eq!(
+        found.iter().map(|n| n.card_id.unwrap()).collect::<Vec<_>>(),
+        vec![current]
+    );
+}
+#[tokio::test]
+#[ignore = "requires disposable pgvector PostgreSQL"]
 async fn semantic_reads_share_the_product_lock_but_wait_for_administration() {
     let f = common::setup().await;
     let ns = namespace();
