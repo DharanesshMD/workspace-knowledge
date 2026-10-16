@@ -719,6 +719,28 @@ fn agent_history_export_names_never_escape_the_output_directory() {
     ] {
         codex_session(&sessions, file, id, Some(&product), &prompt());
     }
+    // Export whatever IDs the reader produced (raw or reader-sanitized): with either, every
+    // file must land inside --out under a safe, distinct name.
+    let listed = json_out(&run_home(
+        &home,
+        &[
+            "agent-history",
+            "--client",
+            "codex",
+            "--source-dir",
+            sessions.to_str().unwrap(),
+            "list",
+            "--workspace",
+            product.to_str().unwrap(),
+        ],
+    ));
+    let ids: Vec<String> = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(ids.len(), 3, "{listed}");
     let out = d.path().join("deep").join("exports");
     let mut args = vec![
         "agent-history",
@@ -734,11 +756,6 @@ fn agent_history_export_names_never_escape_the_output_directory() {
         "--out",
         out.to_str().unwrap(),
         "--yes",
-    ];
-    let ids = [
-        "codex:../../escape".to_string(),
-        "codex:..\\..\\escape".to_string(),
-        format!("codex:{long}"),
     ];
     for id in &ids {
         args.extend(["--session", id]);
@@ -939,9 +956,10 @@ fn agent_history_export_requires_review_and_names_the_show_command() {
     assert!(!o.status.success());
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(
-        err.contains("wk agent-history --client codex show --workspace"),
+        err.contains("wk agent-history --client codex show --workspace DIR"),
         "{err}"
     );
+    assert!(!err.contains(p), "error carries the workspace path: {err}");
     assert!(!run_home(
         &home,
         &["agent-history", "--client", "vim", "list", "--workspace", p]

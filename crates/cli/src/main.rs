@@ -620,7 +620,7 @@ fn cursor_history(
             yes,
         } => export_conversations(
             &history,
-            &format!("wk cursor-history show --workspace {}", workspace.display()),
+            "wk cursor-history show --workspace DIR",
             &workspace,
             &product,
             &out,
@@ -695,11 +695,10 @@ fn agent_history(
         } => export_conversations(
             &history,
             &format!(
-                "wk agent-history --client {} show --workspace {}",
+                "wk agent-history --client {} show --workspace DIR",
                 client
                     .to_possible_value()
                     .map_or_else(String::new, |v| v.get_name().to_owned()),
-                workspace.display()
             ),
             &workspace,
             &product,
@@ -864,8 +863,7 @@ fn export_conversations(
     if resolve_prefix(out, "output directory")?.starts_with(&root) {
         return Err("output directory must be outside the workspace".into());
     }
-    let existed = fs::symlink_metadata(out).is_ok();
-    if !existed {
+    if fs::symlink_metadata(out).is_err() {
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true);
         #[cfg(unix)]
@@ -883,26 +881,25 @@ fn export_conversations(
     if out.starts_with(&root) {
         return Err("output directory must be outside the workspace".into());
     }
-    if existed {
-        let meta = fs::metadata(&out).map_err(|_| "output directory unavailable")?;
-        if !meta.is_dir() {
-            return Err("--out is not a directory".into());
+    // Checked whether or not this run created the directory; a fresh 0700 one passes.
+    let meta = fs::metadata(&out).map_err(|_| "output directory unavailable")?;
+    if !meta.is_dir() {
+        return Err("--out is not a directory".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o077 != 0 {
+            return Err("existing output directory must be private (mode 0700); permissions were not changed".into());
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if meta.permissions().mode() & 0o077 != 0 {
-                return Err("existing output directory must be private (mode 0700); permissions were not changed".into());
-            }
-        }
-        if names
-            .iter()
-            .any(|n| fs::symlink_metadata(out.join(n)).is_ok())
-        {
-            return Err(
-                "an export file already exists in the output directory; nothing was written".into(),
-            );
-        }
+    }
+    if names
+        .iter()
+        .any(|n| fs::symlink_metadata(out.join(n)).is_ok())
+    {
+        return Err(
+            "an export file already exists in the output directory; nothing was written".into(),
+        );
     }
     let mut written = Vec::new();
     for (c, name) in chosen.into_iter().zip(names) {
@@ -922,8 +919,10 @@ fn export_conversations(
         json!({"exported":written,"published":false,"next":"wk-agent import --file FILE --session SESSION_ID --approve-transcript"}),
     )
 }
-/// Write `body` as pretty JSON to a new owner-only file; an existing file is never replaced.
+/// Write `body` as pretty JSON to a new owner-only file; an existing file is never replaced,
+/// and a file this call created is removed again if writing it fails.
 fn write_new_private(path: &Path, body: &Value) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(body).map_err(|_| "invalid export")?;
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -934,8 +933,12 @@ fn write_new_private(path: &Path, body: &Value) -> Result<(), String> {
     let mut file = options
         .open(path)
         .map_err(|_| "cannot create export file (already exists?)")?;
-    file.write_all(&serde_json::to_vec_pretty(body).map_err(|_| "invalid export")?)
-        .map_err(|_| "cannot write export".into())
+    if file.write_all(&bytes).is_err() {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err("cannot write export".into());
+    }
+    Ok(())
 }
 /// Replace absolute workspace/home prefixes so summaries carry relative paths only.
 fn relativize(text: &str, root: &Path, home: &str) -> String {
