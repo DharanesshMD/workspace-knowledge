@@ -200,9 +200,14 @@ pub async fn import(
     let export = state::read(file, 8 * 1024 * 1024)?;
     import_into(&mut state::store(dir)?, &b, &c.service, &export, session)
 }
+// `ingest` bounds every identity to 256 bytes; part sessions add this suffix to the session ID.
+const PART_SESSION_SUFFIX: usize = ":0123456789ab:part-5000".len();
 /// Records a validated export as one journal session and turn per part, so `process`
 /// drafts one summary per part. Each part has its own session to stay within the
-/// journal's per-session bounds; event IDs and sequences are stable across re-imports.
+/// journal's per-session bounds. Session names include a digest of the messages: an
+/// identical re-import adds nothing, while a grown or edited export gets new sessions,
+/// so earlier parts are never held by conflicting text. Event sequences are positions
+/// in the export, stable only while the message prefix is unchanged.
 fn import_into(
     store: &mut wk_local::LocalStore,
     b: &wk_scope::enrollment::Binding,
@@ -210,6 +215,50 @@ fn import_into(
     export: &str,
     session: &str,
 ) -> Result<Value, String> {
+    let e = validated(b, export, session)?;
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&e.messages).map_err(|_| "invalid scoped export")?)
+    );
+    let parts = parts(&e.messages, 96 * 1024);
+    let mut seq = 0;
+    for (n, part) in parts.iter().enumerate() {
+        let turn = format!("part-{}", n + 1);
+        let journal = format!("export:{session}:{}:{turn}", &digest[..12]);
+        for m in &part.messages {
+            seq += 1;
+            // Text that JSON-escapes heavily (e.g. mostly control characters) can exceed the
+            // journal's per-event limit; `ingest` then rejects that event explicitly.
+            record(
+                store,
+                b,
+                service,
+                Record {
+                    session: &journal,
+                    turn: &turn,
+                    id: &m.id,
+                    kind: kind(&m.role)?,
+                    text: &m.text,
+                    seq,
+                    agent: "explicit-export",
+                },
+            )?;
+        }
+    }
+    let truncated_parts = parts.iter().filter(|p| p.truncated).count();
+    // `process` drafts at most 10 journal sessions per run, one session per part.
+    let process_runs_needed = parts.len().div_ceil(10);
+    Ok(
+        json!({"captured_messages":seq,"parts":parts.len(),"truncated_parts":truncated_parts,"process_runs_needed":process_runs_needed,"coverage":"partial_export","published":false}),
+    )
+}
+/// Checks the whole export before anything is recorded, so an import never records
+/// only some of its messages.
+fn validated(
+    b: &wk_scope::enrollment::Binding,
+    export: &str,
+    session: &str,
+) -> Result<Export, String> {
     let e: Export = serde_json::from_str(export).map_err(|_| "invalid scoped export")?;
     if e.schema_version != 1
         || e.session_id != session
@@ -222,42 +271,17 @@ fn import_into(
     {
         return Err("export binding mismatch".into());
     }
+    if session.is_empty() || "export:".len() + session.len() + PART_SESSION_SUFFIX > 256 {
+        return Err("export session ID too long".into());
+    }
     let mut ids = std::collections::BTreeSet::new();
     for m in &e.messages {
         kind(&m.role)?;
-        if !ids.insert(&m.id) {
-            return Err("duplicate export message ID".into());
+        if m.id.is_empty() || m.id.len() > 256 || !ids.insert(&m.id) {
+            return Err("empty, oversized or duplicate export message ID".into());
         }
     }
-    let parts = parts(&e.messages, 96 * 1024);
-    let (mut seq, mut truncated_parts) = (0, 0);
-    for (n, part) in parts.iter().enumerate() {
-        let turn = format!("part-{}", n + 1);
-        let journal = format!("export:{session}:{turn}");
-        let mut truncated = false;
-        for m in part {
-            truncated |= m.text != e.messages[seq].text;
-            seq += 1;
-            record(
-                store,
-                b,
-                service,
-                Record {
-                    session: &journal,
-                    turn: &turn,
-                    id: &m.id,
-                    kind: kind(&m.role)?,
-                    text: &m.text,
-                    seq: seq as u32,
-                    agent: "explicit-export",
-                },
-            )?;
-        }
-        truncated_parts += usize::from(truncated);
-    }
-    Ok(
-        json!({"captured_messages":seq,"parts":parts.len(),"truncated_parts":truncated_parts,"coverage":"partial_export","published":false}),
-    )
+    Ok(e)
 }
 fn kind(role: &str) -> Result<&'static str, String> {
     match role {
@@ -272,10 +296,17 @@ const PART_MESSAGES: usize = 256;
 fn text_len(messages: &[Message]) -> usize {
     messages.iter().map(|m| m.text.len()).sum()
 }
+#[derive(Debug, PartialEq)]
+pub(crate) struct Part {
+    pub messages: Vec<Message>,
+    pub truncated: bool,
+}
 /// Group messages into parts of whole exchanges (a user prompt and the replies after it)
-/// whose combined text stays under `limit` bytes; an oversized exchange is its own part,
-/// truncated at a char boundary with " [truncated]".
-pub(crate) fn parts(messages: &[Message], limit: usize) -> Vec<Vec<Message>> {
+/// whose combined text stays under `limit` bytes and that hold at most `PART_MESSAGES`
+/// messages. An exchange with more messages is split into consecutive chunks first; an
+/// exchange (or chunk) over `limit` is its own part, truncated at a char boundary with
+/// " [truncated]".
+pub(crate) fn parts(messages: &[Message], limit: usize) -> Vec<Part> {
     let mut exchanges = vec![];
     let (mut start, mut prompted) = (0, false);
     for (i, m) in messages.iter().enumerate() {
@@ -292,11 +323,14 @@ pub(crate) fn parts(messages: &[Message], limit: usize) -> Vec<Vec<Message>> {
     }
     let mut out = vec![];
     let mut part: Vec<Message> = vec![];
-    for e in exchanges {
+    for e in exchanges.into_iter().flat_map(|e| e.chunks(PART_MESSAGES)) {
         if !part.is_empty()
             && (text_len(&part) + text_len(e) > limit || part.len() + e.len() > PART_MESSAGES)
         {
-            out.push(std::mem::take(&mut part));
+            out.push(Part {
+                messages: std::mem::take(&mut part),
+                truncated: false,
+            });
         }
         if text_len(e) > limit {
             out.push(truncate(e, limit));
@@ -305,13 +339,16 @@ pub(crate) fn parts(messages: &[Message], limit: usize) -> Vec<Vec<Message>> {
         }
     }
     if !part.is_empty() {
-        out.push(part);
+        out.push(Part {
+            messages: part,
+            truncated: false,
+        });
     }
     out
 }
 // Every message keeps a fair share of the limit: messages under the share stay whole and
 // longer ones are cut to it (marker included), so prompts and replies all reach the summary.
-fn truncate(exchange: &[Message], limit: usize) -> Vec<Message> {
+fn truncate(exchange: &[Message], limit: usize) -> Part {
     let mut lens: Vec<usize> = exchange.iter().map(|m| m.text.len()).collect();
     lens.sort_unstable();
     let (mut left, mut cap) = (limit, limit);
@@ -323,7 +360,8 @@ fn truncate(exchange: &[Message], limit: usize) -> Vec<Message> {
         }
         left -= len;
     }
-    exchange
+    let mut truncated = false;
+    let messages = exchange
         .iter()
         .map(|m| {
             let mut m = m.clone();
@@ -333,10 +371,15 @@ fn truncate(exchange: &[Message], limit: usize) -> Vec<Message> {
                     .floor_char_boundary(cap.saturating_sub(TRUNCATED.len()));
                 m.text.truncate(end);
                 m.text.push_str(TRUNCATED);
+                truncated = true;
             }
             m
         })
-        .collect()
+        .collect();
+    Part {
+        messages,
+        truncated,
+    }
 }
 
 #[cfg(test)]
@@ -349,10 +392,10 @@ mod part_tests {
             text: text.into(),
         }
     }
-    fn ids(parts: &[Vec<Message>]) -> Vec<Vec<&str>> {
+    fn ids(parts: &[Part]) -> Vec<Vec<&str>> {
         parts
             .iter()
-            .map(|p| p.iter().map(|m| m.id.as_str()).collect())
+            .map(|p| p.messages.iter().map(|m| m.id.as_str()).collect())
             .collect()
     }
     #[test]
@@ -382,7 +425,9 @@ mod part_tests {
             [vec!["1", "2", "3"], vec!["4", "5", "6", "7"]],
             "an exchange is never split across parts"
         );
-        assert!(p.iter().all(|p| text_len(p) <= 14));
+        assert!(p
+            .iter()
+            .all(|p| text_len(&p.messages) <= 14 && !p.truncated));
         assert_eq!(p, parts(&s, 14), "grouping is deterministic");
     }
     #[test]
@@ -409,7 +454,11 @@ mod part_tests {
         let limit = 100;
         let p = parts(&s, limit);
         assert_eq!(ids(&p), [vec!["1", "2"], vec!["3", "4"], vec!["5", "6"]]);
-        let big = &p[1];
+        assert_eq!(
+            p.iter().map(|p| p.truncated).collect::<Vec<_>>(),
+            [false, true, false]
+        );
+        let big = &p[1].messages;
         assert_eq!(
             big[0].text, "short prompt",
             "messages that fit are kept whole"
@@ -420,8 +469,8 @@ mod part_tests {
             text_len(big) <= limit,
             "truncated part stays within the limit"
         );
-        assert_eq!(p[0], s[..2]);
-        assert_eq!(p[2], s[4..]);
+        assert_eq!(p[0].messages, s[..2]);
+        assert_eq!(p[2].messages, s[4..]);
     }
     #[test]
     fn every_message_of_an_oversized_exchange_keeps_some_text() {
@@ -431,10 +480,34 @@ mod part_tests {
         ];
         let p = parts(&s, 200);
         assert_eq!(ids(&p), [vec!["1", "2"]]);
+        assert!(p[0].truncated);
         assert!(p[0]
+            .messages
             .iter()
             .all(|m| m.text.len() > " [truncated]".len() && m.text.ends_with(" [truncated]")));
-        assert!(text_len(&p[0]) <= 200);
+        assert!(text_len(&p[0].messages) <= 200);
+    }
+    #[test]
+    fn long_exchange_is_split_by_message_count() {
+        let s = std::iter::once(m("u", "user", "q"))
+            .chain((0..299).map(|i| m(&format!("a{i}"), "assistant", "a")))
+            .collect::<Vec<_>>();
+        let p = parts(&s, 96 * 1024);
+        assert!(p.len() >= 2);
+        assert!(p.iter().all(|p| p.messages.len() <= PART_MESSAGES));
+        assert_eq!(
+            p.iter().flat_map(|p| &p.messages).collect::<Vec<_>>(),
+            s.iter().collect::<Vec<_>>()
+        );
+    }
+    #[test]
+    fn replies_without_prompts_are_split_by_message_count() {
+        let s = (0..600)
+            .map(|i| m(&i.to_string(), "assistant", "a"))
+            .collect::<Vec<_>>();
+        let p = parts(&s, 96 * 1024);
+        assert!(p.len() >= 3);
+        assert!(p.iter().all(|p| p.messages.len() <= PART_MESSAGES));
     }
     #[test]
     fn empty_session_has_no_parts() {
@@ -521,16 +594,40 @@ mod import_tests {
             .collect::<Vec<_>>();
         json!({"schema_version":1,"workspace":f.b.root,"product":"demo","session_id":"s1","messages":messages}).to_string()
     }
+    fn import(f: &mut Fixture, export: &str) -> Result<Value, String> {
+        import_into(&mut f.store, &f.b, &f.c.service, export, "s1")
+    }
+    fn counts(r: &Value) -> (Option<u64>, Option<u64>, Option<u64>) {
+        (
+            r["captured_messages"].as_u64(),
+            r["parts"].as_u64(),
+            r["truncated_parts"].as_u64(),
+        )
+    }
+    /// Every live journal session, scanning past the store's 10-per-call cursor.
+    fn sessions(f: &mut Fixture) -> std::collections::BTreeMap<String, Value> {
+        let mut all = std::collections::BTreeMap::new();
+        loop {
+            let before = all.len();
+            for id in f.store.next_session_ids(daemon::now().unwrap()).unwrap() {
+                let bytes = f
+                    .store
+                    .read_record(&id, daemon::now().unwrap())
+                    .unwrap()
+                    .unwrap();
+                all.entry(id)
+                    .or_insert_with(|| serde_json::from_slice(&bytes).unwrap());
+            }
+            if all.len() == before {
+                return all;
+            }
+        }
+    }
+    /// Drafts every session, as repeated `process` runs would; no session may be held.
     async fn drafts(f: &mut Fixture) -> usize {
         let mut made = 0;
-        for id in f.store.next_session_ids(daemon::now().unwrap()).unwrap() {
-            let bytes = f
-                .store
-                .read_record(&id, daemon::now().unwrap())
-                .unwrap()
-                .unwrap();
-            let session: Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(session["held"], false);
+        for (id, session) in sessions(f) {
+            assert_eq!(session["held"], false, "{id} held");
             let (ok, failed) = crate::process::journal_turns(
                 &f.dir,
                 &f.c,
@@ -558,29 +655,19 @@ mod import_tests {
                 ("What about retries", "Retry with idempotency keys".into()),
             ],
         );
-        let r = import_into(&mut f.store, &f.b, &f.c.service, &small, "s1").unwrap();
-        assert_eq!(
-            (
-                r["captured_messages"].as_u64(),
-                r["parts"].as_u64(),
-                r["truncated_parts"].as_u64()
-            ),
-            (Some(6), Some(1), Some(0))
-        );
-        // Re-importing the same export is consistent and does not hold the session.
-        import_into(&mut f.store, &f.b, &f.c.service, &small, "s1").unwrap();
+        let r = import(&mut f, &small).unwrap();
+        assert_eq!(counts(&r), (Some(6), Some(1), Some(0)));
+        assert_eq!(r["process_runs_needed"], 1);
         assert_eq!(drafts(&mut f).await, 1);
-        {
-            let sources = f.sources.lock().unwrap();
-            assert_eq!(sources.len(), 1);
-            for text in [
-                "Bound request work",
-                "Use middleware",
-                "What about retries",
-                "Retry with idempotency keys",
-            ] {
-                assert!(sources[0].contains(text), "draft input contains {text}");
-            }
+        let sources = f.sources.lock().unwrap().clone();
+        assert_eq!(sources.len(), 1);
+        for text in [
+            "Bound request work",
+            "Use middleware",
+            "What about retries",
+            "Retry with idempotency keys",
+        ] {
+            assert!(sources[0].contains(text), "draft input contains {text}");
         }
         f.server.abort();
     }
@@ -595,15 +682,8 @@ mod import_tests {
                 ("Explain the limiter", long.repeat(2000)),
             ],
         );
-        let r = import_into(&mut f.store, &f.b, &f.c.service, &large, "s1").unwrap();
-        assert_eq!(
-            (
-                r["captured_messages"].as_u64(),
-                r["parts"].as_u64(),
-                r["truncated_parts"].as_u64()
-            ),
-            (Some(4), Some(2), Some(1))
-        );
+        let r = import(&mut f, &large).unwrap();
+        assert_eq!(counts(&r), (Some(4), Some(2), Some(1)));
         assert_eq!(drafts(&mut f).await, 2);
         let mut sources = f.sources.lock().unwrap().clone();
         sources.sort_by_key(|s| s.contains("Explain the limiter"));
@@ -626,20 +706,11 @@ mod import_tests {
             big.len() > 768 * 1024,
             "larger than one journal session holds"
         );
-        let r = import_into(&mut f.store, &f.b, &f.c.service, &big, "s1").unwrap();
-        assert_eq!(
-            (r["parts"].as_u64(), r["truncated_parts"].as_u64()),
-            (Some(9), Some(0))
-        );
-        let ids = f.store.next_session_ids(daemon::now().unwrap()).unwrap();
-        assert_eq!(ids.len(), 9);
-        for id in ids {
-            let bytes = f
-                .store
-                .read_record(&id, daemon::now().unwrap())
-                .unwrap()
-                .unwrap();
-            let session: Value = serde_json::from_slice(&bytes).unwrap();
+        let r = import(&mut f, &big).unwrap();
+        assert_eq!(counts(&r), (Some(18), Some(9), Some(0)));
+        let all = sessions(&mut f);
+        assert_eq!(all.len(), 9);
+        for session in all.values() {
             assert_eq!(
                 (
                     session["held"].as_bool(),
@@ -650,28 +721,121 @@ mod import_tests {
         }
         f.server.abort();
     }
-    #[test]
-    fn invalid_exports_are_rejected_before_anything_is_recorded() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let mut f = rt.block_on(fixture());
-        let base = export(&f, &[("q", "a".into())]);
-        let mut duplicate: Value = serde_json::from_str(&base).unwrap();
-        duplicate["messages"][1]["id"] = json!("u0");
-        let mut role: Value = serde_json::from_str(&base).unwrap();
-        role["messages"][1]["role"] = json!("system");
-        let mut many: Value = serde_json::from_str(&base).unwrap();
-        many["messages"] = json!((0..5001)
-            .map(|i| json!({"id":i.to_string(),"role":"user","text":"q"}))
-            .collect::<Vec<_>>());
-        for bad in [duplicate, role, many] {
-            assert!(import_into(&mut f.store, &f.b, "backend", &bad.to_string(), "s1").is_err());
+    #[tokio::test]
+    async fn replies_without_prompts_are_drafted_in_bounded_parts() {
+        let mut f = fixture().await;
+        let messages = (0..600)
+            .map(|i| json!({"id":format!("a{i}"),"role":"assistant","text":"Use middleware"}))
+            .collect::<Vec<_>>();
+        let only = json!({"schema_version":1,"workspace":f.b.root,"product":"demo","session_id":"s1","messages":messages}).to_string();
+        let r = import(&mut f, &only).unwrap();
+        let parts = r["parts"].as_u64().unwrap();
+        assert!(parts >= 3);
+        assert!(sessions(&mut f)
+            .values()
+            .all(|s| s["events"].as_array().unwrap().len() <= PART_MESSAGES));
+        assert_eq!(drafts(&mut f).await as u64, parts, "no part is held");
+        f.server.abort();
+    }
+    #[tokio::test]
+    async fn changed_export_gets_new_sessions_and_identical_reimport_is_a_no_op() {
+        let mut f = fixture().await;
+        let mut exchanges = vec![
+            ("Bound request work", "Use middleware".to_string()),
+            ("Where should limits live", "In the gateway".to_string()),
+        ];
+        let first = export(&f, &exchanges);
+        import(&mut f, &first).unwrap();
+        assert_eq!(drafts(&mut f).await, 1);
+        // The session continued: the grown export now ends with an oversized, truncated exchange.
+        exchanges.push((
+            "Explain the limiter",
+            "Use middleware to bound request work in the gateway. ".repeat(2000),
+        ));
+        let grown = export(&f, &exchanges);
+        let r = import(&mut f, &grown).unwrap();
+        assert_eq!(counts(&r), (Some(6), Some(2), Some(1)));
+        assert_eq!(
+            drafts(&mut f).await,
+            2,
+            "earlier sessions are untouched; new parts draft"
+        );
+        let before = sessions(&mut f);
+        assert_eq!(before.len(), 3);
+        import(&mut f, &grown).unwrap();
+        assert_eq!(
+            sessions(&mut f),
+            before,
+            "identical re-import adds no events"
+        );
+        assert_eq!(drafts(&mut f).await, 0);
+        f.server.abort();
+    }
+    #[tokio::test]
+    async fn more_than_ten_parts_need_several_process_runs() {
+        let mut f = fixture().await;
+        let reply = "Keep the limiter in the gateway. ".repeat(2900);
+        let exchanges = (0..11)
+            .map(|_| ("Bound request work", reply.clone()))
+            .collect::<Vec<_>>();
+        let big = export(&f, &exchanges);
+        let r = import(&mut f, &big).unwrap();
+        assert_eq!(counts(&r), (Some(22), Some(11), Some(0)));
+        assert_eq!(r["process_runs_needed"], 2);
+        assert_eq!(drafts(&mut f).await, 11);
+        f.server.abort();
+    }
+    #[tokio::test]
+    async fn maximum_message_count_is_accepted() {
+        let f = fixture().await;
+        let max = |n: usize| {
+            let messages = (0..n)
+                .map(|i| json!({"id":i.to_string(),"role":"user","text":"q"}))
+                .collect::<Vec<_>>();
+            json!({"schema_version":1,"workspace":f.b.root,"product":"demo","session_id":"s1","messages":messages}).to_string()
+        };
+        assert_eq!(
+            validated(&f.b, &max(5000), "s1").unwrap().messages.len(),
+            5000
+        );
+        assert!(validated(&f.b, &max(5001), "s1").is_err());
+        f.server.abort();
+    }
+    #[tokio::test]
+    async fn invalid_exports_are_rejected_before_anything_is_recorded() {
+        let mut f = fixture().await;
+        let base = export(&f, &[("q", "a".into()), ("q2", "a2".into())]);
+        let with = |change: &dyn Fn(&mut Value)| {
+            let mut v: Value = serde_json::from_str(&base).unwrap();
+            change(&mut v);
+            v.to_string()
+        };
+        let bad = [
+            with(&|v| v["messages"][3]["id"] = json!("u0")),
+            with(&|v| v["messages"][3]["id"] = json!("")),
+            with(&|v| v["messages"][3]["id"] = json!("x".repeat(257))),
+            with(&|v| v["messages"][3]["role"] = json!("system")),
+            with(&|v| {
+                v["messages"] = json!((0..5001)
+                    .map(|i| json!({"id":i.to_string(),"role":"user","text":"q"}))
+                    .collect::<Vec<_>>())
+            }),
+        ];
+        for bad in bad {
+            assert!(import(&mut f, &bad).is_err());
         }
         assert!(import_into(&mut f.store, &f.b, "backend", &base, "other").is_err());
-        assert!(f
-            .store
-            .next_session_ids(daemon::now().unwrap())
-            .unwrap()
-            .is_empty());
+        let long = "s".repeat(256);
+        let err = import_into(
+            &mut f.store,
+            &f.b,
+            "backend",
+            &with(&|v| v["session_id"] = json!(long)),
+            &long,
+        )
+        .unwrap_err();
+        assert!(err.contains("session ID"), "{err}");
+        assert!(sessions(&mut f).is_empty());
         f.server.abort();
     }
 }
