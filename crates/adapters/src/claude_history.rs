@@ -157,12 +157,7 @@ fn read_session(file: &Path, history: &mut History) {
         }
         return;
     }
-    let title = messages
-        .iter()
-        .find(|m| m.role == "user")
-        .and_then(|m| m.text.lines().find(|l| !l.trim().is_empty()))
-        .map(|l| l.trim().chars().take(80).collect())
-        .unwrap_or_else(|| "Untitled chat".into());
+    let title = title(&messages);
     let complete = gaps == 0 && messages.last().is_some_and(|m| m.role == "assistant");
     history.conversations.push(Conversation {
         id: format!("claude-code:{session}"),
@@ -176,6 +171,16 @@ fn read_session(file: &Path, history: &mut History) {
         outcome,
         complete,
     });
+}
+
+/// The first non-blank line of the first prompt, at most 80 characters.
+pub(crate) fn title(messages: &[Message]) -> String {
+    messages
+        .iter()
+        .find(|m| m.role == "user")
+        .and_then(|m| m.text.lines().find(|l| !l.trim().is_empty()))
+        .map(|l| l.trim().chars().take(80).collect())
+        .unwrap_or_else(|| "Untitled chat".into())
 }
 
 /// Wrappers Claude Code puts around slash-command invocations and local command output.

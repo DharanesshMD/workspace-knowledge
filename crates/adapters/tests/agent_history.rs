@@ -352,3 +352,299 @@ fn claude_skips_slash_command_and_local_command_records() {
     );
     assert!(c.complete);
 }
+
+fn codex(ts: &str, kind: &str, payload: Value) -> Value {
+    json!({"timestamp":ts,"type":kind,"payload":payload})
+}
+
+fn codex_msg(role: &str, part: &str, text: &str) -> Value {
+    json!({"type":"message","role":role,"content":[{"type":part,"text":text}]})
+}
+
+fn codex_meta(ts: &str, id: &str, cwd: &str) -> Value {
+    codex(
+        ts,
+        "session_meta",
+        json!({"id":id,"timestamp":ts,"cwd":cwd,"originator":"codex_cli_rs","cli_version":"0.0.0",
+               "instructions":"base instructions secret"}),
+    )
+}
+
+/// `sessions/YYYY/MM/DD/*.jsonl` with sessions for `/work/app` and a sibling `/work/app2`.
+fn codex_fixture(root: &Path) -> PathBuf {
+    let sessions = root.join("sessions");
+    let t = "2026-10-15T10:00:01.000Z";
+    let user = |text: &str| codex(t, "response_item", codex_msg("user", "input_text", text));
+    let reply = |text: &str| {
+        codex(
+            t,
+            "response_item",
+            codex_msg("assistant", "output_text", text),
+        )
+    };
+    write_jsonl(
+        &sessions.join("2026/10/15/rollout-2026-10-15T10-00-00-s1.jsonl"),
+        &[
+            codex_meta("2026-10-15T10:00:00.000Z", "s1", "/work/app"),
+            codex(
+                t,
+                "response_item",
+                codex_msg("developer", "input_text", "<permissions instructions>developer secret"),
+            ),
+            codex(t, "response_item", codex_msg("system", "input_text", "system secret")),
+            user("<user_instructions>agents secret</user_instructions>"),
+            user("# AGENTS.md instructions for /work/app\n\n<INSTRUCTIONS>agents md secret</INSTRUCTIONS>"),
+            user("  <environment_context>\n<cwd>/work/app</cwd> env secret\n</environment_context>"),
+            user("<permissions instructions>permissions secret</permissions instructions>"),
+            user("<ENVIRONMENT_CONTEXT>upper-case env secret</ENVIRONMENT_CONTEXT>"),
+            codex(t, "turn_context", json!({"cwd":"/work/app","model":"m","summary":"turn secret"})),
+            codex(t, "event_msg", json!({"type":"user_message","message":"event secret"})),
+            user(LONG),
+            codex(
+                t,
+                "response_item",
+                json!({"type":"reasoning","summary":[{"type":"summary_text","text":"reasoning secret"}],
+                       "encrypted_content":"secret"}),
+            ),
+            reply("Reading the limiter."),
+            codex(
+                t,
+                "response_item",
+                json!({"type":"function_call","name":"shell","arguments":"{\"cmd\":\"cat secret\"}","call_id":"c1"}),
+            ),
+            codex(
+                t,
+                "response_item",
+                json!({"type":"function_call_output","call_id":"c1","output":"tool output secret"}),
+            ),
+            codex(
+                t,
+                "response_item",
+                json!({"type":"custom_tool_call","name":"apply_patch","input":"patch secret","call_id":"c2"}),
+            ),
+            codex(
+                t,
+                "response_item",
+                json!({"type":"custom_tool_call_output","call_id":"c2","output":"patch output secret"}),
+            ),
+            reply("Done: limiter fixed."),
+            codex(t, "event_msg", json!({"type":"agent_message","message":"event secret"})),
+            user("<skill>\n<name>x</name>skill secret</skill>"),
+            user("<user_shell_command>\nls\nshell output secret\n</user_shell_command>"),
+            user("<turn_aborted>aborted secret</turn_aborted>"),
+            user("<subagent_notification>subagent secret</subagent_notification>"),
+            user("Now add tests"),
+            json!({"timestamp":t,"type":"response_item","payload":{"type":"message","role":"user",
+                   "content":[{"type":"input_image","image_url":"data:image/png;base64,secret"},
+                              {"type":"input_text","text":"See <environment_context> above"}]}}),
+            reply("Tests added."),
+        ],
+    );
+    // No session_meta, nested under another date: interrupted, malformed and unknown records.
+    let s2 = sessions.join("2026/10/14/rollout-s2.jsonl");
+    write_jsonl(
+        &s2,
+        &[
+            codex(
+                "2026-10-14T09:00:00Z",
+                "response_item",
+                codex_msg("user", "input_text", "Partial"),
+            ),
+            codex(
+                t,
+                "response_item",
+                codex_msg("critic", "output_text", "unknown secret"),
+            ),
+        ],
+    );
+    let mut text = std::fs::read_to_string(&s2).unwrap();
+    text.push_str("{not json\n");
+    std::fs::write(&s2, text).unwrap();
+    // Only injected context: a conversation with no readable text.
+    write_jsonl(
+        &sessions.join("2026/10/15/rollout-s5.jsonl"),
+        &[
+            codex_meta(t, "s5", "/work/app"),
+            user("<environment_context>env only</environment_context>"),
+        ],
+    );
+    // Only bookkeeping records: not a conversation at all.
+    write_jsonl(
+        &sessions.join("2026/10/15/rollout-s6.jsonl"),
+        &[
+            codex_meta(t, "s6", "/work/app"),
+            codex(t, "turn_context", json!({"cwd":"/work/app"})),
+        ],
+    );
+    // Deeper than YYYY/MM/DD and non-jsonl files are not sessions.
+    write_jsonl(
+        &sessions.join("2026/10/15/extra/deep.jsonl"),
+        &[
+            codex_meta(t, "deep", "/work/app"),
+            user("deep secret"),
+            reply("deep secret"),
+        ],
+    );
+    std::fs::write(sessions.join("2026/10/15/notes.txt"), "not a session").unwrap();
+    // Oversized (sparse) file is skipped without being read.
+    let big = std::fs::File::create(sessions.join("2026/10/15/big.jsonl")).unwrap();
+    big.set_len(33 * 1024 * 1024).unwrap();
+    // A sibling folder whose name shares a prefix.
+    write_jsonl(
+        &sessions.join("2026/10/16/rollout-s3.jsonl"),
+        &[
+            codex_meta("2026-10-16T15:30:00.250+05:30", "s3", "/work/app2"),
+            user("Sibling prompt"),
+            reply("Sibling reply"),
+        ],
+    );
+    sessions
+}
+
+#[test]
+fn codex_reads_visible_prompts_and_replies_only() {
+    let d = tempfile::tempdir().unwrap();
+    let sessions = codex_fixture(d.path());
+    let history = wk_adapters::codex_history::read(&sessions).unwrap();
+    let ids: Vec<_> = history
+        .conversations
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        ["codex:s3", "codex:s1", "codex:rollout-s2"],
+        "newest first; too-deep, bookkeeping-only and non-jsonl files are not sessions"
+    );
+    let c = find(&history, "codex:s1");
+    let got: Vec<_> = c
+        .messages
+        .iter()
+        .map(|m| (m.id.as_str(), m.role.as_str(), m.text.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("u1", "user", LONG),
+            (
+                "a1",
+                "assistant",
+                "Reading the limiter.\n\nDone: limiter fixed."
+            ),
+            (
+                "u2",
+                "user",
+                "Now add tests\n\nSee <environment_context> above"
+            ),
+            ("a2", "assistant", "Tests added."),
+        ]
+    );
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(
+        !all.contains("secret"),
+        "hidden, injected or tool content leaked: {all}"
+    );
+    assert_eq!(c.title, LONG.lines().next().unwrap()[..80]);
+    assert_eq!(c.workspace.as_deref(), Some(Path::new("/work/app")));
+    assert_eq!(c.created_at_ms, Some(1_792_058_400_000));
+    assert_eq!(c.source, "codex");
+    assert_eq!(c.outcome.as_deref(), Some("Tests added."));
+    assert!(c.complete);
+    assert!(c.files_changed.is_empty() && c.files_read.is_empty());
+
+    let partial = find(&history, "codex:rollout-s2");
+    assert_eq!(partial.workspace, None, "no session_meta: never selected");
+    assert_eq!(partial.messages.len(), 1);
+    assert_eq!(partial.title, "Partial");
+    assert!(!partial.complete, "no reply and unreadable records");
+    assert_eq!(partial.outcome, None);
+    assert_eq!(
+        history.unreadable_records, 2,
+        "malformed line and unknown role are counted, never guessed"
+    );
+    assert_eq!(history.empty_conversations, 1);
+    assert_eq!(history.skipped, 1, "oversized file skipped");
+
+    let sibling = find(&history, "codex:s3");
+    assert_eq!(sibling.created_at_ms, Some(1_792_144_800_250));
+}
+
+#[test]
+fn codex_sessions_scope_to_the_folder_not_its_prefix_siblings() {
+    let d = tempfile::tempdir().unwrap();
+    let history = wk_adapters::codex_history::read(&codex_fixture(d.path())).unwrap();
+    let ids = |root: &str| -> Vec<String> {
+        within(&history, Path::new(root))
+            .into_iter()
+            .map(|c| c.id)
+            .collect()
+    };
+    assert_eq!(ids("/work/app"), ["codex:s1"]);
+    assert_eq!(ids("/work/app2"), ["codex:s3"]);
+}
+
+#[test]
+fn codex_skips_sessions_with_too_many_messages() {
+    let d = tempfile::tempdir().unwrap();
+    let t = "2026-10-15T10:00:00Z";
+    let mut records = vec![codex_meta(t, "huge", "/work/app")];
+    records.extend((0..5001).map(|i| {
+        if i % 2 == 0 {
+            codex(t, "response_item", codex_msg("user", "input_text", "q"))
+        } else {
+            codex(
+                t,
+                "response_item",
+                codex_msg("assistant", "output_text", "a"),
+            )
+        }
+    }));
+    write_jsonl(&d.path().join("2026/10/15/huge.jsonl"), &records);
+    records[0] = codex_meta(t, "ok", "/work/app");
+    write_jsonl(&d.path().join("2026/10/15/ok.jsonl"), &records[..5001]);
+    let history = wk_adapters::codex_history::read(d.path()).unwrap();
+    let ids: Vec<_> = history
+        .conversations
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(ids, ["codex:ok"]);
+    assert_eq!(history.conversations[0].messages.len(), 5000);
+    assert_eq!(history.skipped, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_never_follows_symlinks_out_of_the_sessions_dir() {
+    let d = tempfile::tempdir().unwrap();
+    let outside = d.path().join("outside");
+    let t = "2026-10-15T10:00:00Z";
+    write_jsonl(
+        &outside.join("leak.jsonl"),
+        &[
+            codex_meta(t, "leak", "/work/app"),
+            codex(
+                t,
+                "response_item",
+                codex_msg("user", "input_text", "outside secret"),
+            ),
+        ],
+    );
+    let sessions = d.path().join("sessions");
+    std::fs::create_dir_all(sessions.join("2026/10/15")).unwrap();
+    std::os::unix::fs::symlink(&outside, sessions.join("2026/linked")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.join("leak.jsonl"),
+        sessions.join("2026/10/15/leak.jsonl"),
+    )
+    .unwrap();
+    let history = wk_adapters::codex_history::read(&sessions).unwrap();
+    assert!(history.conversations.is_empty());
+    assert_eq!(history.empty_conversations, 0);
+}
+
+#[test]
+fn codex_missing_sessions_dir_is_an_error() {
+    let d = tempfile::tempdir().unwrap();
+    assert!(wk_adapters::codex_history::read(&d.path().join("absent")).is_err());
+}
