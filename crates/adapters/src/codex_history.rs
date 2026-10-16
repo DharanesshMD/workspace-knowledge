@@ -7,9 +7,11 @@
 //!
 //! Only visible text is read: typed prompts and reply text. Developer and system messages,
 //! context Codex injects as user messages, reasoning, tool calls and their output, events and
-//! turn context are ignored. Injected context is dropped per content part: parts starting with
-//! a known marker, and parts made up entirely of `<tag ...>…</tag>` blocks. Messages with an
-//! unknown role are counted, never guessed. Symlinks are never followed out of the sessions
+//! turn context are ignored. Injected context is dropped per content part, and counted in
+//! `dropped_injected`: parts starting with a known marker, and parts made up entirely of
+//! `<tag ...>…</tag>` blocks at least one of which has a tool-style name containing `_` or `-`
+//! (parts made only of plain-named tags such as `<task>` are typed prompts and kept). Messages
+//! with an unknown role are counted, never guessed. Symlinks are never followed out of the sessions
 //! directory.
 //!
 //! Known limits: `archived_sessions` is not read. Sub-agent threads Codex spawns are stored as
@@ -17,7 +19,7 @@
 //! them is not confirmed). A forked session copies its parent's history into a new file, so
 //! the same exchanges can appear in two conversations.
 use crate::cursor_history::{Conversation, History, Message};
-use crate::history_common::{only_tag_blocks, rfc3339_ms, title, Lines, Refused};
+use crate::history_common::{injected_tag_blocks, rfc3339_ms, title, Lines, Refused};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -166,7 +168,11 @@ fn read_session(file: &Path, history: &mut History) {
             .iter()
             .filter(|p| p["type"] == "input_text" || p["type"] == "output_text")
             .filter_map(|p| p["text"].as_str())
-            .filter(|t| role == "assistant" || !injected(t))
+            .filter(|t| {
+                let keep = role == "assistant" || !injected(t);
+                history.dropped_injected += usize::from(!keep);
+                keep
+            })
             .collect();
         let text = texts.join("\n").trim().to_string();
         if text.is_empty() {
@@ -224,12 +230,12 @@ fn read_session(file: &Path, history: &mut History) {
 }
 
 /// Whether a user text part is context Codex injected rather than a typed prompt: it starts
-/// with a known marker or consists only of tag-wrapped blocks.
+/// with a known marker or consists only of tag blocks, one with a tool-style name.
 fn injected(text: &str) -> bool {
     let start = text.trim_start();
     INJECTED.iter().any(|marker| {
         start
             .get(..marker.len())
             .is_some_and(|s| s.eq_ignore_ascii_case(marker))
-    }) || only_tag_blocks(text)
+    }) || injected_tag_blocks(text)
 }

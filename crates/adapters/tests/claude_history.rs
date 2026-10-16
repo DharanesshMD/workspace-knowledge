@@ -130,6 +130,10 @@ fn imports_only_typed_prompts_and_real_replies() {
     assert_eq!(c.outcome.as_deref(), Some("Reply one"));
     assert!(!c.complete, "an API error is not a reply");
     assert_eq!(history.unreadable_records, 0, "skipped records are known");
+    assert_eq!(
+        history.dropped_injected, 9,
+        "bash, task, reminder, two IDE parts and two interrupt markers"
+    );
 }
 
 #[test]
@@ -279,6 +283,52 @@ fn known_injected_blocks_are_dropped_even_with_trailing_text() {
             ),
             ("a1", "assistant", "Reply"),
         ])
+    );
+    assert_eq!(history.unreadable_records, 0);
+}
+
+#[test]
+fn developer_xml_prompts_are_kept_and_injected_parts_counted() {
+    let d = tempfile::tempdir().unwrap();
+    let records = [
+        user("u1", json!("<task>Fix the limiter</task>")),
+        user("env", json!("<env_x>\nsecret env\n</env_x>")),
+        user(
+            "parts",
+            json!([
+                {"type":"text","text":"<ide_opened_file>secret.rs</ide_opened_file>"},
+                {"type":"text","text":"<context>Keep this</context>"}
+            ]),
+        ),
+        user(
+            "mixed",
+            json!("<env_x attr=\"a>b\">secret</env_x>\n<task>secret mixed</task>"),
+        ),
+        user("unclosed", json!("<env_x>Unclosed is typed")),
+        reply("a1", "Reply"),
+    ];
+    write_lines(&d.path().join("-work-app/s.jsonl"), &bytes(&records), b"\n");
+    let history = read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "injected content leaked: {all}");
+    assert_eq!(
+        messages(&history, "claude-code:s"),
+        owned(&[
+            (
+                "u1",
+                "user",
+                "<task>Fix the limiter</task>\n\n<context>Keep this</context>\n\n<env_x>Unclosed is typed"
+            ),
+            ("a1", "assistant", "Reply"),
+        ])
+    );
+    assert_eq!(
+        history.conversations[0].title,
+        "<task>Fix the limiter</task>"
+    );
+    assert_eq!(
+        history.dropped_injected, 3,
+        "tool-style tag blocks (alone or with plain tags) and the IDE part"
     );
     assert_eq!(history.unreadable_records, 0);
 }

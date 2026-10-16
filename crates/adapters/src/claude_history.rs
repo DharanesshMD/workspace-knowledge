@@ -8,8 +8,10 @@
 //! Only text the developer typed and the model's real replies are read: prompt text parts
 //! (string content or `text` parts) and reply `text` parts. Thinking, tool calls, tool results,
 //! meta and compact-summary records, API-error and synthetic replies, interrupt markers,
-//! subagent sidechains and parts made only of `<tag>…</tag>` blocks (slash commands, bash mode,
-//! IDE context, system reminders, task notifications) are ignored. Records that look like
+//! subagent sidechains and injected parts (slash commands, bash mode, IDE context, system
+//! reminders, task notifications, and parts made only of tool-style `<tag_name>…</tag_name>`
+//! blocks) are ignored; dropped injected parts are counted in `dropped_injected`. Parts made only
+//! of plain-named tags such as `<task>…</task>` are prompts the developer wrote and are kept. Records that look like
 //! messages but have an unknown type are counted, never guessed. Symlinks are never followed out
 //! of the projects directory.
 //!
@@ -17,7 +19,7 @@
 //! concurrent write can at worst leave a partial last line, which is counted as a malformed
 //! record and marks the session incomplete. Copying would add I/O without a consistency gain.
 use crate::cursor_history::{Conversation, History, Message};
-use crate::history_common::{only_tag_blocks, rfc3339_ms, title, Lines, Refused};
+use crate::history_common::{injected_tag_blocks, rfc3339_ms, title, Lines, Refused};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -147,7 +149,7 @@ fn read_session(file: &Path, history: &mut History) {
                 .map(PathBuf::from);
         }
         let text = match role {
-            "user" => prompt_text(&v),
+            "user" => prompt_text(&v, &mut history.dropped_injected),
             _ => reply_text(&v),
         };
         let Some(text) = text else { continue };
@@ -199,9 +201,10 @@ fn read_session(file: &Path, history: &mut History) {
     });
 }
 
-/// A typed prompt: string content or `text` parts, each kept only if the developer wrote it.
-/// Meta, compact-summary and transcript-only records and tool results are not prompts.
-fn prompt_text(v: &Value) -> Option<String> {
+/// A typed prompt: string content or `text` parts, each kept only if the developer wrote it;
+/// `dropped` counts the injected parts. Meta, compact-summary and transcript-only records and
+/// tool results are not prompts.
+fn prompt_text(v: &Value, dropped: &mut usize) -> Option<String> {
     if v["isMeta"] == true
         || v["isCompactSummary"] == true
         || v["isVisibleInTranscriptOnly"] == true
@@ -215,7 +218,11 @@ fn prompt_text(v: &Value) -> Option<String> {
             return None;
         }
     }
-    joined(text_parts(content).filter(|t| typed(t)))
+    joined(text_parts(content).filter(|t| {
+        let keep = t.is_empty() || typed(t);
+        *dropped += usize::from(!keep);
+        keep
+    }))
 }
 
 /// Reply `text` parts; thinking, tool calls, API errors and synthetic replies are ignored.
@@ -263,11 +270,12 @@ const INJECTED_PREFIXES: [&str; 8] = [
 ];
 
 /// Whether a trimmed prompt part is text the developer typed. Client-injected parts are dropped:
-/// those made only of `<tag>…</tag>` blocks, those opening with a known injected block
-/// (slash commands, bash mode, IDE context, reminders, notifications, hooks), bash-mode output
-/// anywhere in the part, and interrupt markers.
+/// those made only of tool-style `<tag_name>…</tag_name>` blocks, those opening with a known
+/// injected block (slash commands, bash mode, IDE context, reminders, notifications, hooks),
+/// bash-mode output anywhere in the part, and interrupt markers. Parts made only of plain-named
+/// tags such as `<task>…</task>` are the developer's own and kept.
 fn typed(part: &str) -> bool {
-    !(only_tag_blocks(part)
+    !(injected_tag_blocks(part)
         || INJECTED_PREFIXES.iter().any(|p| part.starts_with(p))
         || part.contains("<bash-stdout>")
         || part.contains("<bash-stderr>")

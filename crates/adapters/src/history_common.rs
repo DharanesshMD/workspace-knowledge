@@ -122,13 +122,14 @@ pub(crate) fn title(messages: &[Message]) -> String {
         .unwrap_or_else(|| "Untitled chat".into())
 }
 
-/// Whether `s`, trimmed, is one or more `<name attrs>…</name>` blocks separated only by
-/// whitespace. Tag names match `[A-Za-z][A-Za-z0-9_-]*`; any other text keeps the part.
-pub(crate) fn only_tag_blocks(s: &str) -> bool {
+/// Whether `s`, trimmed, is context a tool injected: one or more `<name attrs>…</name>` blocks
+/// separated only by whitespace, at least one of them with a tool-style name containing `_` or
+/// `-` (`ide_opened_file`, `task-notification`, `environment_context`). Tag names match
+/// `[A-Za-z][A-Za-z0-9_-]*`. Parts made only of plain-named blocks such as `<task>` or
+/// `<context>` are prompts a developer wrote and are kept, as is any part with other text.
+pub(crate) fn injected_tag_blocks(s: &str) -> bool {
     let mut rest = s.trim();
-    if rest.is_empty() {
-        return false;
-    }
+    let mut tool_style = false;
     while !rest.is_empty() {
         let Some(open) = rest.strip_prefix('<') else {
             return false;
@@ -150,9 +151,10 @@ pub(crate) fn only_tag_blocks(s: &str) -> bool {
         let Some(end) = body.find(&close) else {
             return false;
         };
+        tool_style |= name.contains(['_', '-']);
         rest = body[end + close.len()..].trim_start();
     }
-    true
+    tool_style
 }
 
 /// Milliseconds since the Unix epoch for an RFC 3339 timestamp such as
@@ -268,22 +270,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recognises_tag_blocks() {
-        assert!(only_tag_blocks("<a>x</a>"));
-        assert!(only_tag_blocks(
-            "<ide_selection path=\"p\">x <b>y</b></ide_selection>\n <c-d></c-d>"
-        ));
-        for not in [
+    fn recognises_tool_style_tag_blocks() {
+        for injected in [
+            "<a_b>x</a_b>",
+            "<ide_selection path=\"p\">x <b>y</b></ide_selection>\n <c-d></c-d>",
+            "<env_x attr=\"a>b\">x</env_x>",
+            "<task>x</task>\n<task-notification>y</task-notification>",
+        ] {
+            assert!(injected_tag_blocks(injected), "{injected}");
+        }
+        for typed in [
             "",
             "plain",
-            "<a>x</a> tail",
-            "lead <a>x</a>",
-            "<a>unclosed",
-            "<1a>x</1a>",
-            "<a>x</b>",
-            "< a>x</a>",
+            "<a>x</a>",
+            "<task>Fix the limiter</task>",
+            "<context>a</context> <div>b</div>",
+            "<a_b>x</a_b> tail",
+            "lead <a_b>x</a_b>",
+            "<a_b>unclosed",
+            "<a_b x=\"1\"",
+            "<1a_b>x</1a_b>",
+            "<a_b>x</b_a>",
+            "< a_b>x</a_b>",
         ] {
-            assert!(!only_tag_blocks(not), "{not}");
+            assert!(!injected_tag_blocks(typed), "{typed}");
         }
     }
 

@@ -49,6 +49,9 @@ pub struct History {
     pub empty_conversations: usize,
     /// Sessions deliberately not read because they exceed the reader's size limits.
     pub skipped: usize,
+    /// Prompt text parts dropped because the client injected them (IDE context, reminders,
+    /// command output, environment context…) rather than the developer typing them.
+    pub dropped_injected: usize,
 }
 
 /// Default Cursor user-data directory for the current OS.

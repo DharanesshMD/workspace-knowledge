@@ -18,9 +18,10 @@
 //! without a `kind`, `markdownContent` or `markdownVuln`). Prompt `parts` and `variableData`
 //! (attached variables and files), the unsent draft in `inputState`, thinking, tool
 //! invocations, edits, code-block URIs, inline references, progress, confirmations,
-//! elicitations, commands, MCP notices, vulnerability details and error messages are ignored. Prompts made entirely of
-//! `<tag ...>…</tag>` blocks are injected context, not typed text, and are dropped. Unknown part
-//! kinds are counted, never guessed. A failed or cancelled request keeps only the reply text it
+//! elicitations, commands, MCP notices, vulnerability details and error messages are ignored.
+//! Copilot keeps injected context in `variableData`, never in `message.text`, so a prompt is
+//! kept whole even when it is made of `<tag>…</tag>` blocks. Unknown part kinds are counted,
+//! never guessed. A failed or cancelled request keeps only the reply text it
 //! produced. Symlinks are never followed out of the workspace storage directory.
 //!
 //! Session files are read in place rather than snapshotted: VS Code rewrites a whole `.json`
@@ -30,7 +31,7 @@
 //! Known limits: only folder workspaces on the local disk are attributed (`file://` URIs);
 //! remote, multi-root and empty-window chats have no workspace.
 use crate::cursor_history::{Conversation, History, Message};
-use crate::history_common::{file_uri_path, first_line, only_tag_blocks, read_regular, title};
+use crate::history_common::{file_uri_path, first_line, read_regular, title};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -189,7 +190,7 @@ fn read_session(file: &Path, workspace: Option<PathBuf>, history: &mut History) 
             .map_or_else(|| format!("request-{index}"), str::to_owned);
         let prompt = match request["message"]["text"].as_str() {
             Some(text) => Some(text.trim())
-                .filter(|t| !t.is_empty() && !only_tag_blocks(t))
+                .filter(|t| !t.is_empty())
                 .map(str::to_owned),
             None => {
                 gaps += 1;

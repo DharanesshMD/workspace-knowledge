@@ -564,6 +564,10 @@ fn codex_reads_visible_prompts_and_replies_only() {
     );
     assert_eq!(history.empty_conversations, 1);
     assert_eq!(history.skipped, 1, "oversized file skipped");
+    assert_eq!(
+        history.dropped_injected, 10,
+        "nine injected parts in s1 and the environment context in s5"
+    );
 
     let sibling = find(&history, "codex:s3");
     assert_eq!(sibling.created_at_ms, Some(1_792_144_800_250));
@@ -711,7 +715,66 @@ fn codex_drops_tag_wrapped_injected_parts_and_keeps_real_prompts() {
         ]
     );
     assert_eq!(history.unreadable_records, 0);
+    assert_eq!(history.dropped_injected, 4);
     assert!(c.complete);
+}
+
+#[test]
+fn codex_keeps_developer_xml_prompts_and_counts_dropped_context() {
+    let d = tempfile::tempdir().unwrap();
+    let t = "2026-10-15T10:00:00Z";
+    let parts = |texts: &[&str]| {
+        let content: Vec<Value> = texts
+            .iter()
+            .map(|text| json!({"type":"input_text","text":text}))
+            .collect();
+        codex(
+            t,
+            "response_item",
+            json!({"type":"message","role":"user","content":content}),
+        )
+    };
+    write_jsonl(
+        &d.path().join("2026/10/15/xml.jsonl"),
+        &[
+            codex_meta(t, "xml", "/work/app"),
+            parts(&["<task>Fix the limiter</task>"]),
+            parts(&["<env_x>\nenv secret\n</env_x>"]),
+            parts(&[
+                "<environment_context>secret</environment_context>",
+                "<context>Keep me</context>",
+            ]),
+            parts(&["<env_x attr=\"a>b\">attr secret</env_x>"]),
+            parts(&["<env_x>Unclosed is typed"]),
+            codex(
+                t,
+                "response_item",
+                codex_msg("assistant", "output_text", "Done."),
+            ),
+        ],
+    );
+    let history = wk_adapters::codex_history::read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "injected context leaked: {all}");
+    let c = find(&history, "codex:xml");
+    let got: Vec<_> = c
+        .messages
+        .iter()
+        .map(|m| (m.id.as_str(), m.text.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (
+                "u1",
+                "<task>Fix the limiter</task>\n\n<context>Keep me</context>\n\n<env_x>Unclosed is typed"
+            ),
+            ("a1", "Done."),
+        ]
+    );
+    assert_eq!(c.title, "<task>Fix the limiter</task>");
+    assert_eq!(history.dropped_injected, 3);
+    assert_eq!(history.unreadable_records, 0);
 }
 
 fn write_json(path: &Path, value: &Value) {
@@ -1034,7 +1097,7 @@ fn copilot_missing_user_dir_is_an_error() {
 }
 
 #[test]
-fn copilot_drops_tag_wrapped_prompts_and_merges_unanswered_requests() {
+fn copilot_keeps_tag_prompts_and_merges_unanswered_requests() {
     let d = tempfile::tempdir().unwrap();
     let request = |id: &str, text: &str, reply: &str| {
         let response = if reply.is_empty() {
@@ -1052,7 +1115,7 @@ fn copilot_drops_tag_wrapped_prompts_and_merges_unanswered_requests() {
             "tags",
             1,
             json!([
-                request("r1", "<context>\ntag secret\n</context>", ""),
+                request("r1", "<env_x>\ntyped context\n</env_x>", ""),
                 request("r2", "  First real prompt\nmore  ", ""),
                 request("r3", "Wrap it in <b>bold</b> ok", "Done."),
                 request("r4", "Use <tag>x</tag> and then this", "Wrapped."),
@@ -1065,7 +1128,7 @@ fn copilot_drops_tag_wrapped_prompts_and_merges_unanswered_requests() {
     let all = serde_json::to_string(&history.conversations).unwrap();
     assert!(!all.contains("secret"), "injected context leaked: {all}");
     let c = find(&history, "copilot:tags");
-    assert_eq!(c.title, "First real prompt");
+    assert_eq!(c.title, "<env_x>");
     let got: Vec<_> = c
         .messages
         .iter()
@@ -1075,8 +1138,8 @@ fn copilot_drops_tag_wrapped_prompts_and_merges_unanswered_requests() {
         got,
         [
             (
-                "r2:u",
-                "First real prompt\nmore\n\nWrap it in <b>bold</b> ok"
+                "r1:u",
+                "<env_x>\ntyped context\n</env_x>\n\nFirst real prompt\nmore\n\nWrap it in <b>bold</b> ok"
             ),
             ("r3:a", "Done."),
             ("r4:u", "Use <tag>x</tag> and then this"),
@@ -1087,6 +1150,10 @@ fn copilot_drops_tag_wrapped_prompts_and_merges_unanswered_requests() {
     assert_eq!(
         history.unreadable_records, 1,
         "request without message text"
+    );
+    assert_eq!(
+        history.dropped_injected, 0,
+        "Copilot keeps injected context out of message.text"
     );
     assert!(!c.complete);
     assert_eq!(c.outcome.as_deref(), Some("Wrapped."));
