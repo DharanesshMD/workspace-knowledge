@@ -392,6 +392,51 @@ mod tests {
         );
         assert_eq!(approve_file(&home, &b, "backend", &link), Err("symlink"));
     }
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_github_folder_is_outside_the_approved_service() {
+        let (_t, home, b) = fixture();
+        let elsewhere = b.root.parent().unwrap().join("elsewhere");
+        std::fs::create_dir_all(elsewhere.join("instructions")).unwrap();
+        std::fs::write(elsewhere.join("copilot-instructions.md"), "secret").unwrap();
+        std::fs::write(elsewhere.join("instructions/x.instructions.md"), "secret").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, b.root.join("backend/.github")).unwrap();
+        let summary: Vec<_> = repository(&b, "backend")
+            .into_iter()
+            .map(|c| (c.label, c.rejected))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![(
+                "repo:backend/.github/copilot-instructions.md".into(),
+                Some("outside_approved_service")
+            )]
+        );
+        for file in [
+            "backend/.github/copilot-instructions.md",
+            "backend/.github/instructions/x.instructions.md",
+        ] {
+            assert_eq!(
+                approve_file(&home, &b, "backend", &b.root.join(file)),
+                Err("not_a_memory_source")
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn files_in_a_symlinked_instructions_folder_cannot_be_approved() {
+        let (_t, home, b) = fixture();
+        let elsewhere = b.root.parent().unwrap().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("x.instructions.md"), "secret").unwrap();
+        std::fs::create_dir_all(b.root.join("backend/.github")).unwrap();
+        let dir = b.root.join("backend/.github/instructions");
+        std::os::unix::fs::symlink(&elsewhere, &dir).unwrap();
+        assert_eq!(
+            approve_file(&home, &b, "backend", &dir.join("x.instructions.md")),
+            Err("not_a_memory_source")
+        );
+    }
     #[test]
     fn notes_skip_the_index_and_explicit_files_must_be_this_projects_notes() {
         let (_t, home, b) = fixture();

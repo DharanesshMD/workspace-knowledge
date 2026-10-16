@@ -602,6 +602,42 @@ mod tests {
         assert!(!scan.to_string().contains(&*f.home.to_string_lossy()));
     }
     #[test]
+    fn scan_reports_the_kind_of_copilot_instruction_files() {
+        let f = fixture("http://127.0.0.1:9/v1/chat/completions");
+        let dir = f.b.root.join("backend/.github/instructions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            f.b.root.join("backend/.github/copilot-instructions.md"),
+            "Be brief.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("rust.instructions.md"),
+            "---\ndescription: Rust style\n---\nUse thiserror.\n",
+        )
+        .unwrap();
+        let scan = scan_with(&f.dir, &f.b, "backend", None).unwrap();
+        let kinds: Vec<_> = scan["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["label"].as_str().unwrap(), r["kind"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (
+                    "repo:backend/.github/copilot-instructions.md",
+                    "instructions"
+                ),
+                (
+                    "repo:backend/.github/instructions/rust.instructions.md",
+                    "scoped_instructions"
+                )
+            ]
+        );
+    }
+    #[test]
     fn import_writes_private_records_and_skips_unchanged_sections() {
         let mut f = fixture("http://127.0.0.1:9/v1/chat/completions");
         std::fs::write(

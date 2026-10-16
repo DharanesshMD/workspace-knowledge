@@ -58,7 +58,15 @@ fn note(text: &str) -> Vec<Section> {
         body: body.to_string(),
     }]
 }
-/// Drops leading `---` frontmatter; top-level `keys` with plain values become hints.
+/// One matching pair of surrounding `"` or `'` quotes, if present.
+fn unquote(value: &str) -> &str {
+    ['"', '\'']
+        .into_iter()
+        .find_map(|q| value.strip_prefix(q)?.strip_suffix(q))
+        .unwrap_or(value)
+}
+/// Drops leading `---` frontmatter; top-level `keys` with plain values become
+/// hints. Without a closing `---` there is no frontmatter: the text is kept.
 fn frontmatter(text: &str, keys: &[&str]) -> (Option<String>, String) {
     let mut lines = text.lines();
     if lines.next() != Some("---") {
@@ -72,7 +80,7 @@ fn frontmatter(text: &str, keys: &[&str]) -> (Option<String>, String) {
                 .filter(|entry| !entry.starts_with([' ', '\t']))
                 .filter_map(|entry| {
                     let (key, value) = entry.split_once(':')?;
-                    let (key, value) = (key.trim(), value.trim().trim_matches('"'));
+                    let (key, value) = (key.trim(), unquote(value.trim()));
                     (keys.contains(&key) && !value.is_empty() && !value.starts_with(['>', '|']))
                         .then(|| format!("{key}: {value}"))
                 })
@@ -286,6 +294,43 @@ mod tests {
             (plain[0].hints.as_deref(), plain[0].body.as_str()),
             (None, "Always lint.")
         );
+    }
+    #[test]
+    fn hint_values_lose_one_matching_pair_of_quotes() {
+        let hint = |value: &str| {
+            split(
+                SourceKind::ScopedInstructions,
+                &format!("---\ndescription: {value}\n---\nBody\n"),
+            )[0]
+            .hints
+            .clone()
+        };
+        assert_eq!(
+            hint("'Rust style'").as_deref(),
+            Some("description: Rust style")
+        );
+        assert_eq!(
+            hint("\"Rust style\"").as_deref(),
+            Some("description: Rust style")
+        );
+        assert_eq!(
+            hint("\"Note: errors\"").as_deref(),
+            Some("description: Note: errors")
+        );
+        assert_eq!(
+            hint("Note: errors").as_deref(),
+            Some("description: Note: errors")
+        );
+        assert_eq!(hint("\"\"x\"\"").as_deref(), Some("description: \"x\""));
+        assert_eq!(hint("'x\"").as_deref(), Some("description: 'x\""));
+    }
+    #[test]
+    fn unclosed_scoped_frontmatter_stays_in_the_body_without_hints() {
+        let text = "---\ndescription: Rust style\nUse thiserror.\n";
+        let s = split(SourceKind::ScopedInstructions, text);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].hints, None);
+        assert_eq!(s[0].body, text.trim());
     }
     #[test]
     fn instructions_keep_frontmatter_as_text() {
