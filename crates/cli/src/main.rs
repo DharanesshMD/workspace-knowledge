@@ -755,7 +755,8 @@ fn list_conversations(
     Ok(json!({"workspace":root,"sessions":sessions,
         "outside_workspace":history.conversations.len() - inside.len() - without_folder,
         "without_folder":without_folder,"unreadable_records":history.unreadable_records,
-        "empty_conversations":history.empty_conversations,"skipped":history.skipped}))
+        "empty_conversations":history.empty_conversations,"skipped":history.skipped,
+        "dropped_injected":history.dropped_injected}))
 }
 /// Print `selected` as Markdown with likely secrets masked.
 fn show_conversations(

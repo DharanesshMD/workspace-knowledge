@@ -445,10 +445,13 @@ fn claude_source(base: &std::path::Path, product: &std::path::Path) -> std::path
             rec("assistant", "a1", json!([{"type":"text","text":REPLY}])),
         ]
     };
-    write_lines(
-        &projects.join("-product").join("in.jsonl"),
-        &session(Some(product), &prompt()),
-    );
+    // The prompt arrives with a context block Claude Code injected; it is dropped and counted.
+    let mut inside = session(Some(product), &prompt());
+    inside[0]["message"]["content"] = json!([
+        {"type":"text","text":"<system-reminder>INJECTED_CANARY</system-reminder>"},
+        {"type":"text","text":prompt()}
+    ]);
+    write_lines(&projects.join("-product").join("in.jsonl"), &inside);
     write_lines(
         &projects.join("-other").join("out.jsonl"),
         &session(Some(&base.join("other")), "OUTSIDE_CANARY"),
@@ -600,6 +603,7 @@ fn agent_history_lists_shows_and_exports_each_client_scoped_and_masked() {
             REPLY,
             "OUTSIDE_CANARY",
             "NOFOLDER_CANARY",
+            "INJECTED_CANARY",
         ] {
             assert!(!text.contains(absent), "{client}: list leaked {absent}");
         }
@@ -612,8 +616,16 @@ fn agent_history_lists_shows_and_exports_each_client_scoped_and_masked() {
         assert!(items[0]["created_at_ms"].as_i64().unwrap() > 0, "{client}");
         assert_eq!(v["outside_workspace"], 1, "{client}: {v}");
         assert_eq!(v["without_folder"], 1, "{client}: {v}");
-        for count in ["unreadable_records", "empty_conversations", "skipped"] {
+        for count in [
+            "unreadable_records",
+            "empty_conversations",
+            "skipped",
+            "dropped_injected",
+        ] {
             assert!(v[count].is_u64(), "{client}: {count} missing");
+        }
+        if client == "claude-code" {
+            assert!(v["dropped_injected"].as_u64().unwrap() >= 1, "{v}");
         }
 
         // Show: masked Markdown of this folder only; unknown or outside sessions fail.
