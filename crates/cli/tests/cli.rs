@@ -802,3 +802,219 @@ fn agent_history_reads_cursor_like_cursor_history() {
         "transcripts read"
     );
 }
+
+/// A Codex source with sessions `in`, `Case` and `case` in `product`, plus the `wk` runner.
+fn codex_export_setup(
+    d: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let home = d.join("home");
+    let product = d.join("product");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&product).unwrap();
+    let sessions = d.join("codex-sessions");
+    for (file, id) in [
+        ("rollout-a.jsonl", "in"),
+        ("rollout-b.jsonl", "Case"),
+        ("rollout-c.jsonl", "case"),
+    ] {
+        codex_session(&sessions, file, id, Some(&product), &prompt());
+    }
+    (home, product, sessions)
+}
+
+fn codex_export(
+    home: &std::path::Path,
+    sessions: &std::path::Path,
+    product: &std::path::Path,
+    out: &std::path::Path,
+    ids: &[&str],
+) -> std::process::Output {
+    let mut args = vec![
+        "agent-history",
+        "--client",
+        "codex",
+        "--source-dir",
+        sessions.to_str().unwrap(),
+        "export",
+        "--workspace",
+        product.to_str().unwrap(),
+        "--product",
+        "demo",
+        "--out",
+        out.to_str().unwrap(),
+        "--yes",
+    ];
+    for id in ids {
+        args.extend(["--session", id]);
+    }
+    run_home(home, &args)
+}
+
+fn entries(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn agent_history_export_refuses_clashes_before_writing_anything() {
+    let d = tempfile::tempdir().unwrap();
+    let (home, product, sessions) = codex_export_setup(d.path());
+    let out = d.path().join("out");
+    let o = codex_export(&home, &sessions, &product, &out, &["codex:in", "codex:in"]);
+    assert!(!o.status.success(), "duplicate session accepted");
+    assert!(!out.exists());
+    let o = codex_export(
+        &home,
+        &sessions,
+        &product,
+        &out,
+        &["codex:Case", "codex:case"],
+    );
+    assert!(!o.status.success(), "case-only file name clash accepted");
+    assert!(!out.exists());
+
+    // A pre-existing target file: nothing is written, the existing file is untouched.
+    std::fs::create_dir(&out).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    std::fs::write(out.join("codex_in.json"), "keep").unwrap();
+    let o = codex_export(
+        &home,
+        &sessions,
+        &product,
+        &out,
+        &["codex:case", "codex:in"],
+    );
+    assert!(!o.status.success(), "existing target overwritten");
+    assert_eq!(
+        entries(&out),
+        ["codex_in.json"],
+        "partial export left behind"
+    );
+    assert_eq!(
+        std::fs::read_to_string(out.join("codex_in.json")).unwrap(),
+        "keep"
+    );
+    json_out(&codex_export(
+        &home,
+        &sessions,
+        &product,
+        &out,
+        &["codex:case"],
+    ));
+    assert_eq!(entries(&out), ["codex_case.json", "codex_in.json"]);
+}
+
+#[test]
+fn agent_history_export_requires_review_and_names_the_show_command() {
+    let d = tempfile::tempdir().unwrap();
+    let (home, product, sessions) = codex_export_setup(d.path());
+    let p = product.to_str().unwrap();
+    let o = run_home(
+        &home,
+        &[
+            "agent-history",
+            "--client",
+            "codex",
+            "--source-dir",
+            sessions.to_str().unwrap(),
+            "export",
+            "--workspace",
+            p,
+            "--product",
+            "demo",
+            "--out",
+            d.path().join("out").to_str().unwrap(),
+            "--session",
+            "codex:in",
+        ],
+    );
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("wk agent-history --client codex show --workspace"),
+        "{err}"
+    );
+    assert!(!run_home(
+        &home,
+        &["agent-history", "--client", "vim", "list", "--workspace", p]
+    )
+    .status
+    .success());
+}
+
+#[test]
+fn agent_history_help_explains_scope_and_confirmation() {
+    let d = tempfile::tempdir().unwrap();
+    let help = |args: &[&str]| {
+        let o = run_home(d.path(), args);
+        assert!(o.status.success());
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let top = help(&["agent-history", "--help"]);
+    assert!(top.contains("only the Cursor user directory"), "{top}");
+    for client in ["claude-code", "codex", "copilot", "cursor"] {
+        assert!(top.contains(client), "{top}");
+    }
+    let export = help(&["agent-history", "export", "--help"]);
+    for text in [
+        "absolute path outside the workspace; created private",
+        "Confirm you reviewed `show` output",
+    ] {
+        assert!(export.contains(text), "{export}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_history_export_refuses_shared_or_symlinked_output_directories() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let d = tempfile::tempdir().unwrap();
+    let (home, product, sessions) = codex_export_setup(d.path());
+    let export =
+        |out: &std::path::Path| codex_export(&home, &sessions, &product, out, &["codex:in"]);
+
+    // An existing directory others can read is refused, and its permissions are left alone.
+    let shared = d.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let o = export(&shared);
+    assert!(!o.status.success(), "shared output directory accepted");
+    assert!(String::from_utf8_lossy(&o.stderr).contains(
+        "existing output directory must be private (mode 0700); permissions were not changed"
+    ));
+    assert_eq!(mode(&shared), 0o755);
+    assert!(entries(&shared).is_empty());
+
+    // An intermediate symlink into the workspace.
+    symlink(&product, d.path().join("via")).unwrap();
+    assert!(!export(&d.path().join("via").join("exports"))
+        .status
+        .success());
+    // An existing --out that is a symlink to a private folder inside the workspace.
+    let inner = product.join("existing");
+    std::fs::create_dir(&inner).unwrap();
+    std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o700)).unwrap();
+    symlink(&inner, d.path().join("link")).unwrap();
+    assert!(!export(&d.path().join("link")).status.success());
+    assert!(entries(&inner).is_empty());
+    // Dangling symlinks into the workspace, as --out itself and as an intermediate folder.
+    symlink(product.join("dangling"), d.path().join("dangling")).unwrap();
+    assert!(!export(&d.path().join("dangling")).status.success());
+    symlink(product.join("dangling2"), d.path().join("dangling2")).unwrap();
+    assert!(!export(&d.path().join("dangling2").join("exports"))
+        .status
+        .success());
+    assert_eq!(
+        entries(&product),
+        ["existing"],
+        "something was created in the workspace"
+    );
+}
