@@ -1682,3 +1682,36 @@ fn copilot_log_replay_edge_cases() {
     assert!(c.complete);
     assert_eq!(history.unreadable_records, 0);
 }
+
+#[test]
+fn copilot_log_ops_on_unread_top_level_fields_are_ignored() {
+    let d = tempfile::tempdir().unwrap();
+    let mut snapshot = copilot_session(
+        "skip",
+        1,
+        json!([copilot_request("r1", "Q", json!([{"value":"A"}]))]),
+    );
+    snapshot["inputState"] = json!({"inputText":"draft secret"});
+    let lines: Vec<String> = [
+        json!({"kind":0,"v":snapshot}),
+        // Fields the reader never reads are not replayed, even where they would not resolve.
+        json!({"kind":1,"k":["inputState","inputText"],"v":"draft secret two"}),
+        json!({"kind":2,"k":["inputState","attachments"],"v":["attach secret"]}),
+        json!({"kind":1,"k":["someNewField","x","y"],"v":"future secret"}),
+        json!({"kind":1,"k":["customTitle"],"v":"Kept title"}),
+    ]
+    .iter()
+    .map(Value::to_string)
+    .collect();
+    write_lines(
+        &d.path().join("workspaceStorage/h/chatSessions/skip.jsonl"),
+        &lines,
+    );
+    let history = wk_adapters::copilot_history::read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "{all}");
+    let c = find(&history, "copilot:skip");
+    assert_eq!(c.title, "Kept title");
+    assert!(c.complete);
+    assert_eq!(history.unreadable_records, 0);
+}

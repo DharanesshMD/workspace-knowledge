@@ -17,6 +17,8 @@
 //! session has both files the log is read; only if the log cannot be read at all (oversized,
 //! unreadable, no leading snapshot) is the `.json` read instead, marked incomplete. A session
 //! copied into several storage folders is imported once, from the most recently modified file.
+//! Only the top-level `sessionId`, `customTitle`, `creationDate` and `requests` are parsed;
+//! other fields and log operations on them are skipped without building values for them.
 //!
 //! Only visible text is read: the prompt's `message.text` and markdown reply parts (parts
 //! without a `kind`, `markdownContent` or `markdownVuln`). Prompt `parts` and `variableData`
@@ -37,6 +39,7 @@
 //! `.` or `..` components); remote, multi-root and empty-window chats have no workspace.
 use crate::cursor_history::{Conversation, History, Message};
 use crate::history_common::{file_uri_path, first_line, read_regular, session_id, title};
+use serde::Deserialize;
 use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -69,6 +72,56 @@ const HIDDEN_KINDS: [&str; 14] = [
     "elicitationSerialized",
     "command",
 ];
+
+/// The top-level session fields the reader uses.
+const FIELDS: [&str; 4] = ["sessionId", "customTitle", "creationDate", "requests"];
+
+/// A session document reduced to [`FIELDS`]. Parsing into it skips everything else (the unsent
+/// draft in `inputState`, fields added by future versions) without building values for it.
+#[derive(Deserialize)]
+struct Fields {
+    #[serde(rename = "sessionId")]
+    session_id: Option<Value>,
+    #[serde(rename = "customTitle")]
+    custom_title: Option<Value>,
+    #[serde(rename = "creationDate")]
+    creation_date: Option<Value>,
+    requests: Option<Value>,
+}
+
+impl Fields {
+    fn into_value(self) -> Value {
+        let values = [
+            self.session_id,
+            self.custom_title,
+            self.creation_date,
+            self.requests,
+        ];
+        Value::Object(
+            FIELDS
+                .iter()
+                .zip(values)
+                .filter_map(|(key, value)| Some(((*key).to_owned(), value?)))
+                .collect(),
+        )
+    }
+}
+
+/// A log snapshot line, `{"kind":0,"v":session}`.
+#[derive(Deserialize)]
+struct Snapshot {
+    kind: Value,
+    v: Fields,
+}
+
+/// A log line's kind and path; its value is skipped while parsing.
+#[derive(Deserialize)]
+struct Head {
+    #[serde(default)]
+    kind: Value,
+    #[serde(default)]
+    k: Value,
+}
 
 /// The VS Code `User` directory for the current OS.
 pub fn default_dir() -> Option<PathBuf> {
@@ -284,11 +337,11 @@ fn load(file: &Path, history: &mut History) -> Option<(Value, usize)> {
     let loaded = if is_log(file) {
         replay(&bytes, history)?
     } else {
-        let Ok(session) = serde_json::from_slice::<Value>(&bytes) else {
+        let Ok(session) = serde_json::from_slice::<Fields>(&bytes) else {
             history.unreadable_records += 1;
             return None;
         };
-        (session, 0)
+        (session.into_value(), 0)
     };
     if !loaded.0["requests"].is_array() {
         history.unreadable_records += 1;
@@ -375,33 +428,50 @@ fn replay(bytes: &[u8], history: &mut History) -> Option<(Value, usize)> {
         history.skipped += 1;
         return None;
     }
-    let mut lines = lines().map(serde_json::from_slice::<Value>);
-    let snapshot = match lines.next() {
-        Some(Ok(mut first)) if first["kind"] == 0 => first.get_mut("v").map(Value::take),
-        _ => None,
-    };
-    let Some(mut session) = snapshot else {
+    let mut lines = lines();
+    let Some(mut session) = lines.next().and_then(snapshot) else {
         history.unreadable_records += 1;
         return None;
     };
     let mut gaps = 0;
-    for op in lines {
-        if !op.is_ok_and(|op| apply(&mut session, op)) {
+    for line in lines {
+        if !apply(&mut session, line) {
             gaps += 1;
         }
     }
     Some((session, gaps))
 }
 
-/// Apply one log operation to `session`; `false` (and no change) if it cannot be applied.
-fn apply(session: &mut Value, mut op: Value) -> bool {
+/// The session a snapshot line holds, reduced to [`FIELDS`].
+fn snapshot(line: &[u8]) -> Option<Value> {
+    let snapshot: Snapshot = serde_json::from_slice(line).ok()?;
+    (snapshot.kind == 0).then(|| snapshot.v.into_value())
+}
+
+/// Apply one log line to `session`; `false` (and no change) if it cannot be applied. Operations
+/// on top-level fields the reader never reads are accepted without parsing their value.
+fn apply(session: &mut Value, line: &[u8]) -> bool {
+    let Ok(head) = serde_json::from_slice::<Head>(line) else {
+        return false;
+    };
+    if head.kind == 0 {
+        return snapshot(line).map(|s| *session = s).is_some();
+    }
+    let unread = head.k[0].as_str().is_some_and(|key| !FIELDS.contains(&key));
+    if unread && matches!(head.kind.as_u64(), Some(1 | 2)) {
+        return true;
+    }
+    serde_json::from_slice(line).is_ok_and(|op| apply_op(session, op))
+}
+
+/// Apply one set (`kind` 1) or splice (`kind` 2) operation to `session`.
+fn apply_op(session: &mut Value, mut op: Value) -> bool {
     let value = op.get_mut("v").map(Value::take);
     let path = op["k"]
         .as_array()
         .map(Vec::as_slice)
         .filter(|path| path.len() <= MAX_LOG_PATH);
     match (op["kind"].as_u64(), path, value) {
-        (Some(0), _, Some(value)) => *session = value,
         (Some(1), Some([parent @ .., key]), Some(value)) => match (resolve(session, parent), key) {
             (Some(Value::Object(map)), Value::String(key)) => {
                 map.insert(key.clone(), value);
