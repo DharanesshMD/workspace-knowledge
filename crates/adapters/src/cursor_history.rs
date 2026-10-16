@@ -47,6 +47,8 @@ pub struct History {
     pub unreadable_records: usize,
     /// Conversations found but with no readable visible text (likely an unknown layout).
     pub empty_conversations: usize,
+    /// Sessions deliberately not read because they exceed the reader's size limits.
+    pub skipped: usize,
 }
 
 /// Default Cursor user-data directory for the current OS.

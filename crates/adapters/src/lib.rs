@@ -230,6 +230,7 @@ pub fn config(client: &str, executable: &Path, state: &Path) -> Result<Value, St
 }
 
 pub mod change_guard;
+pub mod claude_history;
 pub mod cursor_history;
 pub mod install;
 pub mod team_context;
