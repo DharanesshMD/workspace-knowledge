@@ -713,3 +713,382 @@ fn codex_drops_tag_wrapped_injected_parts_and_keeps_real_prompts() {
     assert_eq!(history.unreadable_records, 0);
     assert!(c.complete);
 }
+
+fn write_json(path: &Path, value: &Value) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, value.to_string()).unwrap();
+}
+
+/// A Copilot request whose prompt is `text` and whose reply is made of `response` parts.
+fn copilot_request(id: &str, text: &str, response: Value) -> Value {
+    json!({"requestId":id,"timestamp":1_792_058_401_000_i64,
+           "message":{"text":text,"parts":[{"kind":"text","text":"parts secret"}]},
+           "variableData":{"variables":[{"id":"file","name":"secret.rs","value":"variable secret"}]},
+           "response":response,
+           "result":{"metadata":{"toolCallRounds":"metadata secret"}}})
+}
+
+fn copilot_session(id: &str, created: i64, requests: Value) -> Value {
+    json!({"version":3,"sessionId":id,"creationDate":created,"requests":requests})
+}
+
+/// `User/` with Copilot sessions in workspace storage folders of every kind.
+fn copilot_fixture(root: &Path) -> PathBuf {
+    let user = root.join("User");
+    let storage = user.join("workspaceStorage");
+    let app = storage.join("h1");
+    write_json(
+        &app.join("workspace.json"),
+        &json!({"folder":"file:///work/my%20app"}),
+    );
+    let chats = app.join("chatSessions");
+    write_json(
+        &chats.join("s1.json"),
+        &copilot_session(
+            "s1",
+            1_792_058_400_000,
+            json!([
+                copilot_request(
+                    "r1",
+                    LONG,
+                    json!([
+                        {"kind":"thinking","value":"thinking secret"},
+                        {"value":"Reading the ","supportThemeIcons":false},
+                        {"kind":"inlineReference","inlineReference":{"path":"/work/my app/secret.rs"},"name":"secret"},
+                        {"value":{"value":"limiter."}},
+                        {"kind":"prepareToolInvocation","toolName":"read secret"},
+                        {"kind":"toolInvocationSerialized","invocationMessage":"tool secret","pastTenseMessage":"tool secret"},
+                        {"kind":"textEditGroup","uri":{"path":"/secret"},"edits":[[{"text":"edit secret"}]]},
+                        {"kind":"codeblockUri","uri":{"path":"/codeblock/secret"}},
+                        {"kind":"undoStop","id":"undo secret"},
+                        {"kind":"progressTaskSerialized","content":{"value":"progress secret"}},
+                        {"kind":"mcpServersStarting","didStartServerIds":["mcp secret"]},
+                        {"kind":"markdownContent","content":{"value":"Done: limiter fixed."}}
+                    ]),
+                ),
+                copilot_request("r2", "Now add tests", json!([{"value":"Tests added."}])),
+            ]),
+        ),
+    );
+    // A future layout and an empty session.
+    let mut empty = copilot_session("empty", 1_792_058_400_000, json!([]));
+    empty["customTitle"] = json!("Empty secret");
+    write_json(&chats.join("empty.json"), &empty);
+    std::fs::write(
+        chats.join("future.jsonl"),
+        "{\"kind\":0,\"v\":\"jsonl secret\"}\n",
+    )
+    .unwrap();
+    std::fs::write(chats.join("broken.json"), "{\"requests\":[").unwrap();
+    std::fs::write(chats.join("notes.txt"), "not a session").unwrap();
+    // Oversized (sparse) file is skipped without being read.
+    let big = std::fs::File::create(chats.join("big.json")).unwrap();
+    big.set_len(33 * 1024 * 1024).unwrap();
+
+    // Custom title, an unknown part kind, and a failed request without reply text.
+    let mut partial = copilot_session(
+        "s2",
+        1_792_058_300_000,
+        json!([
+            copilot_request(
+                "r1",
+                "Partial prompt",
+                json!([{"kind":"someFutureKind","value":"future secret"},{"value":"Half."}]),
+            ),
+            copilot_request("r2", "Will fail", json!([])),
+        ]),
+    );
+    partial["customTitle"] = json!("  Custom title\nsecond line");
+    partial["requests"][1]["result"] = json!({"errorDetails":{"message":"error secret"}});
+    write_json(&storage.join("h2/chatSessions/s2.json"), &partial);
+    write_json(
+        &storage.join("h2/workspace.json"),
+        &json!({"folder":"vscode-remote://ssh-remote%2Bbox/work/my%20app"}),
+    );
+
+    // Multi-root workspace, and a storage folder without workspace.json.
+    let one = |id: &str| {
+        copilot_session(
+            id,
+            1_792_058_200_000,
+            json!([copilot_request("r1", "Hi", json!([{"value":"Hello."}]))]),
+        )
+    };
+    write_json(
+        &storage.join("h3/workspace.json"),
+        &json!({"workspace":"file:///work/my%20app/app.code-workspace"}),
+    );
+    write_json(&storage.join("h3/chatSessions/s3.json"), &one("s3"));
+    write_json(&storage.join("h4/chatSessions/s4.json"), &one("s4"));
+
+    // A sibling folder whose name shares a prefix; cancelled with partial reply text.
+    let mut sibling = copilot_session(
+        "s5",
+        1_792_144_800_250,
+        json!([copilot_request(
+            "r1",
+            "Sibling prompt",
+            json!([{"value":"Sibling reply"}])
+        )]),
+    );
+    sibling["requests"][0]["isCanceled"] = json!(true);
+    write_json(&storage.join("h5/chatSessions/s5.json"), &sibling);
+    write_json(
+        &storage.join("h5/workspace.json"),
+        &json!({"folder":"file:///work/my%20app2"}),
+    );
+    user
+}
+
+#[test]
+fn copilot_reads_visible_prompts_and_replies_only() {
+    let d = tempfile::tempdir().unwrap();
+    let user = copilot_fixture(d.path());
+    let history = wk_adapters::copilot_history::read(&user).unwrap();
+    let ids: Vec<_> = history
+        .conversations
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "copilot:s5",
+            "copilot:s1",
+            "copilot:s2",
+            "copilot:s3",
+            "copilot:s4"
+        ],
+        "newest first; empty, broken, oversized, .jsonl and other files are not sessions"
+    );
+    let c = find(&history, "copilot:s1");
+    let got: Vec<_> = c
+        .messages
+        .iter()
+        .map(|m| (m.id.as_str(), m.role.as_str(), m.text.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("r1:u", "user", LONG),
+            (
+                "r1:a",
+                "assistant",
+                "Reading the limiter.\nDone: limiter fixed."
+            ),
+            ("r2:u", "user", "Now add tests"),
+            ("r2:a", "assistant", "Tests added."),
+        ]
+    );
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(
+        !all.contains("secret"),
+        "hidden, tool, reference or variable content leaked: {all}"
+    );
+    assert_eq!(c.title, LONG.lines().next().unwrap()[..80]);
+    assert_eq!(c.workspace.as_deref(), Some(Path::new("/work/my app")));
+    assert_eq!(c.created_at_ms, Some(1_792_058_400_000));
+    assert_eq!(c.source, "copilot");
+    assert_eq!(c.outcome.as_deref(), Some("Tests added."));
+    assert!(c.complete);
+    assert!(c.files_changed.is_empty() && c.files_read.is_empty());
+
+    let partial = find(&history, "copilot:s2");
+    assert_eq!(partial.title, "Custom title");
+    assert_eq!(partial.workspace, None, "remote folders are never selected");
+    let got: Vec<_> = partial
+        .messages
+        .iter()
+        .map(|m| (m.id.as_str(), m.text.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("r1:u", "Partial prompt"),
+            ("r1:a", "Half."),
+            ("r2:u", "Will fail")
+        ]
+    );
+    assert_eq!(partial.outcome.as_deref(), Some("Half."));
+    assert!(!partial.complete, "unknown part and failed last request");
+    assert_eq!(
+        history.unreadable_records, 2,
+        "unknown part kind and malformed file are counted, never guessed"
+    );
+    assert_eq!(history.empty_conversations, 1);
+    assert_eq!(history.skipped, 2, "oversized and .jsonl files skipped");
+
+    for id in ["copilot:s3", "copilot:s4"] {
+        assert_eq!(find(&history, id).workspace, None, "{id}");
+    }
+    let sibling = find(&history, "copilot:s5");
+    assert_eq!(
+        sibling.workspace.as_deref(),
+        Some(Path::new("/work/my app2"))
+    );
+    assert_eq!(sibling.created_at_ms, Some(1_792_144_800_250));
+    assert!(
+        sibling.complete,
+        "a cancelled reply with visible text is kept"
+    );
+}
+
+#[test]
+fn copilot_sessions_scope_to_the_folder_not_its_prefix_siblings() {
+    let d = tempfile::tempdir().unwrap();
+    let history = wk_adapters::copilot_history::read(&copilot_fixture(d.path())).unwrap();
+    let ids = |root: &str| -> Vec<String> {
+        within(&history, Path::new(root))
+            .into_iter()
+            .map(|c| c.id)
+            .collect()
+    };
+    assert_eq!(ids("/work/my app"), ["copilot:s1"]);
+    assert_eq!(ids("/work/my app2"), ["copilot:s5"]);
+}
+
+#[test]
+fn copilot_skips_sessions_with_too_many_messages() {
+    let d = tempfile::tempdir().unwrap();
+    let chats = d.path().join("workspaceStorage/h/chatSessions");
+    let requests: Vec<Value> = (0..2501)
+        .map(|i| copilot_request(&format!("r{i}"), "q", json!([{"value":"a"}])))
+        .collect();
+    write_json(
+        &chats.join("huge.json"),
+        &copilot_session("huge", 1, json!(requests)),
+    );
+    write_json(
+        &chats.join("ok.json"),
+        &copilot_session("ok", 1, json!(requests[..2500])),
+    );
+    let history = wk_adapters::copilot_history::read(d.path()).unwrap();
+    let ids: Vec<_> = history
+        .conversations
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(ids, ["copilot:ok"]);
+    assert_eq!(history.conversations[0].messages.len(), 5000);
+    assert_eq!(history.skipped, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn copilot_never_follows_symlinks_out_of_workspace_storage() {
+    let d = tempfile::tempdir().unwrap();
+    let outside = d.path().join("outside");
+    let leak = copilot_session(
+        "leak",
+        1,
+        json!([copilot_request("r1", "outside secret", json!([]))]),
+    );
+    write_json(&outside.join("chatSessions/leak.json"), &leak);
+    write_json(
+        &outside.join("workspace.json"),
+        &json!({"folder":"file:///work/app"}),
+    );
+    let storage = d.path().join("User/workspaceStorage");
+    std::fs::create_dir_all(storage.join("h2")).unwrap();
+    std::os::unix::fs::symlink(&outside, storage.join("linked")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.join("chatSessions"),
+        storage.join("h2/chatSessions"),
+    )
+    .unwrap();
+    let real = storage.join("h1");
+    std::fs::create_dir_all(real.join("chatSessions")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.join("chatSessions/leak.json"),
+        real.join("chatSessions/leak.json"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(outside.join("workspace.json"), real.join("workspace.json"))
+        .unwrap();
+    write_json(
+        &real.join("chatSessions/own.json"),
+        &copilot_session(
+            "own",
+            1,
+            json!([copilot_request("r1", "Mine", json!([{"value":"Ok."}]))]),
+        ),
+    );
+    let history = wk_adapters::copilot_history::read(&d.path().join("User")).unwrap();
+    let ids: Vec<_> = history
+        .conversations
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(ids, ["copilot:own"]);
+    assert_eq!(
+        history.conversations[0].workspace, None,
+        "a symlinked workspace.json is never read"
+    );
+    assert_eq!(history.empty_conversations, 0);
+}
+
+#[test]
+fn copilot_missing_user_dir_is_an_error() {
+    let d = tempfile::tempdir().unwrap();
+    assert!(wk_adapters::copilot_history::read(&d.path().join("absent")).is_err());
+}
+
+#[test]
+fn copilot_drops_tag_wrapped_prompts_and_merges_unanswered_requests() {
+    let d = tempfile::tempdir().unwrap();
+    let request = |id: &str, text: &str, reply: &str| {
+        let response = if reply.is_empty() {
+            json!([])
+        } else {
+            json!([{ "value": reply }])
+        };
+        copilot_request(id, text, response)
+    };
+    let mut no_text = request("r5", "", "");
+    no_text["message"] = json!({"parts":[{"text":"parts secret"}]});
+    write_json(
+        &d.path().join("workspaceStorage/h/chatSessions/tags.json"),
+        &copilot_session(
+            "tags",
+            1,
+            json!([
+                request("r1", "<context>\ntag secret\n</context>", ""),
+                request("r2", "  First real prompt\nmore  ", ""),
+                request("r3", "Wrap it in <b>bold</b> ok", "Done."),
+                request("r4", "Use <tag>x</tag> and then this", "Wrapped."),
+                no_text,
+                {"requestId":"r6","message":{"text":"No response yet"}},
+            ]),
+        ),
+    );
+    let history = wk_adapters::copilot_history::read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "injected context leaked: {all}");
+    let c = find(&history, "copilot:tags");
+    assert_eq!(c.title, "First real prompt");
+    let got: Vec<_> = c
+        .messages
+        .iter()
+        .map(|m| (m.id.as_str(), m.text.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (
+                "r2:u",
+                "First real prompt\nmore\n\nWrap it in <b>bold</b> ok"
+            ),
+            ("r3:a", "Done."),
+            ("r4:u", "Use <tag>x</tag> and then this"),
+            ("r4:a", "Wrapped."),
+            ("r6:u", "No response yet"),
+        ]
+    );
+    assert_eq!(
+        history.unreadable_records, 1,
+        "request without message text"
+    );
+    assert!(!c.complete);
+    assert_eq!(c.outcome.as_deref(), Some("Wrapped."));
+    assert_eq!(c.workspace, None);
+}
