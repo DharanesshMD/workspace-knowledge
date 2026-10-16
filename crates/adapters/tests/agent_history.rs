@@ -816,9 +816,9 @@ fn copilot_fixture(root: &Path) -> PathBuf {
                     LONG,
                     json!([
                         {"kind":"thinking","value":"thinking secret"},
-                        {"value":"Reading the ","supportThemeIcons":false},
-                        {"kind":"inlineReference","inlineReference":{"path":"/work/my app/secret.rs"},"name":"secret"},
-                        {"value":{"value":"limiter."}},
+                        {"value":"Reading ","supportThemeIcons":false},
+                        {"kind":"inlineReference","inlineReference":{"path":"/work/my app/secret/limiter.rs"},"name":"secret"},
+                        {"value":{"value":" now."}},
                         {"kind":"prepareToolInvocation","toolName":"read secret"},
                         {"kind":"toolInvocationSerialized","invocationMessage":"tool secret","pastTenseMessage":"tool secret"},
                         {"kind":"textEditGroup","uri":{"path":"/secret"},"edits":[[{"text":"edit secret"}]]},
@@ -937,7 +937,7 @@ fn copilot_reads_visible_prompts_and_replies_only() {
             (
                 "r1:a",
                 "assistant",
-                "Reading the limiter.\nDone: limiter fixed."
+                "Reading limiter.rs now.\nDone: limiter fixed."
             ),
             ("r2:u", "user", "Now add tests"),
             ("r2:a", "assistant", "Tests added."),
@@ -1456,4 +1456,229 @@ fn codex_reply_after_an_all_injected_user_message_merges_into_the_previous_reply
     );
     assert_eq!(history.dropped_injected, 1);
     assert!(c.complete);
+}
+
+#[test]
+fn copilot_inline_references_read_as_file_base_names() {
+    let d = tempfile::tempdir().unwrap();
+    let reference =
+        |r: Value| json!({"kind":"inlineReference","inlineReference":r,"name":"secret"});
+    write_json(
+        &d.path().join("workspaceStorage/h/chatSessions/refs.json"),
+        &copilot_session(
+            "refs",
+            1,
+            json!([copilot_request(
+                "r1",
+                "Where?",
+                json!([
+                    {"value":"See "},
+                    reference(json!({"$mid":1,"fsPath":"/w/secret/a.rs","path":"/w/secret/a.rs","scheme":"file"})),
+                    {"value":", "},
+                    reference(json!({"uri":{"path":"/w/secret/b.rs"},"range":{"startLineNumber":1}})),
+                    {"value":", "},
+                    reference(json!({"name":"secretSymbol","location":{"uri":{"path":"C:\\secret\\c.rs"}}})),
+                    {"value":" and"},
+                    reference(json!({"name":"secret only"})),
+                    reference(json!({"path":"/w/secret/.."})),
+                    {"value":" done."}
+                ]),
+            )]),
+        ),
+    );
+    let history = wk_adapters::copilot_history::read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "full paths or names leaked: {all}");
+    let c = find(&history, "copilot:refs");
+    assert_eq!(c.messages[1].text, "See a.rs, b.rs, c.rs and done.");
+    assert_eq!(history.unreadable_records, 0);
+    assert!(c.complete);
+}
+
+#[test]
+fn copilot_creation_date_accepts_floats_and_falls_back_to_the_first_request() {
+    let d = tempfile::tempdir().unwrap();
+    let chats = d.path().join("workspaceStorage/h/chatSessions");
+    let one = |id: &str, created: Value| {
+        let mut s = copilot_session(
+            id,
+            0,
+            json!([copilot_request("r1", "Q", json!([{"value":"A"}]))]),
+        );
+        s["creationDate"] = created;
+        s
+    };
+    write_json(
+        &chats.join("float.json"),
+        &one("float", json!(1_792_058_400_000.5_f64)),
+    );
+    write_json(&chats.join("missing.json"), &one("missing", Value::Null));
+    write_json(&chats.join("text.json"), &one("text", json!("yesterday")));
+    let history = wk_adapters::copilot_history::read(d.path()).unwrap();
+    assert_eq!(
+        find(&history, "copilot:float").created_at_ms,
+        Some(1_792_058_400_000)
+    );
+    for id in ["copilot:missing", "copilot:text"] {
+        assert_eq!(
+            find(&history, id).created_at_ms,
+            Some(1_792_058_401_000),
+            "{id}: first request timestamp"
+        );
+    }
+}
+
+#[test]
+fn copilot_failed_logs_fall_back_to_the_json_session_marked_incomplete() {
+    let d = tempfile::tempdir().unwrap();
+    let chats = d.path().join("workspaceStorage/h/chatSessions");
+    let session = |id: &str| {
+        copilot_session(
+            id,
+            1,
+            json!([copilot_request(
+                "r1",
+                "From json",
+                json!([{"value":"Reply"}])
+            )]),
+        )
+    };
+    write_lines(
+        &chats.join("headless.jsonl"),
+        &[json!({"kind":1,"k":["customTitle"],"v":"headless secret"}).to_string()],
+    );
+    write_json(&chats.join("headless.json"), &session("headless"));
+    std::fs::File::create(chats.join("big.jsonl"))
+        .unwrap()
+        .set_len(33 * 1024 * 1024)
+        .unwrap();
+    write_json(&chats.join("big.json"), &session("big"));
+    let history = wk_adapters::copilot_history::read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "{all}");
+    for id in ["copilot:big", "copilot:headless"] {
+        let c = find(&history, id);
+        let got: Vec<_> = c.messages.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(got, ["From json", "Reply"], "{id}");
+        assert!(!c.complete, "{id}: the newer log was not read");
+    }
+    assert_eq!(history.conversations.len(), 2);
+    assert_eq!(history.unreadable_records, 1, "headless log");
+    assert_eq!(history.skipped, 1, "oversized log");
+}
+
+#[test]
+fn copilot_sessions_copied_across_storage_folders_keep_the_newest() {
+    let d = tempfile::tempdir().unwrap();
+    let storage = d.path().join("workspaceStorage");
+    let write = |folder: &str, id: &str, prompt: &str, age_secs: u64| {
+        let path = storage
+            .join(folder)
+            .join("chatSessions")
+            .join(format!("{id}.json"));
+        write_json(
+            &path,
+            &copilot_session(
+                id,
+                1,
+                json!([copilot_request("r1", prompt, json!([{"value":"A"}]))]),
+            ),
+        );
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+    };
+    write("h1", "first", "Newest first", 10);
+    write("h2", "first", "Older first", 1_000);
+    write("h3", "second", "Older second", 1_000);
+    write("h4", "second", "Newest second", 10);
+    let history = wk_adapters::copilot_history::read(d.path()).unwrap();
+    let mut got: Vec<_> = history
+        .conversations
+        .iter()
+        .map(|c| (c.id.as_str(), c.messages[0].text.as_str()))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("copilot:first", "Newest first"),
+            ("copilot:second", "Newest second")
+        ]
+    );
+}
+
+#[test]
+fn copilot_log_paths_deeper_than_sixteen_components_are_unreadable() {
+    let d = tempfile::tempdir().unwrap();
+    // `{"d":{"d":…{}}}`, `n` levels deep.
+    let nest = |n: usize| "{\"d\":".repeat(n) + "{}" + &"}".repeat(n);
+    let mut snapshot = copilot_session(
+        "deep",
+        1,
+        json!([copilot_request("r1", "Q", json!([{"value":"A"}]))]),
+    );
+    snapshot["customTitle"] = serde_json::from_str(&nest(100)).unwrap();
+    let mut lines = vec![json!({"kind":0,"v":snapshot}).to_string()];
+    // Each op would hang 100 more levels below the last: 25,000 levels if paths were not capped.
+    let ops = 250;
+    let mut depth = 100;
+    for _ in 0..ops {
+        let path = std::iter::once("\"customTitle\"")
+            .chain(std::iter::repeat_n("\"d\"", depth + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        lines.push(format!("{{\"kind\":1,\"k\":[{path}],\"v\":{}}}", nest(99)));
+        depth += 100;
+    }
+    lines.push(json!({"kind":1,"k":["requests",0,"message","text"],"v":"Sixteen ok"}).to_string());
+    write_lines(
+        &d.path().join("workspaceStorage/h/chatSessions/deep.jsonl"),
+        &lines,
+    );
+    let history = wk_adapters::copilot_history::read(d.path()).unwrap();
+    assert_eq!(history.unreadable_records, ops);
+    let c = find(&history, "copilot:deep");
+    assert_eq!(c.messages[0].text, "Sixteen ok");
+    assert!(!c.complete);
+}
+
+#[test]
+fn copilot_log_replay_edge_cases() {
+    let d = tempfile::tempdir().unwrap();
+    let chats = d.path().join("workspaceStorage/h/chatSessions");
+    let request =
+        |id: &str, text: &str, reply: &str| copilot_request(id, text, json!([{ "value": reply }]));
+    let ops = [
+        json!({"kind":0,"v":copilot_session("old", 1, json!([request("r0", "stale secret", "stale secret")]))}),
+        // A snapshot mid-log replaces everything before it.
+        json!({"kind":0,"v":copilot_session("edges", 1_792_058_400_000_i64, json!([request("r1", "One", "Reply one")]))}),
+        // Replace an existing array element.
+        json!({"kind":1,"k":["requests",0],"v":request("r1", "First", "First reply")}),
+        // Truncating at the current length keeps everything, then appends.
+        json!({"kind":2,"k":["requests"],"i":1,"v":[request("r2", "Second", "Second reply")]}),
+        json!({"kind":2,"k":["requests",1,"response"],"i":1,"v":[{"value":" more"}]}),
+    ];
+    let lines: Vec<String> = ops.iter().map(Value::to_string).collect();
+    std::fs::create_dir_all(&chats).unwrap();
+    std::fs::write(chats.join("edges.jsonl"), lines.join("\r\n") + "\r\n").unwrap();
+    let history = wk_adapters::copilot_history::read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "{all}");
+    let ids: Vec<_> = history
+        .conversations
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(ids, ["copilot:edges"]);
+    let c = &history.conversations[0];
+    let got: Vec<_> = c.messages.iter().map(|m| m.text.as_str()).collect();
+    assert_eq!(got, ["First", "First reply", "Second", "Second reply more"]);
+    assert_eq!(c.created_at_ms, Some(1_792_058_400_000));
+    assert!(c.complete);
+    assert_eq!(history.unreadable_records, 0);
 }

@@ -263,7 +263,8 @@ pub(crate) fn rfc3339_ms(s: &str) -> Option<i64> {
 }
 
 /// The absolute local path of a `file:///…` URI with an empty or `localhost` authority,
-/// percent-decoded. Anything else (other schemes, hosts, queries, bad escapes) is `None`.
+/// percent-decoded. Anything else (other schemes, hosts, queries, bad escapes, `.` or `..`
+/// components that would move the path) is `None`.
 pub(crate) fn file_uri_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     let rest = rest.strip_prefix("localhost").unwrap_or(rest);
@@ -284,7 +285,7 @@ pub(crate) fn file_uri_path(uri: &str) -> Option<PathBuf> {
         }
     }
     let path = String::from_utf8(out).ok()?;
-    if path.contains('\0') {
+    if path.contains('\0') || path.split(['/', '\\']).any(|c| c == "." || c == "..") {
         return None;
     }
     // Windows folders look like `file:///c%3A/dir`.
@@ -386,6 +387,12 @@ mod tests {
             "file:///work/nul%00",
             "file:///work/app?x=1",
             "file:///work/app#frag",
+            "file:///work/../etc",
+            "file:///work/./app",
+            "file:///work/app/..",
+            "file:///work/%2E%2E/etc",
+            "file:///work/app%2F..%2Fx",
+            "file:///work/app%5C..%5Cx",
         ] {
             assert_eq!(file_uri_path(bad), None::<PathBuf>, "{bad}");
         }

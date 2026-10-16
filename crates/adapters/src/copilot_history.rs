@@ -2,7 +2,8 @@
 //!
 //! VS Code's storage is undocumented and changes between versions. Observed layout:
 //! `<User>/workspaceStorage/<hash>/chatSessions/<sessionId>.json`, one JSON document per
-//! session with `sessionId`, optional `customTitle`, `creationDate` (ms) and `requests[]`, and
+//! session with `sessionId`, optional `customTitle`, `creationDate` (ms, an integer or a float;
+//! the first request's `timestamp` when absent) and `requests[]`, and
 //! `<hash>/workspace.json` naming the folder (`{"folder":"file:///abs/path"}`). Each request
 //! carries the prompt in `message.text` and the reply as `response[]` parts.
 //!
@@ -11,14 +12,18 @@
 //! `path`) and `{"kind":2,"k":path,"v":[items]|null,"i":n}` (truncate the array at `path` to
 //! `n` when `i` is present, then append the items). Path components are object keys or array
 //! indexes. The log is replayed in memory and the result read like a `.json` session; malformed
-//! lines, unknown kinds and paths that do not resolve are counted and skipped. When a session
-//! has both files, only the log is read.
+//! lines, unknown kinds, paths that do not resolve and paths longer than 16 components (which
+//! would let repeated operations nest values without bound) are counted and skipped. When a
+//! session has both files the log is read; only if the log cannot be read at all (oversized,
+//! unreadable, no leading snapshot) is the `.json` read instead, marked incomplete. A session
+//! copied into several storage folders is imported once, from the most recently modified file.
 //!
 //! Only visible text is read: the prompt's `message.text` and markdown reply parts (parts
 //! without a `kind`, `markdownContent` or `markdownVuln`). Prompt `parts` and `variableData`
 //! (attached variables and files), the unsent draft in `inputState`, thinking, tool
-//! invocations, edits, code-block URIs, inline references, progress, confirmations,
-//! elicitations, commands, MCP notices, vulnerability details and error messages are ignored.
+//! invocations, edits, code-block URIs, progress, confirmations, elicitations, commands, MCP
+//! notices, vulnerability details and error messages are ignored. Inline references read as the
+//! referenced file's base name, never its path, so replies stay readable.
 //! Copilot keeps injected context in `variableData`, never in `message.text`, so a prompt is
 //! kept whole even when it is made of `<tag>…</tag>` blocks. Unknown part kinds are counted,
 //! never guessed. A failed or cancelled request keeps only the reply text it
@@ -28,26 +33,32 @@
 //! document and appends whole lines to a log, so a read racing a write at worst sees malformed
 //! JSON, which is counted as unreadable and never yields partial content.
 //!
-//! Known limits: only folder workspaces on the local disk are attributed (`file://` URIs);
-//! remote, multi-root and empty-window chats have no workspace.
+//! Known limits: only folder workspaces on the local disk are attributed (`file://` URIs without
+//! `.` or `..` components); remote, multi-root and empty-window chats have no workspace.
 use crate::cursor_history::{Conversation, History, Message};
 use crate::history_common::{file_uri_path, first_line, read_regular, session_id, title};
 use serde_json::Value;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_WORKSPACE_BYTES: u64 = 64 * 1024;
 const MAX_MESSAGES: usize = 5_000;
 const MAX_LOG_LINES: usize = 200_000;
+/// Longest log operation path applied. Paths only ever address a few levels into a session;
+/// capping them bounds how deep repeated operations can nest values, so a crafted log cannot
+/// build a tree deep enough to overflow the stack when it is dropped.
+const MAX_LOG_PATH: usize = 16;
 
 /// Response part kinds that never carry visible reply text.
-const HIDDEN_KINDS: [&str; 15] = [
+const HIDDEN_KINDS: [&str; 14] = [
     "thinking",
     "toolInvocationSerialized",
     "prepareToolInvocation",
     "textEditGroup",
     "codeblockUri",
-    "inlineReference",
     "undoStop",
     "progressTaskSerialized",
     "mcpServersStarting",
@@ -118,23 +129,49 @@ pub fn read(user_dir: &Path) -> Result<History, String> {
                 .extension()
                 .is_some_and(|e| e == "json" || e == "jsonl")
             {
-                sessions.push(path);
+                let modified = file.metadata().and_then(|m| m.modified()).ok();
+                sessions.push((path, modified));
             }
         }
-        let logs: Vec<PathBuf> = sessions
+        // A session stored both ways is read from its log; the `.json` is only a fallback.
+        let logged: HashSet<PathBuf> = sessions
             .iter()
-            .filter(|p| is_log(p))
-            .map(|p| p.with_extension(""))
+            .filter(|(p, _)| is_log(p))
+            .map(|(p, _)| p.with_extension(""))
             .collect();
-        sessions.retain(|p| is_log(p) || !logs.contains(&p.with_extension("")));
+        sessions.retain(|(p, _)| is_log(p) || !logged.contains(&p.with_extension("")));
         if !sessions.is_empty() {
             let workspace = workspace(&storage.path());
-            files.extend(sessions.into_iter().map(|s| (s, workspace.clone())));
+            files.extend(sessions.into_iter().map(|(file, modified)| {
+                let fallback = Some(file.with_extension("json"))
+                    .filter(|json| is_log(&file) && json.is_file());
+                (file, fallback, modified, workspace.clone())
+            }));
         }
     }
     files.sort();
-    for (file, workspace) in files {
-        read_session(&file, workspace, &mut history);
+    // The same session can be copied into several storage folders; keep the newest copy.
+    let mut newest: HashMap<String, (Option<SystemTime>, usize)> = HashMap::new();
+    for (file, fallback, modified, workspace) in files {
+        let Some(conversation) = read_session(&file, fallback.as_deref(), workspace, &mut history)
+        else {
+            continue;
+        };
+        match newest.get_mut(&conversation.id) {
+            Some((kept, index)) => {
+                if modified > *kept {
+                    *kept = modified;
+                    history.conversations[*index] = conversation;
+                }
+            }
+            None => {
+                newest.insert(
+                    conversation.id.clone(),
+                    (modified, history.conversations.len()),
+                );
+                history.conversations.push(conversation);
+            }
+        }
     }
     history
         .conversations
@@ -142,33 +179,21 @@ pub fn read(user_dir: &Path) -> Result<History, String> {
     Ok(history)
 }
 
-/// Read one session file into `history`. Oversized sessions count only as `skipped`;
-/// unreadable records (malformed files, requests without prompt text, unknown part kinds) are
-/// counted otherwise.
-fn read_session(file: &Path, workspace: Option<PathBuf>, history: &mut History) {
-    let bytes = match read_regular(file, MAX_FILE_BYTES) {
-        Ok(bytes) => bytes,
-        Err(refused) => {
-            refused.count(history);
-            return;
-        }
+/// Read one session file. Oversized sessions count only as `skipped`; unreadable records
+/// (malformed files, requests without prompt text, unknown part kinds) are counted otherwise.
+/// When a log cannot be read at all, its `fallback` `.json` copy is read instead and the
+/// conversation is marked incomplete, since the log holds the newer state.
+fn read_session(
+    file: &Path,
+    fallback: Option<&Path>,
+    workspace: Option<PathBuf>,
+    history: &mut History,
+) -> Option<Conversation> {
+    let ((session, mut gaps), fell_back) = match load(file, history) {
+        Some(loaded) => (loaded, false),
+        None => (load(fallback?, history)?, true),
     };
-    let (session, mut gaps) = if is_log(file) {
-        let Some(replayed) = replay(&bytes, history) else {
-            return;
-        };
-        replayed
-    } else {
-        let Ok(session) = serde_json::from_slice::<Value>(&bytes) else {
-            history.unreadable_records += 1;
-            return;
-        };
-        (session, 0)
-    };
-    let Some(requests) = session["requests"].as_array() else {
-        history.unreadable_records += 1;
-        return;
-    };
+    let requests = session["requests"].as_array()?;
     let id = session_id(session["sessionId"].as_str(), file);
     let mut messages: Vec<Message> = Vec::new();
     let mut outcome = None;
@@ -207,7 +232,7 @@ fn read_session(file: &Path, workspace: Option<PathBuf>, history: &mut History) 
                 _ => {
                     if messages.len() == MAX_MESSAGES {
                         history.skipped += 1;
-                        return;
+                        return None;
                     }
                     messages.push(Message {
                         id: format!("{request_id}:{suffix}"),
@@ -221,25 +246,64 @@ fn read_session(file: &Path, workspace: Option<PathBuf>, history: &mut History) 
     history.unreadable_records += gaps;
     if messages.is_empty() {
         history.empty_conversations += 1;
-        return;
+        return None;
     }
     let title = session["customTitle"]
         .as_str()
         .and_then(first_line)
         .unwrap_or_else(|| title(&messages));
-    let complete = gaps == 0 && messages.last().is_some_and(|m| m.role == "assistant");
-    history.conversations.push(Conversation {
+    let complete =
+        !fell_back && gaps == 0 && messages.last().is_some_and(|m| m.role == "assistant");
+    // Older sessions store `creationDate` as a float; without one, the first request's time.
+    let created_at_ms =
+        millis(&session["creationDate"]).or_else(|| millis(&requests.first()?["timestamp"]));
+    Some(Conversation {
         id: format!("copilot:{id}"),
         title,
         workspace,
-        created_at_ms: session["creationDate"].as_i64(),
+        created_at_ms,
         source: "copilot",
         messages,
         files_changed: vec![],
         files_read: vec![],
         outcome,
         complete,
-    });
+    })
+}
+
+/// The session in `file` and how many of its log lines could not be applied, or `None` (counted)
+/// when the file cannot be read or holds no `requests` list.
+fn load(file: &Path, history: &mut History) -> Option<(Value, usize)> {
+    let bytes = match read_regular(file, MAX_FILE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(refused) => {
+            refused.count(history);
+            return None;
+        }
+    };
+    let loaded = if is_log(file) {
+        replay(&bytes, history)?
+    } else {
+        let Ok(session) = serde_json::from_slice::<Value>(&bytes) else {
+            history.unreadable_records += 1;
+            return None;
+        };
+        (session, 0)
+    };
+    if !loaded.0["requests"].is_array() {
+        history.unreadable_records += 1;
+        return None;
+    }
+    Some(loaded)
+}
+
+/// Epoch milliseconds stored as an integer or a finite float.
+fn millis(value: &Value) -> Option<i64> {
+    value.as_i64().or_else(|| {
+        let f = value.as_f64().filter(|f| f.is_finite())?;
+        // Saturating, so out-of-range values clamp rather than wrap.
+        Some(f as i64)
+    })
 }
 
 /// Markdown reply parts concatenated as VS Code streams them. Where a hidden part separated two
@@ -249,10 +313,17 @@ fn reply_text(parts: &[Value], gaps: &mut usize) -> Option<String> {
     let mut separated = false;
     for part in parts {
         let piece = match part["kind"].as_str() {
-            None if part.get("kind").is_none() => markdown(&part["value"]),
-            Some("markdownContent" | "markdownVuln") => {
-                markdown(&part["content"]).or_else(|| markdown(&part["value"]))
-            }
+            None if part.get("kind").is_none() => markdown(&part["value"]).map(Cow::Borrowed),
+            Some("markdownContent" | "markdownVuln") => markdown(&part["content"])
+                .or_else(|| markdown(&part["value"]))
+                .map(Cow::Borrowed),
+            Some("inlineReference") => match reference_name(&part["inlineReference"]) {
+                Some(name) => Some(Cow::Owned(name)),
+                None => {
+                    separated = !text.is_empty();
+                    continue;
+                }
+            },
             Some(kind) if HIDDEN_KINDS.contains(&kind) => {
                 separated = !text.is_empty();
                 continue;
@@ -272,10 +343,20 @@ fn reply_text(parts: &[Value], gaps: &mut usize) -> Option<String> {
             text.push('\n');
         }
         separated = false;
-        text.push_str(piece);
+        text.push_str(&piece);
     }
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_owned())
+}
+
+/// The base name of the file an inline reference points at (a URI, a location or a symbol's
+/// location), never its full path or a display name. `None` when there is no usable name.
+fn reference_name(reference: &Value) -> Option<String> {
+    let uri = [reference, &reference["uri"], &reference["location"]["uri"]]
+        .into_iter()
+        .find_map(|uri| uri["path"].as_str().or_else(|| uri["fsPath"].as_str()))?;
+    let name = uri.rsplit(['/', '\\']).next()?;
+    (!matches!(name, "" | "." | "..")).then(|| name.to_owned())
 }
 
 fn is_log(file: &Path) -> bool {
@@ -315,7 +396,10 @@ fn replay(bytes: &[u8], history: &mut History) -> Option<(Value, usize)> {
 /// Apply one log operation to `session`; `false` (and no change) if it cannot be applied.
 fn apply(session: &mut Value, mut op: Value) -> bool {
     let value = op.get_mut("v").map(Value::take);
-    let path = op["k"].as_array().map(Vec::as_slice);
+    let path = op["k"]
+        .as_array()
+        .map(Vec::as_slice)
+        .filter(|path| path.len() <= MAX_LOG_PATH);
     match (op["kind"].as_u64(), path, value) {
         (Some(0), _, Some(value)) => *session = value,
         (Some(1), Some([parent @ .., key]), Some(value)) => match (resolve(session, parent), key) {
