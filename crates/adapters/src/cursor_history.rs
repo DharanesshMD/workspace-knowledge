@@ -637,9 +637,104 @@ pub fn redact(text: &str) -> String {
                 word
             });
         }
-        out.push_str(&rebuilt);
+        out.push_str(&mask_assignments(&rebuilt));
     }
     out
+}
+
+/// Names whose assigned value is a credential, matched case-insensitively as a whole name or
+/// as its last `_`, `-` or `.` separated part (`DB_PASSWORD`, `config.token`).
+const CREDENTIAL_KEYS: [&str; 14] = [
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "api-key",
+    "access_key",
+    "private_key",
+    "client_secret",
+    "auth",
+    "bearer",
+    "authorization",
+];
+
+/// Mask the value of every credential assignment in `line`, whatever its length, keeping the
+/// key: `key=value`, `key: value`, `"key": "value"` and `Authorization: Bearer value`. A value
+/// ends at whitespace, a quote, a comma or the end of the line.
+fn mask_assignments(line: &str) -> String {
+    let b = line.as_bytes();
+    let name_byte = |c: u8| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.');
+    let mut out = String::with_capacity(line.len());
+    let (mut copied, mut i) = (0, 0);
+    while i < b.len() {
+        if !name_byte(b[i]) || (i > 0 && name_byte(b[i - 1])) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && name_byte(b[i]) {
+            i += 1;
+        }
+        if credential_key(&line[start..i]) {
+            if let Some((from, to)) = assigned_value(b, i) {
+                out.push_str(&line[copied..from]);
+                out.push_str("[REDACTED]");
+                (copied, i) = (to, to);
+            }
+        }
+    }
+    out.push_str(&line[copied..]);
+    out
+}
+
+fn credential_key(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    CREDENTIAL_KEYS.iter().any(|key| {
+        name.strip_suffix(key)
+            .is_some_and(|rest| rest.is_empty() || rest.ends_with(['_', '-', '.']))
+    })
+}
+
+/// The byte range of the value assigned after a key ending at `i`, if there is one.
+fn assigned_value(b: &[u8], mut i: usize) -> Option<(usize, usize)> {
+    let skip_spaces = |mut i: usize| {
+        while i < b.len() && matches!(b[i], b' ' | b'\t') {
+            i += 1;
+        }
+        i
+    };
+    let is_quote = |c: u8| matches!(c, b'"' | b'\'' | b'`');
+    if b.get(i).copied().is_some_and(is_quote) {
+        i += 1;
+    }
+    i = skip_spaces(i);
+    if !matches!(b.get(i), Some(b'=' | b':')) || matches!(b.get(i + 1), Some(b'=' | b'/')) {
+        return None;
+    }
+    i = skip_spaces(i + 1);
+    if b.get(i).copied().is_some_and(is_quote) {
+        i += 1;
+    }
+    let end = |i: usize| {
+        (i..b.len())
+            .find(|&j| b[j].is_ascii_whitespace() || is_quote(b[j]) || b[j] == b',')
+            .unwrap_or(b.len())
+    };
+    let mut value_end = end(i);
+    // `Authorization: Bearer <value>`: keep the scheme, mask the credential after it.
+    let scheme = &b[i..value_end];
+    if ["bearer", "basic", "token"]
+        .iter()
+        .any(|s| scheme.eq_ignore_ascii_case(s.as_bytes()))
+        && b.get(value_end) == Some(&b' ')
+    {
+        i = skip_spaces(value_end);
+        value_end = end(i);
+    }
+    (value_end > i).then_some((i, value_end))
 }
 
 fn secret_like(word: &str) -> bool {

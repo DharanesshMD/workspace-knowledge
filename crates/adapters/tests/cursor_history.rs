@@ -73,6 +73,78 @@ fn redaction_masks_tokens_and_key_blocks_but_keeps_prose() {
 }
 
 #[test]
+fn redaction_masks_short_credential_assignments_but_keeps_the_key() {
+    for (input, want) in [
+        ("password=hunter2", "password=[REDACTED]"),
+        ("PASSWORD=hunter2 next", "PASSWORD=[REDACTED] next"),
+        ("DB_PASSWORD=hunter2", "DB_PASSWORD=[REDACTED]"),
+        (
+            "export GITHUB_TOKEN=abc123",
+            "export GITHUB_TOKEN=[REDACTED]",
+        ),
+        ("passwd: s3cret, user: me", "passwd: [REDACTED], user: me"),
+        ("pwd = x1", "pwd = [REDACTED]"),
+        ("Secret:abc", "Secret:[REDACTED]"),
+        ("token='t0k'", "token='[REDACTED]'"),
+        (
+            "api_key=k1 apikey=k2 api-key=k3",
+            "api_key=[REDACTED] apikey=[REDACTED] api-key=[REDACTED]",
+        ),
+        (
+            "access_key: a1\nprivate_key: p1",
+            "access_key: [REDACTED]\nprivate_key: [REDACTED]",
+        ),
+        ("client_secret=c1;", "client_secret=[REDACTED]"),
+        ("auth: xyz", "auth: [REDACTED]"),
+        ("bearer: b1", "bearer: [REDACTED]"),
+        (
+            r#"{"password": "hunter2", "user": "me"}"#,
+            r#"{"password": "[REDACTED]", "user": "me"}"#,
+        ),
+        (r#"{"token":"t1"}"#, r#"{"token":"[REDACTED]"}"#),
+        (
+            "Authorization: Bearer abc.def",
+            "Authorization: Bearer [REDACTED]",
+        ),
+        (
+            r#""Authorization": "Bearer abc""#,
+            r#""Authorization": "Bearer [REDACTED]""#,
+        ),
+        (
+            "authorization: Basic dXNlcg==",
+            "authorization: Basic [REDACTED]",
+        ),
+        ("config.password=x", "config.password=[REDACTED]"),
+        (
+            "pässword=x password=\u{e9}t\u{e9}",
+            "pässword=x password=[REDACTED]",
+        ),
+    ] {
+        assert_eq!(redact(input), want, "{input}");
+    }
+}
+
+#[test]
+fn redaction_leaves_credential_words_without_assignments_alone() {
+    for prose in [
+        "Reset the password for the admin account",
+        "The token budget is spent; auth is handled upstream",
+        "max_tokens=500 and author: Jane and tokens: 5",
+        "password=",
+        "password: \"\"",
+        "password == other",
+        "see https://x.test/secret/path",
+    ] {
+        assert_eq!(redact(prose), prose);
+    }
+    // Long tokens keep their existing whole-word masking.
+    assert_eq!(
+        redact("token=sk-SYNTHETICabcdef1234567890 ok"),
+        "[REDACTED] ok"
+    );
+}
+
+#[test]
 fn missing_directory_yields_empty_history() {
     let d = tempfile::tempdir().unwrap();
     assert!(read_with(d.path(), None).unwrap().conversations.is_empty());
