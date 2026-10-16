@@ -6,21 +6,29 @@
 //! `<hash>/workspace.json` naming the folder (`{"folder":"file:///abs/path"}`). Each request
 //! carries the prompt in `message.text` and the reply as `response[]` parts.
 //!
+//! Newer versions store a session as `<sessionId>.jsonl`, a mutation log: a `{"kind":0,"v":…}`
+//! snapshot of the same document, then `{"kind":1,"k":path,"v":value}` (set the value at
+//! `path`) and `{"kind":2,"k":path,"v":[items]|null,"i":n}` (truncate the array at `path` to
+//! `n` when `i` is present, then append the items). Path components are object keys or array
+//! indexes. The log is replayed in memory and the result read like a `.json` session; malformed
+//! lines, unknown kinds and paths that do not resolve are counted and skipped. When a session
+//! has both files, only the log is read.
+//!
 //! Only visible text is read: the prompt's `message.text` and markdown reply parts (parts
-//! without a `kind`, or `markdownContent`). Prompt `parts` and `variableData` (attached
-//! variables and files), thinking, tool invocations, edits, code-block URIs, inline references,
-//! progress, MCP notices and error messages are ignored. Prompts made entirely of
+//! without a `kind`, `markdownContent` or `markdownVuln`). Prompt `parts` and `variableData`
+//! (attached variables and files), the unsent draft in `inputState`, thinking, tool
+//! invocations, edits, code-block URIs, inline references, progress, confirmations,
+//! elicitations, commands, MCP notices, vulnerability details and error messages are ignored. Prompts made entirely of
 //! `<tag ...>…</tag>` blocks are injected context, not typed text, and are dropped. Unknown part
 //! kinds are counted, never guessed. A failed or cancelled request keeps only the reply text it
 //! produced. Symlinks are never followed out of the workspace storage directory.
 //!
-//! Session files are read in place rather than snapshotted: VS Code rewrites the whole
-//! document, so a read racing a write at worst sees malformed JSON, which is counted as an
-//! unreadable record and never yields partial content.
+//! Session files are read in place rather than snapshotted: VS Code rewrites a whole `.json`
+//! document and appends whole lines to a log, so a read racing a write at worst sees malformed
+//! JSON, which is counted as unreadable and never yields partial content.
 //!
 //! Known limits: only folder workspaces on the local disk are attributed (`file://` URIs);
-//! remote, multi-root and empty-window chats have no workspace. Newer `.jsonl` session logs
-//! use a different, unverified format: they are counted as `skipped`, not read.
+//! remote, multi-root and empty-window chats have no workspace.
 use crate::cursor_history::{Conversation, History, Message};
 use serde_json::Value;
 use std::io::Read;
@@ -29,9 +37,10 @@ use std::path::{Path, PathBuf};
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_WORKSPACE_BYTES: u64 = 64 * 1024;
 const MAX_MESSAGES: usize = 5_000;
+const MAX_LOG_LINES: usize = 200_000;
 
 /// Response part kinds that never carry visible reply text.
-const HIDDEN_KINDS: [&str; 9] = [
+const HIDDEN_KINDS: [&str; 15] = [
     "thinking",
     "toolInvocationSerialized",
     "prepareToolInvocation",
@@ -41,6 +50,12 @@ const HIDDEN_KINDS: [&str; 9] = [
     "undoStop",
     "progressTaskSerialized",
     "mcpServersStarting",
+    "notebookEditGroup",
+    "confirmation",
+    "progressMessage",
+    "elicitation",
+    "elicitationSerialized",
+    "command",
 ];
 
 /// The VS Code `User` directory for the current OS.
@@ -65,7 +80,8 @@ pub fn default_dir() -> Option<PathBuf> {
     .map(|base| base.join("Code").join("User"))
 }
 
-/// Read every `workspaceStorage/*/chatSessions/*.json` session below the `User` directory.
+/// Read every `workspaceStorage/*/chatSessions/*.{json,jsonl}` session below the `User`
+/// directory.
 pub fn read(user_dir: &Path) -> Result<History, String> {
     let entries = std::fs::read_dir(user_dir.join("workspaceStorage"))
         .map_err(|_| "VS Code workspace storage not found or unreadable")?;
@@ -97,12 +113,19 @@ pub fn read(user_dir: &Path) -> Result<History, String> {
             if !file.file_type().is_ok_and(|t| t.is_file()) {
                 continue;
             }
-            match path.extension().and_then(|e| e.to_str()) {
-                Some("json") => sessions.push(path),
-                Some("jsonl") => history.skipped += 1,
-                _ => {}
+            if path
+                .extension()
+                .is_some_and(|e| e == "json" || e == "jsonl")
+            {
+                sessions.push(path);
             }
         }
+        let logs: Vec<PathBuf> = sessions
+            .iter()
+            .filter(|p| is_log(p))
+            .map(|p| p.with_extension(""))
+            .collect();
+        sessions.retain(|p| is_log(p) || !logs.contains(&p.with_extension("")));
         if !sessions.is_empty() {
             let workspace = workspace(&storage.path());
             files.extend(sessions.into_iter().map(|s| (s, workspace.clone())));
@@ -125,9 +148,17 @@ fn read_session(file: &Path, workspace: Option<PathBuf>, history: &mut History) 
     let Some(bytes) = read_regular(file, MAX_FILE_BYTES, history) else {
         return;
     };
-    let Ok(session) = serde_json::from_slice::<Value>(&bytes) else {
-        history.unreadable_records += 1;
-        return;
+    let (session, mut gaps) = if is_log(file) {
+        let Some(replayed) = replay(&bytes, history) else {
+            return;
+        };
+        replayed
+    } else {
+        let Ok(session) = serde_json::from_slice::<Value>(&bytes) else {
+            history.unreadable_records += 1;
+            return;
+        };
+        (session, 0)
     };
     let Some(requests) = session["requests"].as_array() else {
         history.unreadable_records += 1;
@@ -147,7 +178,6 @@ fn read_session(file: &Path, workspace: Option<PathBuf>, history: &mut History) 
         );
     let mut messages: Vec<Message> = Vec::new();
     let mut outcome = None;
-    let mut gaps = 0;
     for (index, request) in requests.iter().enumerate() {
         let request_id = request["requestId"]
             .as_str()
@@ -232,7 +262,7 @@ fn reply_text(parts: &[Value], gaps: &mut usize) -> Option<String> {
     for part in parts {
         let piece = match part["kind"].as_str() {
             None if part.get("kind").is_none() => markdown(&part["value"]),
-            Some("markdownContent") => {
+            Some("markdownContent" | "markdownVuln") => {
                 markdown(&part["content"]).or_else(|| markdown(&part["value"]))
             }
             Some(kind) if HIDDEN_KINDS.contains(&kind) => {
@@ -258,6 +288,98 @@ fn reply_text(parts: &[Value], gaps: &mut usize) -> Option<String> {
     }
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_owned())
+}
+
+fn is_log(file: &Path) -> bool {
+    file.extension().is_some_and(|e| e == "jsonl")
+}
+
+/// The session a `.jsonl` mutation log describes, and how many of its lines could not be
+/// applied. Logs without a leading snapshot count as unreadable; overlong logs as `skipped`.
+fn replay(bytes: &[u8], history: &mut History) -> Option<(Value, usize)> {
+    let lines = || {
+        bytes
+            .split(|b| *b == b'\n')
+            .filter(|l| !l.iter().all(u8::is_ascii_whitespace))
+    };
+    if lines().count() > MAX_LOG_LINES {
+        history.skipped += 1;
+        return None;
+    }
+    let mut lines = lines().map(serde_json::from_slice::<Value>);
+    let snapshot = match lines.next() {
+        Some(Ok(mut first)) if first["kind"] == 0 => first.get_mut("v").map(Value::take),
+        _ => None,
+    };
+    let Some(mut session) = snapshot else {
+        history.unreadable_records += 1;
+        return None;
+    };
+    let mut gaps = 0;
+    for op in lines {
+        if !op.is_ok_and(|op| apply(&mut session, op)) {
+            gaps += 1;
+        }
+    }
+    Some((session, gaps))
+}
+
+/// Apply one log operation to `session`; `false` (and no change) if it cannot be applied.
+fn apply(session: &mut Value, mut op: Value) -> bool {
+    let value = op.get_mut("v").map(Value::take);
+    let path = op["k"].as_array().map(Vec::as_slice);
+    match (op["kind"].as_u64(), path, value) {
+        (Some(0), _, Some(value)) => *session = value,
+        (Some(1), Some([parent @ .., key]), Some(value)) => match (resolve(session, parent), key) {
+            (Some(Value::Object(map)), Value::String(key)) => {
+                map.insert(key.clone(), value);
+            }
+            (Some(Value::Array(items)), Value::Number(n)) => {
+                let Some(slot) = n
+                    .as_u64()
+                    .and_then(|i| items.get_mut(usize::try_from(i).ok()?))
+                else {
+                    return false;
+                };
+                *slot = value;
+            }
+            _ => return false,
+        },
+        (Some(2), Some(path), Some(value)) => {
+            let Some(Value::Array(items)) = resolve(session, path) else {
+                return false;
+            };
+            let added = match value {
+                Value::Array(added) => added,
+                Value::Null => Vec::new(),
+                _ => return false,
+            };
+            match &op["i"] {
+                Value::Null => {}
+                i => match i.as_u64().and_then(|i| usize::try_from(i).ok()) {
+                    Some(i) if i <= items.len() => items.truncate(i),
+                    _ => return false,
+                },
+            }
+            items.extend(added);
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// The value at `path` (object keys and array indexes) inside `value`.
+fn resolve<'a>(mut value: &'a mut Value, path: &[Value]) -> Option<&'a mut Value> {
+    for key in path {
+        value = match (value, key) {
+            (Value::Object(map), Value::String(key)) => map.get_mut(key)?,
+            (Value::Array(items), Value::Number(n)) => {
+                items.get_mut(usize::try_from(n.as_u64()?).ok()?)?
+            }
+            _ => return None,
+        };
+    }
+    Some(value)
 }
 
 /// A markdown string: either a string or an object with a string `value`.

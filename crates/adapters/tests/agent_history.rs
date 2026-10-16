@@ -770,7 +770,7 @@ fn copilot_fixture(root: &Path) -> PathBuf {
             ]),
         ),
     );
-    // A future layout and an empty session.
+    // An empty session, and a session log whose snapshot is not a session.
     let mut empty = copilot_session("empty", 1_792_058_400_000, json!([]));
     empty["customTitle"] = json!("Empty secret");
     write_json(&chats.join("empty.json"), &empty);
@@ -912,11 +912,11 @@ fn copilot_reads_visible_prompts_and_replies_only() {
     assert_eq!(partial.outcome.as_deref(), Some("Half."));
     assert!(!partial.complete, "unknown part and failed last request");
     assert_eq!(
-        history.unreadable_records, 2,
-        "unknown part kind and malformed file are counted, never guessed"
+        history.unreadable_records, 3,
+        "unknown part kind, malformed file and bad log snapshot are counted, never guessed"
     );
     assert_eq!(history.empty_conversations, 1);
-    assert_eq!(history.skipped, 2, "oversized and .jsonl files skipped");
+    assert_eq!(history.skipped, 1, "oversized file skipped");
 
     for id in ["copilot:s3", "copilot:s4"] {
         assert_eq!(find(&history, id).workspace, None, "{id}");
@@ -1091,4 +1091,147 @@ fn copilot_drops_tag_wrapped_prompts_and_merges_unanswered_requests() {
     assert!(!c.complete);
     assert_eq!(c.outcome.as_deref(), Some("Wrapped."));
     assert_eq!(c.workspace, None);
+}
+
+fn write_lines(path: &Path, lines: &[String]) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, lines.join("\n") + "\n").unwrap();
+}
+
+#[test]
+fn copilot_replays_session_logs_and_never_reads_input_state() {
+    let d = tempfile::tempdir().unwrap();
+    let chats = d.path().join("workspaceStorage/h/chatSessions");
+    let mut snapshot = copilot_session(
+        "log",
+        1_792_058_400_000,
+        json!([copilot_request(
+            "r1",
+            "First prompt",
+            json!([
+                {"kind":"notebookEditGroup","uri":{"path":"/nb/secret"},"edits":[["notebook secret"]]},
+                {"kind":"confirmation","title":"confirm secret","message":"confirm secret"},
+                {"kind":"progressMessage","content":{"value":"progress secret"}},
+                {"kind":"elicitation","title":"elicit secret"},
+                {"kind":"elicitationSerialized","title":"elicit secret"},
+                {"kind":"command","command":{"title":"command secret"}},
+                {"value":"First reply"}
+            ]),
+        )]),
+    );
+    snapshot["inputState"] = json!({"inputText":"draft secret","attachments":["attach secret"]});
+    let second = copilot_request("r2", "Second prompt", json!([]));
+    let ops = [
+        json!({"kind":0,"v":snapshot}),
+        json!({"kind":2,"k":["requests"],"v":[second]}),
+        json!({"kind":2,"k":["requests",1,"response"],"v":[{"value":"Streaming draft"}]}),
+        // Streaming replaces the response from index 0.
+        json!({"kind":2,"k":["requests",1,"response"],"i":0,
+               "v":[{"value":"Final "},{"kind":"thinking","value":"thinking secret"}]}),
+        json!({"kind":2,"k":["requests",1,"response"],"v":[
+            {"kind":"markdownVuln","content":{"value":"answer."},
+             "vulnerabilities":[{"title":"vuln secret","description":"vuln secret"}]}
+        ]}),
+        json!({"kind":2,"k":["requests",1,"response"],"v":null}),
+        json!({"kind":1,"k":["requests",1,"result"],"v":{"metadata":{"x":"metadata secret"}}}),
+        json!({"kind":1,"k":["inputState","inputText"],"v":"draft secret two"}),
+        json!({"kind":1,"k":["customTitle"],"v":"Logged title"}),
+    ];
+    let lines: Vec<String> = ops.iter().map(Value::to_string).collect();
+    write_lines(&chats.join("log.jsonl"), &lines);
+    // A session stored both ways is read once, from the log.
+    write_json(
+        &chats.join("log.json"),
+        &copilot_session(
+            "log",
+            1,
+            json!([copilot_request("r1", "stale secret", json!([]))]),
+        ),
+    );
+    let history = wk_adapters::copilot_history::read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(
+        !all.contains("secret"),
+        "hidden or draft content leaked: {all}"
+    );
+    assert!(!all.contains("Streaming draft"), "spliced parts must go");
+    assert_eq!(history.conversations.len(), 1);
+    let c = find(&history, "copilot:log");
+    let got: Vec<_> = c
+        .messages
+        .iter()
+        .map(|m| (m.id.as_str(), m.text.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("r1:u", "First prompt"),
+            ("r1:a", "First reply"),
+            ("r2:u", "Second prompt"),
+            ("r2:a", "Final answer."),
+        ]
+    );
+    assert_eq!(c.title, "Logged title");
+    assert_eq!(c.created_at_ms, Some(1_792_058_400_000));
+    assert_eq!(c.outcome.as_deref(), Some("Final answer."));
+    assert!(c.complete);
+    assert_eq!(
+        history.unreadable_records, 0,
+        "known kinds are not unreadable"
+    );
+    assert_eq!(history.skipped, 0);
+}
+
+#[test]
+fn copilot_counts_bad_log_lines_and_bounds_logs() {
+    let d = tempfile::tempdir().unwrap();
+    let chats = d.path().join("workspaceStorage/h/chatSessions");
+    let snapshot = copilot_session(
+        "bad",
+        1,
+        json!([copilot_request("r1", "Prompt", json!([{"value":"Reply"}]))]),
+    );
+    let mut lines: Vec<String> = [
+        json!({"kind":0,"v":snapshot}),
+        json!({"kind":9,"k":["requests"],"v":[]}),
+        json!({"kind":1,"k":["requests",5,"result"],"v":{}}),
+        json!({"kind":1,"k":["requests","x"],"v":{}}),
+        json!({"kind":2,"k":["sessionId"],"v":[1]}),
+        json!({"kind":2,"k":["requests"],"v":[],"i":99}),
+        json!({"kind":2,"k":["requests"],"v":"not a list"}),
+    ]
+    .iter()
+    .map(Value::to_string)
+    .collect();
+    lines.insert(1, "{not json".into());
+    lines.push(json!({"kind":2,"k":["requests"],"v":[copilot_request("r2", "Later", json!([{"value":"Later reply"}]))]}).to_string());
+    write_lines(&chats.join("bad.jsonl"), &lines);
+    // A log must start with a snapshot.
+    write_lines(
+        &chats.join("headless.jsonl"),
+        &[json!({"kind":1,"k":["customTitle"],"v":"headless secret"}).to_string()],
+    );
+    // Logs over 200,000 lines are skipped.
+    let op = json!({"kind":1,"k":["customTitle"],"v":"t"}).to_string();
+    let mut long = vec![json!({"kind":0,"v":copilot_session("long", 1, json!([]))}).to_string()];
+    long.extend(std::iter::repeat_n(op, 200_000));
+    write_lines(&chats.join("long.jsonl"), &long);
+    let history = wk_adapters::copilot_history::read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "{all}");
+    let ids: Vec<_> = history
+        .conversations
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(ids, ["copilot:bad"]);
+    let c = &history.conversations[0];
+    let got: Vec<_> = c.messages.iter().map(|m| m.text.as_str()).collect();
+    assert_eq!(got, ["Prompt", "Reply", "Later", "Later reply"]);
+    assert!(!c.complete, "a log with bad lines is never complete");
+    assert_eq!(
+        history.unreadable_records, 8,
+        "malformed line, unknown kind, four unresolvable ops, bad push value, headless log"
+    );
+    assert_eq!(history.skipped, 1);
 }
