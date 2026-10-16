@@ -648,3 +648,68 @@ fn codex_missing_sessions_dir_is_an_error() {
     let d = tempfile::tempdir().unwrap();
     assert!(wk_adapters::codex_history::read(&d.path().join("absent")).is_err());
 }
+
+#[test]
+fn codex_drops_tag_wrapped_injected_parts_and_keeps_real_prompts() {
+    let d = tempfile::tempdir().unwrap();
+    let t = "2026-10-15T10:00:00Z";
+    let parts = |texts: &[&str]| {
+        let content: Vec<Value> = texts
+            .iter()
+            .map(|text| json!({"type":"input_text","text":text}))
+            .collect();
+        codex(
+            t,
+            "response_item",
+            json!({"type":"message","role":"user","content":content}),
+        )
+    };
+    let reply = |text: &str| {
+        codex(
+            t,
+            "response_item",
+            codex_msg("assistant", "output_text", text),
+        )
+    };
+    write_jsonl(
+        &d.path().join("2026/10/15/tags.jsonl"),
+        &[
+            codex_meta(t, "tags", "/work/app"),
+            parts(&["<some_new_context>\nnew context secret\n</some_new_context>"]),
+            parts(&["  <a-b k=\"v\">attr secret</a-b>\n\n<C9>second block secret</C9>  "]),
+            parts(&[
+                "<user_instructions>instructions secret</user_instructions>",
+                "Real prompt first line\nmore",
+                "# AGENTS.md instructions for /work/app\n\n<INSTRUCTIONS>agents secret</INSTRUCTIONS>",
+            ]),
+            reply("Done."),
+            parts(&["Please wrap the output in <tag> like <b>this</b> ok"]),
+            parts(&["<note>context</note> and then real text"]),
+            reply("Wrapped."),
+        ],
+    );
+    let history = wk_adapters::codex_history::read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "injected context leaked: {all}");
+    let c = find(&history, "codex:tags");
+    assert_eq!(c.title, "Real prompt first line");
+    let got: Vec<_> = c
+        .messages
+        .iter()
+        .map(|m| (m.id.as_str(), m.text.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("u1", "Real prompt first line\nmore"),
+            ("a1", "Done."),
+            (
+                "u2",
+                "Please wrap the output in <tag> like <b>this</b> ok\n\n<note>context</note> and then real text"
+            ),
+            ("a2", "Wrapped."),
+        ]
+    );
+    assert_eq!(history.unreadable_records, 0);
+    assert!(c.complete);
+}

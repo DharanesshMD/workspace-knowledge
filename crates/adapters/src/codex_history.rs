@@ -7,9 +7,16 @@
 //!
 //! Only visible text is read: typed prompts and reply text. Developer and system messages,
 //! context Codex injects as user messages, reasoning, tool calls and their output, events and
-//! turn context are ignored. Messages with an unknown role are counted, never guessed. Symlinks
-//! are never followed out of the sessions directory.
-use crate::claude_history::{rfc3339_ms, title};
+//! turn context are ignored. Injected context is dropped per content part: parts starting with
+//! a known marker, and parts made up entirely of `<tag ...>…</tag>` blocks. Messages with an
+//! unknown role are counted, never guessed. Symlinks are never followed out of the sessions
+//! directory.
+//!
+//! Known limits: `archived_sessions` is not read. Sub-agent threads Codex spawns are stored as
+//! their own session files and are imported as ordinary sessions (how `session_meta` marks
+//! them is not confirmed). A forked session copies its parent's history into a new file, so
+//! the same exchanges can appear in two conversations.
+use crate::claude_history::rfc3339_ms;
 use crate::cursor_history::{Conversation, History, Message};
 use serde_json::Value;
 use std::io::BufRead;
@@ -153,10 +160,8 @@ fn read_session(file: &Path, history: &mut History) {
             .iter()
             .filter(|p| p["type"] == "input_text" || p["type"] == "output_text")
             .filter_map(|p| p["text"].as_str())
+            .filter(|t| role == "assistant" || !injected(t))
             .collect();
-        if role == "user" && texts.iter().any(|t| injected(t)) {
-            continue;
-        }
         let text = texts.join("\n").trim().to_string();
         if text.is_empty() {
             continue;
@@ -196,7 +201,12 @@ fn read_session(file: &Path, history: &mut History) {
         }
         return;
     }
-    let title = title(&messages);
+    let title = messages
+        .iter()
+        .find(|m| m.role == "user")
+        .and_then(|m| m.text.lines().find(|l| !l.trim().is_empty()))
+        .map(|l| l.trim().chars().take(80).collect())
+        .unwrap_or_else(|| "Untitled chat".into());
     let complete = gaps == 0 && messages.last().is_some_and(|m| m.role == "assistant");
     history.conversations.push(Conversation {
         id: format!("codex:{session}"),
@@ -212,11 +222,46 @@ fn read_session(file: &Path, history: &mut History) {
     });
 }
 
-/// Whether a user text part is context Codex injected rather than a typed prompt.
+/// Whether a user text part is context Codex injected rather than a typed prompt: it starts
+/// with a known marker or consists only of tag-wrapped blocks.
 fn injected(text: &str) -> bool {
-    let text = text.trim_start();
+    let start = text.trim_start();
     INJECTED.iter().any(|marker| {
-        text.get(..marker.len())
-            .is_some_and(|start| start.eq_ignore_ascii_case(marker))
-    })
+        start
+            .get(..marker.len())
+            .is_some_and(|s| s.eq_ignore_ascii_case(marker))
+    }) || tag_wrapped(text)
+}
+
+/// Whether `text`, trimmed, is one or more `<tag ...>…</tag>` blocks separated only by
+/// whitespace. Tag names match `[A-Za-z][A-Za-z0-9_-]*`; any other text keeps the part.
+fn tag_wrapped(text: &str) -> bool {
+    let mut rest = text.trim();
+    if rest.is_empty() {
+        return false;
+    }
+    while !rest.is_empty() {
+        let Some(open) = rest.strip_prefix('<') else {
+            return false;
+        };
+        let len = open
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .unwrap_or(open.len());
+        let (name, after) = open.split_at(len);
+        if !name.starts_with(|c: char| c.is_ascii_alphabetic())
+            || !after.starts_with(|c: char| c == '>' || c.is_whitespace())
+        {
+            return false;
+        }
+        let Some(gt) = after.find('>') else {
+            return false;
+        };
+        let body = &after[gt + 1..];
+        let close = format!("</{name}>");
+        let Some(end) = body.find(&close) else {
+            return false;
+        };
+        rest = body[end + close.len()..].trim_start();
+    }
+    true
 }
