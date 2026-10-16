@@ -19,7 +19,7 @@
 //! them is not confirmed). A forked session copies its parent's history into a new file, so
 //! the same exchanges can appear in two conversations.
 use crate::cursor_history::{Conversation, History, Message};
-use crate::history_common::{injected_tag_blocks, rfc3339_ms, title, Lines, Refused};
+use crate::history_common::{injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Refused};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -98,11 +98,7 @@ fn read_session(file: &Path, history: &mut History) {
             return;
         }
     };
-    let mut session = file
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
+    let mut session = None;
     let mut messages: Vec<Message> = Vec::new();
     let mut counts = (0, 0);
     let mut workspace = None;
@@ -138,9 +134,7 @@ fn read_session(file: &Path, history: &mut History) {
         match v["type"].as_str() {
             Some("session_meta") if !saw_meta => {
                 saw_meta = true;
-                if let Some(id) = payload["id"].as_str().filter(|s| !s.is_empty()) {
-                    session = id.to_owned();
-                }
+                session = payload["id"].as_str().map(str::to_owned);
                 workspace = payload["cwd"]
                     .as_str()
                     .filter(|s| !s.is_empty())
@@ -216,7 +210,7 @@ fn read_session(file: &Path, history: &mut History) {
     let title = title(&messages);
     let complete = gaps == 0 && messages.last().is_some_and(|m| m.role == "assistant");
     history.conversations.push(Conversation {
-        id: format!("codex:{session}"),
+        id: format!("codex:{}", session_id(session.as_deref(), file)),
         title,
         workspace,
         created_at_ms,

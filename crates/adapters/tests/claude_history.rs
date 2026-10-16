@@ -332,3 +332,17 @@ fn developer_xml_prompts_are_kept_and_injected_parts_counted() {
     );
     assert_eq!(history.unreadable_records, 0);
 }
+
+#[test]
+fn session_file_stems_that_are_not_safe_ids_are_hashed() {
+    let d = tempfile::tempdir().unwrap();
+    let records = bytes(&[user("u1", json!("Prompt")), reply("a1", "Reply")]);
+    write_lines(&d.path().join("-work-app/bad name.jsonl"), &records, b"\n");
+    let history = read(d.path()).unwrap();
+    let id = &history.conversations[0].id;
+    let hash = id.strip_prefix("claude-code:").unwrap();
+    assert!(
+        hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit()),
+        "{id}"
+    );
+}

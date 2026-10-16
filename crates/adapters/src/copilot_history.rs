@@ -31,7 +31,7 @@
 //! Known limits: only folder workspaces on the local disk are attributed (`file://` URIs);
 //! remote, multi-root and empty-window chats have no workspace.
 use crate::cursor_history::{Conversation, History, Message};
-use crate::history_common::{file_uri_path, first_line, read_regular, title};
+use crate::history_common::{file_uri_path, first_line, read_regular, session_id, title};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -169,18 +169,7 @@ fn read_session(file: &Path, workspace: Option<PathBuf>, history: &mut History) 
         history.unreadable_records += 1;
         return;
     };
-    let id = session["sessionId"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map_or_else(
-            || {
-                file.file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into()
-            },
-            str::to_owned,
-        );
+    let id = session_id(session["sessionId"].as_str(), file);
     let mut messages: Vec<Message> = Vec::new();
     let mut outcome = None;
     for (index, request) in requests.iter().enumerate() {

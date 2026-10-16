@@ -1,6 +1,7 @@
 //! Helpers shared by the Claude Code, Codex and Copilot history readers: bounded, symlink-safe
 //! file reads, titles, RFC 3339 timestamps, the tag-wrapped part rule and `file://` URIs.
 use crate::cursor_history::{History, Message};
+use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Take};
 use std::path::{Path, PathBuf};
@@ -155,6 +156,28 @@ pub(crate) fn injected_tag_blocks(s: &str) -> bool {
         rest = body[end + close.len()..].trim_start();
     }
     tool_style
+}
+
+/// A session id safe to use in conversation ids and file names: `candidate` if it matches
+/// `[A-Za-z0-9._-]{1,128}` and is not `.` or `..`, else `file`'s stem under the same rule, else
+/// the first 16 hex digits of the SHA-256 of `file`'s name.
+pub(crate) fn session_id(candidate: Option<&str>, file: &Path) -> String {
+    let safe = |s: &str| {
+        (1..=128).contains(&s.len())
+            && s != "."
+            && s != ".."
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    if let Some(id) = candidate.filter(|id| safe(id)) {
+        return id.to_owned();
+    }
+    let stem = file.file_stem().unwrap_or_default().to_string_lossy();
+    if safe(&stem) {
+        return stem.into_owned();
+    }
+    let digest = Sha256::digest(file.file_name().unwrap_or_default().as_encoded_bytes());
+    digest[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Milliseconds since the Unix epoch for an RFC 3339 timestamp such as
@@ -358,6 +381,33 @@ mod tests {
         ] {
             assert_eq!(file_uri_path(bad), None::<PathBuf>, "{bad}");
         }
+    }
+
+    #[test]
+    fn session_ids_fall_back_to_the_stem_then_a_hash() {
+        let file = Path::new("dir/stem.jsonl");
+        assert_eq!(session_id(Some("Ab9._-x"), file), "Ab9._-x");
+        assert_eq!(session_id(Some(&"x".repeat(128)), file).len(), 128);
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../x",
+            "a/b",
+            "a\\b",
+            "a:b",
+            "a b",
+            "é",
+            &"x".repeat(129),
+        ] {
+            assert_eq!(session_id(Some(bad), file), "stem", "{bad:?}");
+        }
+        assert_eq!(session_id(None, file), "stem");
+        let hashed = session_id(Some("../x"), Path::new("dir/bad name.jsonl"));
+        assert_eq!(hashed.len(), 16);
+        assert!(hashed.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(hashed, session_id(None, Path::new("dir/bad name2.jsonl")));
+        assert_eq!(session_id(None, Path::new("..")).len(), 16);
     }
 
     #[test]

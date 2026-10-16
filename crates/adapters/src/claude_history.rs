@@ -19,7 +19,7 @@
 //! concurrent write can at worst leave a partial last line, which is counted as a malformed
 //! record and marks the session incomplete. Copying would add I/O without a consistency gain.
 use crate::cursor_history::{Conversation, History, Message};
-use crate::history_common::{injected_tag_blocks, rfc3339_ms, title, Lines, Refused};
+use crate::history_common::{injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Refused};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -94,11 +94,7 @@ fn read_session(file: &Path, history: &mut History) {
             return;
         }
     };
-    let session = file
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
+    let session = session_id(None, file);
     let mut messages: Vec<Message> = Vec::new();
     let mut workspace = None;
     let mut created_at_ms = None;

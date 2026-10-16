@@ -1302,3 +1302,71 @@ fn copilot_counts_bad_log_lines_and_bounds_logs() {
     );
     assert_eq!(history.skipped, 1);
 }
+
+/// `<source>:` followed by 16 lowercase hex digits: the hashed fallback session id.
+fn is_hashed(id: &str, source: &str) -> bool {
+    id.strip_prefix(source)
+        .and_then(|h| h.strip_prefix(':'))
+        .is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+#[test]
+fn codex_session_ids_are_validated_with_file_stem_and_hash_fallbacks() {
+    let d = tempfile::tempdir().unwrap();
+    let t = "2026-10-15T10:00:00Z";
+    let session = |id: &str| {
+        [
+            codex_meta(t, id, "/work/app"),
+            codex(t, "response_item", codex_msg("user", "input_text", "Q")),
+            codex(
+                t,
+                "response_item",
+                codex_msg("assistant", "output_text", "A"),
+            ),
+        ]
+    };
+    let dir = d.path().join("2026/10/15");
+    write_jsonl(&dir.join("ok.jsonl"), &session("Ab9._-id"));
+    write_jsonl(&dir.join("traversal.jsonl"), &session("../../x"));
+    write_jsonl(&dir.join("windows.jsonl"), &session("a:b*c?<d>|\"e\\f"));
+    write_jsonl(&dir.join("dots.jsonl"), &session(".."));
+    write_jsonl(&dir.join("long.jsonl"), &session(&"x".repeat(129)));
+    write_jsonl(&dir.join("bad name.jsonl"), &session("../y"));
+    let history = wk_adapters::codex_history::read(d.path()).unwrap();
+    let mut ids: Vec<_> = history.conversations.iter().map(|c| c.id.clone()).collect();
+    ids.sort();
+    assert_eq!(ids.len(), 6, "{ids:?}");
+    assert!(is_hashed(&ids[0], "codex"), "{ids:?}");
+    assert_eq!(
+        ids[1..],
+        [
+            "codex:Ab9._-id",
+            "codex:dots",
+            "codex:long",
+            "codex:traversal",
+            "codex:windows"
+        ]
+    );
+}
+
+#[test]
+fn copilot_session_ids_are_validated_with_file_stem_and_hash_fallbacks() {
+    let d = tempfile::tempdir().unwrap();
+    let chats = d.path().join("workspaceStorage/h/chatSessions");
+    let session = |id: &str| {
+        copilot_session(
+            id,
+            1,
+            json!([copilot_request("r1", "Q", json!([{"value":"A"}]))]),
+        )
+    };
+    write_json(&chats.join("traversal.json"), &session("../../x"));
+    write_json(&chats.join("windows.json"), &session("a:b*c?<d>|"));
+    write_json(&chats.join("bad name.json"), &session("."));
+    let history = wk_adapters::copilot_history::read(d.path()).unwrap();
+    let mut ids: Vec<_> = history.conversations.iter().map(|c| c.id.clone()).collect();
+    ids.sort();
+    assert_eq!(ids.len(), 3, "{ids:?}");
+    assert!(is_hashed(&ids[0], "copilot"), "{ids:?}");
+    assert_eq!(ids[1..], ["copilot:traversal", "copilot:windows"]);
+}
