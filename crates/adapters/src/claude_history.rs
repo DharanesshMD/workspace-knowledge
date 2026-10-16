@@ -48,7 +48,11 @@ pub fn read(projects_dir: &Path) -> Result<History, String> {
             history.unreadable_records += 1;
             continue;
         };
-        if !project.file_type().is_ok_and(|t| t.is_dir()) {
+        let Ok(kind) = project.file_type() else {
+            history.unreadable_records += 1;
+            continue;
+        };
+        if !kind.is_dir() {
             continue;
         }
         let Ok(dir) = std::fs::read_dir(project.path()) else {
@@ -282,12 +286,26 @@ fn joined<'a>(parts: impl Iterator<Item = &'a str>) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// Openings of blocks Claude Code injects into user records, dropped even when text follows the
+/// block (the general all-tag-blocks rule alone would fail open on trailing or nested text).
+const INJECTED_PREFIXES: [&str; 8] = [
+    "<command-",
+    "<local-command-",
+    "<task-notification",
+    "<system-reminder",
+    "<ide_",
+    "<user-prompt-submit-hook",
+    "<user-memory-input",
+    "<bash-",
+];
+
 /// Whether a trimmed prompt part is text the developer typed. Client-injected parts are dropped:
-/// those made only of `<tag>…</tag>` blocks (slash commands, bash mode, IDE context, reminders,
-/// notifications), bash-mode output whose closing tag may be missing, and interrupt markers.
+/// those made only of `<tag>…</tag>` blocks, those opening with a known injected block
+/// (slash commands, bash mode, IDE context, reminders, notifications, hooks), bash-mode output
+/// anywhere in the part, and interrupt markers.
 fn typed(part: &str) -> bool {
     !(only_tag_blocks(part)
-        || part.starts_with("<bash-input>")
+        || INJECTED_PREFIXES.iter().any(|p| part.starts_with(p))
         || part.contains("<bash-stdout>")
         || part.contains("<bash-stderr>")
         || part.starts_with("[Request interrupted by user"))

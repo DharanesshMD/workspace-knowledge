@@ -235,3 +235,50 @@ fn file_at_the_size_limit_is_read_and_one_byte_over_is_skipped() {
     assert_eq!(ids, ["claude-code:exact"]);
     assert_eq!(history.skipped, 1);
 }
+
+#[test]
+fn known_injected_blocks_are_dropped_even_with_trailing_text() {
+    let d = tempfile::tempdir().unwrap();
+    let records = [
+        user(
+            "stdout",
+            json!("<local-command-stdout>API_KEY=sk-secret-3</local-command-stdout>\ntrailing secret"),
+        ),
+        user(
+            "task",
+            json!("<task-notification><summary>secret</summary></task-notification>\ntrailing secret"),
+        ),
+        user(
+            "nested",
+            json!("<system-reminder><system-reminder>inner secret</system-reminder> outer secret</system-reminder>"),
+        ),
+        user(
+            "parts",
+            json!([
+                {"type":"text","text":"<command-name>/review</command-name> secret args"},
+                {"type":"text","text":"<ide_opened_file>secret.rs</ide_opened_file> then secret"},
+                {"type":"text","text":"<user-prompt-submit-hook>secret hook</user-prompt-submit-hook> more"},
+                {"type":"text","text":"<user-memory-input>secret memory</user-memory-input> more"},
+                {"type":"text","text":"<bash-notification>secret</bash-notification> more"}
+            ]),
+        ),
+        user("u1", json!("Real prompt mentioning <system-reminder> later")),
+        reply("a1", "Reply"),
+    ];
+    write_lines(&d.path().join("-work-app/s.jsonl"), &bytes(&records), b"\n");
+    let history = read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "injected content leaked: {all}");
+    assert_eq!(
+        messages(&history, "claude-code:s"),
+        owned(&[
+            (
+                "u1",
+                "user",
+                "Real prompt mentioning <system-reminder> later"
+            ),
+            ("a1", "assistant", "Reply"),
+        ])
+    );
+    assert_eq!(history.unreadable_records, 0);
+}
