@@ -310,3 +310,45 @@ fn claude_missing_projects_dir_is_an_error() {
     let d = tempfile::tempdir().unwrap();
     assert!(wk_adapters::claude_history::read(&d.path().join("absent")).is_err());
 }
+
+#[test]
+fn claude_skips_slash_command_and_local_command_records() {
+    let d = tempfile::tempdir().unwrap();
+    let t = "2026-10-15T10:00:00Z";
+    let user = |uuid: &str, content: Value| claude("user", uuid, t, "/work/app", content);
+    write_jsonl(
+        &d.path().join("-work-app/cmd.jsonl"),
+        &[
+            user("c1", json!("<command-name>/clear</command-name>\n<command-message>clear secret</command-message>\n<command-args></command-args>")),
+            user("c2", json!("<command-message>review secret</command-message>")),
+            user("c3", json!("<command-args>args secret</command-args>")),
+            user("c4", json!("<local-command-stdout>API_KEY=sk-test-secret-123</local-command-stdout>")),
+            user("c5", json!("  \n<local-command-stderr>stderr secret</local-command-stderr>")),
+            user("c6", json!([{"type":"text","text":"<local-command-caveat>Caveat: caveat secret</local-command-caveat>"}])),
+            user("u1", json!("Explain <command-name> handling")),
+            claude("assistant", "a1", t, "/work/app", json!([{"type":"text","text":"It is skipped."}])),
+        ],
+    );
+    let history = wk_adapters::claude_history::read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "command content leaked: {all}");
+    let c = find(&history, "claude-code:cmd");
+    let got: Vec<_> = c
+        .messages
+        .iter()
+        .map(|m| (m.id.as_str(), m.text.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("u1", "Explain <command-name> handling"),
+            ("a1", "It is skipped.")
+        ]
+    );
+    assert_eq!(c.title, "Explain <command-name> handling");
+    assert_eq!(
+        history.unreadable_records, 0,
+        "command records are not unreadable"
+    );
+    assert!(c.complete);
+}

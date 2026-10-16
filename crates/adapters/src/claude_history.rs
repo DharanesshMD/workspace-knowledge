@@ -178,8 +178,18 @@ fn read_session(file: &Path, history: &mut History) {
     });
 }
 
-/// A typed prompt: string content or `text` parts. Meta records and tool results are not
-/// prompts.
+/// Wrappers Claude Code puts around slash-command invocations and local command output.
+const COMMAND_WRAPPERS: [&str; 6] = [
+    "<command-name>",
+    "<command-message>",
+    "<command-args>",
+    "<local-command-stdout>",
+    "<local-command-stderr>",
+    "<local-command-caveat>",
+];
+
+/// A typed prompt: string content or `text` parts. Meta records, tool results, slash-command
+/// invocations and local command output are not prompts.
 fn prompt_text(v: &Value) -> Option<String> {
     if v["isMeta"] == true || v.get("toolUseResult").is_some() {
         return None;
@@ -190,7 +200,7 @@ fn prompt_text(v: &Value) -> Option<String> {
             return None;
         }
     }
-    visible(content)
+    visible(content).filter(|t| !COMMAND_WRAPPERS.iter().any(|w| t.starts_with(w)))
 }
 
 /// Reply `text` parts; thinking and tool calls are ignored.
