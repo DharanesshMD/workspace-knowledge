@@ -396,3 +396,409 @@ fn cursor_history_cards_carry_changed_files_and_session_time() {
         "existing output overwritten"
     );
 }
+
+/// Run `wk` with every client's home-derived default pointing into `home`, so a test can never
+/// read the developer's real agent history.
+fn run_home(home: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_wk"))
+        .args(args)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("APPDATA", home)
+        .env("XDG_CONFIG_HOME", home)
+        .env("CLAUDE_CONFIG_DIR", home.join("claude"))
+        .env("CODEX_HOME", home.join("codex"))
+        .output()
+        .unwrap()
+}
+
+const SECRET: &str = "password=SYNTHETIC_SECRET_0123456789abcdefghij";
+const REPLY: &str = "Use the shared middleware.";
+
+/// First prompt: its first line is the title; the rest is message text `list` must not print.
+fn prompt() -> String {
+    format!("Add tenant limits\nBODY_CANARY {SECRET}")
+}
+
+fn write_lines(path: &std::path::Path, records: &[serde_json::Value]) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let body: Vec<String> = records.iter().map(|r| r.to_string()).collect();
+    std::fs::write(path, body.join("\n") + "\n").unwrap();
+}
+
+/// Claude Code `projects/` dir: one session in `product`, one in `other`, one without a folder.
+fn claude_source(base: &std::path::Path, product: &std::path::Path) -> std::path::PathBuf {
+    use serde_json::json;
+    let projects = base.join("claude-projects");
+    let session = |cwd: Option<&std::path::Path>, text: &str| {
+        let rec = |kind: &str, uuid: &str, content: serde_json::Value| {
+            let mut v = json!({"type":kind,"sessionId":"x","uuid":uuid,
+                "timestamp":"2026-10-15T10:00:00.000Z","isSidechain":false,
+                "message":{"role":kind,"content":content}});
+            if let Some(cwd) = cwd {
+                v["cwd"] = json!(cwd);
+            }
+            v
+        };
+        vec![
+            rec("user", "u1", json!(text)),
+            rec("assistant", "a1", json!([{"type":"text","text":REPLY}])),
+        ]
+    };
+    write_lines(
+        &projects.join("-product").join("in.jsonl"),
+        &session(Some(product), &prompt()),
+    );
+    write_lines(
+        &projects.join("-other").join("out.jsonl"),
+        &session(Some(&base.join("other")), "OUTSIDE_CANARY"),
+    );
+    write_lines(
+        &projects.join("-none").join("nofolder.jsonl"),
+        &session(None, "NOFOLDER_CANARY"),
+    );
+    projects
+}
+
+fn codex_session(
+    dir: &std::path::Path,
+    file: &str,
+    id: &str,
+    cwd: Option<&std::path::Path>,
+    text: &str,
+) {
+    use serde_json::json;
+    let t = "2026-10-15T10:00:00.000Z";
+    let mut meta = json!({"id":id,"timestamp":t});
+    if let Some(cwd) = cwd {
+        meta["cwd"] = json!(cwd);
+    }
+    let msg = |role: &str, part: &str, text: &str| {
+        json!({"timestamp":t,"type":"response_item",
+               "payload":{"type":"message","role":role,"content":[{"type":part,"text":text}]}})
+    };
+    write_lines(
+        &dir.join("2026/10/15").join(file),
+        &[
+            json!({"timestamp":t,"type":"session_meta","payload":meta}),
+            msg("user", "input_text", text),
+            msg("assistant", "output_text", REPLY),
+        ],
+    );
+}
+
+/// Codex `sessions/` dir: one session in `product`, one in `other`, one without a folder.
+fn codex_source(base: &std::path::Path, product: &std::path::Path) -> std::path::PathBuf {
+    let sessions = base.join("codex-sessions");
+    codex_session(&sessions, "rollout-a.jsonl", "in", Some(product), &prompt());
+    codex_session(
+        &sessions,
+        "rollout-b.jsonl",
+        "out",
+        Some(&base.join("other")),
+        "OUTSIDE_CANARY",
+    );
+    codex_session(
+        &sessions,
+        "rollout-c.jsonl",
+        "nofolder",
+        None,
+        "NOFOLDER_CANARY",
+    );
+    sessions
+}
+
+/// A `file:///` URI for `path`, percent-encoding everything but unreserved characters.
+fn file_uri(path: &std::path::Path) -> String {
+    let path = path.to_str().unwrap().replace('\\', "/");
+    let mut uri = String::from("file://");
+    if !path.starts_with('/') {
+        uri.push('/');
+    }
+    for b in path.bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            uri.push(b as char);
+        } else {
+            uri.push_str(&format!("%{b:02X}"));
+        }
+    }
+    uri
+}
+
+/// VS Code `User/` dir: one Copilot session in `product`, one in `other`, one without a folder.
+fn copilot_source(base: &std::path::Path, product: &std::path::Path) -> std::path::PathBuf {
+    use serde_json::json;
+    let user = base.join("Code").join("User");
+    let storage = user.join("workspaceStorage");
+    let session = |hash: &str, id: &str, folder: Option<&std::path::Path>, text: &str| {
+        let dir = storage.join(hash);
+        std::fs::create_dir_all(dir.join("chatSessions")).unwrap();
+        if let Some(folder) = folder {
+            std::fs::write(
+                dir.join("workspace.json"),
+                json!({"folder":file_uri(folder)}).to_string(),
+            )
+            .unwrap();
+        }
+        let body = json!({"version":3,"sessionId":id,"creationDate":1_792_058_400_000_i64,
+            "requests":[{"requestId":"r1","timestamp":1_792_058_401_000_i64,
+                "message":{"text":text},"response":[{"value":REPLY}]}]});
+        std::fs::write(
+            dir.join("chatSessions").join(format!("{id}.json")),
+            body.to_string(),
+        )
+        .unwrap();
+    };
+    session("h-in", "in", Some(product), &prompt());
+    session("h-out", "out", Some(&base.join("other")), "OUTSIDE_CANARY");
+    session("h-none", "nofolder", None, "NOFOLDER_CANARY");
+    user
+}
+
+fn json_out(o: &std::process::Output) -> serde_json::Value {
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    serde_json::from_slice(&o.stdout).unwrap()
+}
+
+#[cfg(unix)]
+fn mode(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[test]
+fn agent_history_lists_shows_and_exports_each_client_scoped_and_masked() {
+    type Source = fn(&std::path::Path, &std::path::Path) -> std::path::PathBuf;
+    let clients: [(&str, Source); 3] = [
+        ("claude-code", claude_source),
+        ("codex", codex_source),
+        ("copilot", copilot_source),
+    ];
+    for (client, source) in clients {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let product = d.path().join("product");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&product).unwrap();
+        std::fs::create_dir_all(d.path().join("other")).unwrap();
+        let src = source(d.path(), &product);
+        let (s, p) = (src.to_str().unwrap(), product.to_str().unwrap());
+        let inside = format!("{client}:in");
+        let wk = |args: &[&str]| {
+            let mut all = vec!["agent-history", "--client", client, "--source-dir", s];
+            all.extend_from_slice(args);
+            run_home(&home, &all)
+        };
+
+        // List: only this folder's sessions, titles and counts, never message text.
+        let listed = wk(&["list", "--workspace", p]);
+        let text = String::from_utf8_lossy(&listed.stdout).to_string();
+        let v = json_out(&listed);
+        for absent in [
+            "BODY_CANARY",
+            "SYNTHETIC_SECRET",
+            REPLY,
+            "OUTSIDE_CANARY",
+            "NOFOLDER_CANARY",
+        ] {
+            assert!(!text.contains(absent), "{client}: list leaked {absent}");
+        }
+        let items = v["sessions"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "{client}: {v}");
+        assert_eq!(items[0]["id"], inside.as_str());
+        assert_eq!(items[0]["title"], "Add tenant limits");
+        assert_eq!(items[0]["messages"], 2);
+        assert_eq!(items[0]["complete"], true);
+        assert!(items[0]["created_at_ms"].as_i64().unwrap() > 0, "{client}");
+        assert_eq!(v["outside_workspace"], 1, "{client}: {v}");
+        assert_eq!(v["without_folder"], 1, "{client}: {v}");
+        for count in ["unreadable_records", "empty_conversations", "skipped"] {
+            assert!(v[count].is_u64(), "{client}: {count} missing");
+        }
+
+        // Show: masked Markdown of this folder only; unknown or outside sessions fail.
+        let shown = wk(&["show", "--workspace", p]);
+        assert!(shown.status.success(), "{client}");
+        let text = String::from_utf8(shown.stdout).unwrap();
+        assert!(
+            text.contains(REPLY) && text.contains("BODY_CANARY"),
+            "{client}"
+        );
+        assert!(text.contains("[REDACTED]"), "{client}");
+        for absent in ["SYNTHETIC_SECRET", "OUTSIDE_CANARY", "NOFOLDER_CANARY"] {
+            assert!(!text.contains(absent), "{client}: show leaked {absent}");
+        }
+        let one = wk(&["show", "--workspace", p, "--session", &inside]);
+        assert!(String::from_utf8(one.stdout).unwrap().contains(REPLY));
+        let outside = format!("{client}:out");
+        for bad in [outside.as_str(), "nope"] {
+            assert!(
+                !wk(&["show", "--workspace", p, "--session", bad])
+                    .status
+                    .success(),
+                "{client}: showed {bad}"
+            );
+        }
+
+        // Export: confirmed, outside the folder, only this folder's sessions, private and masked.
+        let out = d.path().join("exports").join(client);
+        let o = out.to_str().unwrap();
+        let export = |out: &str, session: &str, yes: bool| {
+            let mut args = vec![
+                "export",
+                "--workspace",
+                p,
+                "--product",
+                "demo",
+                "--out",
+                out,
+                "--session",
+                session,
+            ];
+            if yes {
+                args.push("--yes");
+            }
+            wk(&args)
+        };
+        assert!(!export(o, &inside, false).status.success(), "{client}");
+        assert!(!out.exists(), "{client}: unconfirmed export created --out");
+        let inner = product.join("exports");
+        assert!(
+            !export(inner.to_str().unwrap(), &inside, true)
+                .status
+                .success(),
+            "{client}: export inside workspace allowed"
+        );
+        assert!(
+            !inner.exists(),
+            "{client}: created a folder in the workspace"
+        );
+        assert!(!export("relative/out", &inside, true).status.success());
+        for bad in [outside.as_str(), "nope"] {
+            assert!(
+                !export(o, bad, true).status.success(),
+                "{client}: exported {bad}"
+            );
+        }
+        let done = json_out(&export(o, &inside, true));
+        assert_eq!(done["published"], false);
+        let file = out.join(format!("{client}_in.json"));
+        let body: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(body["schema_version"], 1);
+        assert_eq!(body["product"], "demo");
+        assert_eq!(body["session_id"], inside.as_str());
+        assert_eq!(body["messages"].as_array().unwrap().len(), 2);
+        assert!(!body.to_string().contains("SYNTHETIC_SECRET"), "{client}");
+        assert!(body.to_string().contains("[REDACTED]"), "{client}");
+        #[cfg(unix)]
+        {
+            assert_eq!(mode(&file), 0o600, "{client}");
+            assert_eq!(mode(&out), 0o700, "{client}");
+        }
+        assert!(
+            !export(o, &inside, true).status.success(),
+            "{client}: existing export overwritten"
+        );
+    }
+}
+
+#[test]
+fn agent_history_export_names_never_escape_the_output_directory() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join("home");
+    let product = d.path().join("product");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&product).unwrap();
+    let sessions = d.path().join("codex-sessions");
+    let long = "x".repeat(300);
+    for (file, id) in [
+        ("rollout-a.jsonl", "../../escape"),
+        ("rollout-b.jsonl", "..\\..\\escape"),
+        ("rollout-c.jsonl", long.as_str()),
+    ] {
+        codex_session(&sessions, file, id, Some(&product), &prompt());
+    }
+    let out = d.path().join("deep").join("exports");
+    let mut args = vec![
+        "agent-history",
+        "--client",
+        "codex",
+        "--source-dir",
+        sessions.to_str().unwrap(),
+        "export",
+        "--workspace",
+        product.to_str().unwrap(),
+        "--product",
+        "demo",
+        "--out",
+        out.to_str().unwrap(),
+        "--yes",
+    ];
+    let ids = [
+        "codex:../../escape".to_string(),
+        "codex:..\\..\\escape".to_string(),
+        format!("codex:{long}"),
+    ];
+    for id in &ids {
+        args.extend(["--session", id]);
+    }
+    let done = json_out(&run_home(&home, &args));
+    assert_eq!(done["exported"].as_array().unwrap().len(), 3);
+    let mut names: Vec<String> = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), 3, "{names:?}");
+    for name in &names {
+        assert!(
+            name.starts_with("codex_") && name.ends_with(".json"),
+            "{name}"
+        );
+        assert!(name.len() <= 125, "{name}");
+        assert!(
+            name.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)),
+            "{name}"
+        );
+    }
+    assert_ne!(names[0], names[1], "distinct ids must not collide");
+    assert!(!d.path().join("escape.json").exists());
+    assert!(!d.path().join("deep").join("escape.json").exists());
+}
+
+#[test]
+fn agent_history_reads_cursor_like_cursor_history() {
+    let d = tempfile::tempdir().unwrap();
+    let (user, product) = cursor_fixture::fixture(d.path());
+    let home = d.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    // Cursor's agent transcripts live in `~/.cursor`; HOME points at the fixture, never the real one.
+    std::fs::rename(
+        cursor_fixture::transcripts(d.path(), &product),
+        home.join(".cursor"),
+    )
+    .unwrap();
+    let (u, p) = (user.to_str().unwrap(), product.to_str().unwrap());
+    let base = ["agent-history", "--client", "cursor", "--source-dir", u];
+    let listed = json_out(&run_home(
+        &home,
+        &[&base[..], &["list", "--workspace", p]].concat(),
+    ));
+    let ids: Vec<&str> = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"cursor-composer:c-new"), "{listed}");
+    assert!(!listed.to_string().contains("sk-SYNTHETIC"));
+    let shown = run_home(&home, &[&base[..], &["show", "--workspace", p]].concat());
+    let text = String::from_utf8(shown.stdout).unwrap();
+    assert!(text.contains("Use the shared middleware.") && !text.contains("sk-SYNTHETIC"));
+    assert!(
+        text.contains("Reuse the limiter for billing"),
+        "transcripts read"
+    );
+}
