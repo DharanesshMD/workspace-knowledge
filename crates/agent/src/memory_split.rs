@@ -3,12 +3,16 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Instructions,
+    /// VS Code Copilot `*.instructions.md`: frontmatter (`applyTo`,
+    /// `description`) is dropped and `description` hints every section.
+    ScopedInstructions,
     Note,
 }
 impl SourceKind {
     pub fn label(self) -> &'static str {
         match self {
             SourceKind::Instructions => "instructions",
+            SourceKind::ScopedInstructions => "scoped_instructions",
             SourceKind::Note => "claude_note",
         }
     }
@@ -19,7 +23,8 @@ pub struct Section {
     pub heading: Vec<String>,
     /// Index among earlier headings with the same path.
     pub occurrence: usize,
-    /// Note frontmatter `name`/`description`, used only as model hints.
+    /// Frontmatter `name`/`description` (notes) or `description` (scoped
+    /// instructions), used only as model hints.
     pub hints: Option<String>,
     pub body: String,
 }
@@ -28,10 +33,20 @@ pub fn split(kind: SourceKind, text: &str) -> Vec<Section> {
     match kind {
         SourceKind::Note => note(&text),
         SourceKind::Instructions => instructions(&text),
+        SourceKind::ScopedInstructions => {
+            let (hints, body) = frontmatter(&text, &["description"]);
+            instructions(&body)
+                .into_iter()
+                .map(|s| Section {
+                    hints: hints.clone(),
+                    ..s
+                })
+                .collect()
+        }
     }
 }
 fn note(text: &str) -> Vec<Section> {
-    let (hints, body) = frontmatter(text);
+    let (hints, body) = frontmatter(text, &["name", "description"]);
     let body = body.trim();
     if body.is_empty() {
         return vec![];
@@ -43,7 +58,8 @@ fn note(text: &str) -> Vec<Section> {
         body: body.to_string(),
     }]
 }
-fn frontmatter(text: &str) -> (Option<String>, String) {
+/// Drops leading `---` frontmatter; top-level `keys` with plain values become hints.
+fn frontmatter(text: &str, keys: &[&str]) -> (Option<String>, String) {
     let mut lines = text.lines();
     if lines.next() != Some("---") {
         return (None, text.to_string());
@@ -57,10 +73,8 @@ fn frontmatter(text: &str) -> (Option<String>, String) {
                 .filter_map(|entry| {
                     let (key, value) = entry.split_once(':')?;
                     let (key, value) = (key.trim(), value.trim().trim_matches('"'));
-                    (matches!(key, "name" | "description")
-                        && !value.is_empty()
-                        && !value.starts_with(['>', '|']))
-                    .then(|| format!("{key}: {value}"))
+                    (keys.contains(&key) && !value.is_empty() && !value.starts_with(['>', '|']))
+                        .then(|| format!("{key}: {value}"))
                 })
                 .collect();
             let body: Vec<&str> = lines.collect();
@@ -252,6 +266,32 @@ mod tests {
         let s = split(SourceKind::Instructions, "Always run the linter.\r\n");
         assert_eq!(headings(&s), vec![h(&[], 0)]);
         assert_eq!(s[0].body, "Always run the linter.");
+    }
+    #[test]
+    fn scoped_instructions_drop_frontmatter_and_hint_every_section_with_the_description() {
+        let s = split(
+            SourceKind::ScopedInstructions,
+            "---\r\napplyTo: \"**/*.rs\"\r\nname: ignored\r\ndescription: \"Rust style\"\r\n---\r\n## Errors\r\nUse thiserror.\r\n## Tests\r\nKeep them fast.\r\n",
+        );
+        assert_eq!(headings(&s), vec![h(&["Errors"], 0), h(&["Tests"], 0)]);
+        assert!(s
+            .iter()
+            .all(|s| s.hints.as_deref() == Some("description: Rust style")));
+        assert_eq!(s[0].body, "Use thiserror.");
+        let plain = split(
+            SourceKind::ScopedInstructions,
+            "---\napplyTo: \"**\"\n---\nAlways lint.\n",
+        );
+        assert_eq!(
+            (plain[0].hints.as_deref(), plain[0].body.as_str()),
+            (None, "Always lint.")
+        );
+    }
+    #[test]
+    fn instructions_keep_frontmatter_as_text() {
+        let s = split(SourceKind::Instructions, "---\ndescription: x\n---\nBody\n");
+        assert_eq!(s[0].hints, None);
+        assert!(s[0].body.starts_with("---"));
     }
     #[test]
     fn empty_note_has_no_sections() {

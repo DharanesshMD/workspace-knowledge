@@ -775,6 +775,39 @@ mod tests {
         assert_eq!(rows(&scan), vec![(BACKEND.into(), "unchanged".into())]);
     }
     #[test]
+    fn copilot_instruction_files_import_with_their_description_as_hint() {
+        let mut f = fixture("http://127.0.0.1:9/v1/chat/completions");
+        let dir = f.b.root.join("backend/.github/instructions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            f.b.root.join("backend/.github/copilot-instructions.md"),
+            "Prefer small modules.\n",
+        )
+        .unwrap();
+        let text =
+            "---\napplyTo: \"**/*.rs\"\ndescription: Rust style\n---\n## Errors\nUse thiserror.\n";
+        std::fs::write(dir.join("rust.instructions.md"), text).unwrap();
+        let now = daemon::now().unwrap();
+        let out = import(&mut f, &[], now).unwrap();
+        assert_eq!(
+            (out["written"].clone(), out["sources"].clone()),
+            (json!(2), json!(2))
+        );
+        let label = "repo:backend/.github/instructions/rust.instructions.md";
+        let key = section_key(
+            label,
+            &memory_split::split(SourceKind::ScopedInstructions, text)[0],
+        )
+        .unwrap();
+        let r = record(&f, &tracked(&f, &key), now);
+        assert_eq!(
+            (r.hints.as_deref(), r.body.as_str()),
+            (Some("description: Rust style"), "Use thiserror.")
+        );
+        assert!(r.source().contains("Note: description: Rust style"));
+        assert!(!r.source().contains("applyTo"));
+    }
+    #[test]
     fn changed_sections_retire_old_records_and_link_the_summary() {
         let mut f = fixture("http://127.0.0.1:9/v1/chat/completions");
         let path = f.b.root.join("backend/CLAUDE.md");
