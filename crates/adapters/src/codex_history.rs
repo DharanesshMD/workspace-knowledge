@@ -11,16 +11,26 @@
 //! `dropped_injected`: parts starting with a known marker, and parts made up entirely of
 //! `<tag ...>…</tag>` blocks at least one of which has a tool-style name containing `_` or `-`
 //! (parts made only of plain-named tags such as `<task>` are typed prompts and kept). Messages
-//! with an unknown role are counted, never guessed. Symlinks are never followed out of the sessions
-//! directory.
+//! with an unknown role and content parts of an unknown type (anything but `input_text`,
+//! `output_text` and text-less `input_image`) are counted, never guessed. A user message made only
+//! of injected context leaves no prompt, so the replies around it read as one assistant turn.
+//! The workspace is `session_meta.cwd` only when it is absolute. Session files are read through a
+//! bounded, symlink-refusing open; symlinks are never followed out of the sessions directory.
+//!
+//! Compaction: in the observed data compaction writes top-level `compacted` records, which are
+//! skipped like other non-message records, and no compaction-bridge user messages were found;
+//! if Codex later replays a summary as a user message it would need a marker here.
 //!
 //! Known limits: `archived_sessions` is not read. Sub-agent threads Codex spawns are stored as
 //! their own session files and are imported as ordinary sessions (how `session_meta` marks
 //! them is not confirmed). A forked session copies its parent's history into a new file, so
 //! the same exchanges can appear in two conversations.
 use crate::cursor_history::{Conversation, History, Message};
-use crate::history_common::{injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Refused};
+use crate::history_common::{
+    absolute_dir, injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Refused,
+};
 use serde_json::Value;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
@@ -43,15 +53,20 @@ const INJECTED: [&str; 8] = [
 
 /// `$CODEX_HOME/sessions`, else `~/.codex/sessions`.
 pub fn default_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("CODEX_HOME").filter(|d| !d.is_empty()) {
-        return Some(PathBuf::from(dir).join("sessions"));
-    }
     let home = if cfg!(windows) {
         std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
     } else {
         std::env::var_os("HOME")
     };
-    home.map(|h| PathBuf::from(h).join(".codex/sessions"))
+    sessions_dir(std::env::var_os("CODEX_HOME"), home)
+}
+
+/// The sessions directory for a `CODEX_HOME` value and a home directory; empty values are unset.
+fn sessions_dir(codex_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    let set = |v: Option<OsString>| v.filter(|v| !v.is_empty()).map(PathBuf::from);
+    set(codex_home)
+        .or_else(|| set(home).map(|h| h.join(".codex")))
+        .map(|dir| dir.join("sessions"))
 }
 
 /// Read every session file up to `YYYY/MM/DD/` below `sessions_dir`.
@@ -135,10 +150,7 @@ fn read_session(file: &Path, history: &mut History) {
             Some("session_meta") if !saw_meta => {
                 saw_meta = true;
                 session = payload["id"].as_str().map(str::to_owned);
-                workspace = payload["cwd"]
-                    .as_str()
-                    .filter(|s| !s.is_empty())
-                    .map(PathBuf::from);
+                workspace = absolute_dir(payload["cwd"].as_str());
                 continue;
             }
             Some("response_item") if payload["type"] == "message" => {}
@@ -160,7 +172,15 @@ fn read_session(file: &Path, history: &mut History) {
         saw_message_record = true;
         let texts: Vec<&str> = parts
             .iter()
-            .filter(|p| p["type"] == "input_text" || p["type"] == "output_text")
+            .filter(|p| match p["type"].as_str() {
+                Some("input_text" | "output_text") => true,
+                // Attached images carry no text; anything else is an unknown part.
+                Some("input_image") => false,
+                _ => {
+                    gaps += 1;
+                    false
+                }
+            })
             .filter_map(|p| p["text"].as_str())
             .filter(|t| {
                 let keep = role == "assistant" || !injected(t);
@@ -232,4 +252,29 @@ fn injected(text: &str) -> bool {
             .get(..marker.len())
             .is_some_and(|s| s.eq_ignore_ascii_case(marker))
     }) || injected_tag_blocks(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sessions_dir;
+    use std::path::PathBuf;
+
+    #[test]
+    fn sessions_dir_prefers_codex_home_then_home() {
+        let some = |s: &str| Some(s.into());
+        assert_eq!(
+            sessions_dir(some("/codex"), some("/home/me")),
+            Some(PathBuf::from("/codex").join("sessions"))
+        );
+        assert_eq!(
+            sessions_dir(some(""), some("/home/me")),
+            Some(PathBuf::from("/home/me").join(".codex").join("sessions"))
+        );
+        assert_eq!(
+            sessions_dir(None, some("/home/me")),
+            Some(PathBuf::from("/home/me").join(".codex").join("sessions"))
+        );
+        assert_eq!(sessions_dir(None, some("")), None);
+        assert_eq!(sessions_dir(None, None), None);
+    }
 }

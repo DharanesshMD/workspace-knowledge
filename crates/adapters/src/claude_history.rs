@@ -11,15 +11,18 @@
 //! subagent sidechains and injected parts (slash commands, bash mode, IDE context, system
 //! reminders, task notifications, and parts made only of tool-style `<tag_name>…</tag_name>`
 //! blocks) are ignored; dropped injected parts are counted in `dropped_injected`. Parts made only
-//! of plain-named tags such as `<task>…</task>` are prompts the developer wrote and are kept. Records that look like
-//! messages but have an unknown type are counted, never guessed. Symlinks are never followed out
-//! of the projects directory.
+//! of plain-named tags such as `<task>…</task>` are prompts the developer wrote and are kept.
+//! Records that look like messages but have an unknown type are counted, never guessed. The
+//! workspace is the first record's `cwd` only when it is absolute. Symlinks are never followed
+//! out of the projects directory.
 //!
 //! Session files are read in place rather than snapshotted: they are append-only JSONL, so a
 //! concurrent write can at worst leave a partial last line, which is counted as a malformed
 //! record and marks the session incomplete. Copying would add I/O without a consistency gain.
 use crate::cursor_history::{Conversation, History, Message};
-use crate::history_common::{injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Refused};
+use crate::history_common::{
+    absolute_dir, injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Refused,
+};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -139,10 +142,7 @@ fn read_session(file: &Path, history: &mut History) {
         };
         saw_message_record = true;
         if workspace.is_none() {
-            workspace = v["cwd"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .map(PathBuf::from);
+            workspace = absolute_dir(v["cwd"].as_str());
         }
         let text = match role {
             "user" => prompt_text(&v, &mut history.dropped_injected),

@@ -1370,3 +1370,90 @@ fn copilot_session_ids_are_validated_with_file_stem_and_hash_fallbacks() {
     assert!(is_hashed(&ids[0], "copilot"), "{ids:?}");
     assert_eq!(ids[1..], ["copilot:traversal", "copilot:windows"]);
 }
+
+#[test]
+fn codex_counts_unknown_content_parts_and_ignores_relative_cwd() {
+    let d = tempfile::tempdir().unwrap();
+    let t = "2026-10-15T10:00:00Z";
+    let message = |role: &str, content: Value| {
+        codex(
+            t,
+            "response_item",
+            json!({"type":"message","role":role,"content":content}),
+        )
+    };
+    write_jsonl(
+        &d.path().join("2026/10/15/parts.jsonl"),
+        &[
+            codex_meta(t, "parts", "relative/app"),
+            message(
+                "user",
+                json!([
+                    {"type":"input_text","text":"Question"},
+                    {"type":"input_image","image_url":"data:image/png;base64,secret"},
+                    {"type":"input_audio","data":"audio secret"}
+                ]),
+            ),
+            message(
+                "assistant",
+                json!([
+                    {"type":"output_text","text":"Answer"},
+                    {"type":"refusal","refusal":"refusal secret"}
+                ]),
+            ),
+        ],
+    );
+    let history = wk_adapters::codex_history::read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "{all}");
+    let c = find(&history, "codex:parts");
+    let got: Vec<_> = c.messages.iter().map(|m| m.text.as_str()).collect();
+    assert_eq!(got, ["Question", "Answer"]);
+    assert_eq!(
+        history.unreadable_records, 2,
+        "input_audio and refusal parts are unknown; input_image is expected"
+    );
+    assert!(!c.complete);
+    assert_eq!(c.workspace, None, "a relative cwd is never attributed");
+}
+
+#[test]
+fn codex_reply_after_an_all_injected_user_message_merges_into_the_previous_reply() {
+    let d = tempfile::tempdir().unwrap();
+    let t = "2026-10-15T10:00:00Z";
+    let user = |text: &str| codex(t, "response_item", codex_msg("user", "input_text", text));
+    let reply = |text: &str| {
+        codex(
+            t,
+            "response_item",
+            codex_msg("assistant", "output_text", text),
+        )
+    };
+    write_jsonl(
+        &d.path().join("2026/10/15/merge.jsonl"),
+        &[
+            codex_meta(t, "merge", "/work/app"),
+            user("Question"),
+            reply("First answer."),
+            user("<environment_context>env secret</environment_context>"),
+            reply("Second answer."),
+        ],
+    );
+    let history = wk_adapters::codex_history::read(d.path()).unwrap();
+    let c = find(&history, "codex:merge");
+    let got: Vec<_> = c
+        .messages
+        .iter()
+        .map(|m| (m.id.as_str(), m.text.as_str()))
+        .collect();
+    // The injected message leaves no prompt, so consecutive replies read as one turn.
+    assert_eq!(
+        got,
+        [
+            ("u1", "Question"),
+            ("a1", "First answer.\n\nSecond answer.")
+        ]
+    );
+    assert_eq!(history.dropped_injected, 1);
+    assert!(c.complete);
+}

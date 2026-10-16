@@ -158,6 +158,14 @@ pub(crate) fn injected_tag_blocks(s: &str) -> bool {
     tool_style
 }
 
+/// The workspace a recorded working directory names, only when it is absolute. A relative
+/// path would be resolved against wherever `wk` runs and could match the wrong workspace.
+/// Rooted paths count as absolute: on Windows that also admits `\dir` paths without a drive,
+/// though the agents record `C:\dir` in practice.
+pub(crate) fn absolute_dir(cwd: Option<&str>) -> Option<PathBuf> {
+    cwd.map(PathBuf::from).filter(|p| p.has_root())
+}
+
 /// A session id safe to use in conversation ids and file names: `candidate` if it matches
 /// `[A-Za-z0-9._-]{1,128}` and is not `.` or `..`, else `file`'s stem under the same rule, else
 /// the first 16 hex digits of the SHA-256 of `file`'s name.
@@ -380,6 +388,23 @@ mod tests {
             "file:///work/app#frag",
         ] {
             assert_eq!(file_uri_path(bad), None::<PathBuf>, "{bad}");
+        }
+    }
+
+    #[test]
+    fn only_absolute_working_directories_are_workspaces() {
+        assert_eq!(
+            absolute_dir(Some("/work/app")),
+            Some(PathBuf::from("/work/app"))
+        );
+        for bad in [
+            None,
+            Some(""),
+            Some("work/app"),
+            Some("./app"),
+            Some("../app"),
+        ] {
+            assert_eq!(absolute_dir(bad), None, "{bad:?}");
         }
     }
 

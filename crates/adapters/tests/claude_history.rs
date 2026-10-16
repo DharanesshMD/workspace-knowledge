@@ -346,3 +346,19 @@ fn session_file_stems_that_are_not_safe_ids_are_hashed() {
         "{id}"
     );
 }
+
+#[test]
+fn relative_cwd_is_never_a_workspace() {
+    let d = tempfile::tempdir().unwrap();
+    let mut prompt = user("u1", json!("Prompt"));
+    prompt["cwd"] = json!("relative/app");
+    let mut answer = reply("a1", "Reply");
+    answer["cwd"] = json!("relative/app");
+    write_lines(
+        &d.path().join("-work-app/s.jsonl"),
+        &bytes(&[prompt, answer]),
+        b"\n",
+    );
+    let history = read(d.path()).unwrap();
+    assert_eq!(history.conversations[0].workspace, None);
+}
