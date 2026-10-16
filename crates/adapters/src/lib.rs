@@ -234,6 +234,7 @@ pub mod claude_history;
 pub mod codex_history;
 pub mod copilot_history;
 pub mod cursor_history;
+mod history_common;
 pub mod install;
 pub mod team_context;
 

@@ -16,10 +16,9 @@
 //! their own session files and are imported as ordinary sessions (how `session_meta` marks
 //! them is not confirmed). A forked session copies its parent's history into a new file, so
 //! the same exchanges can appear in two conversations.
-use crate::claude_history::rfc3339_ms;
 use crate::cursor_history::{Conversation, History, Message};
+use crate::history_common::{only_tag_blocks, rfc3339_ms, title, Lines, Refused};
 use serde_json::Value;
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
@@ -90,13 +89,12 @@ fn collect(entries: std::fs::ReadDir, depth: usize, files: &mut Vec<PathBuf>) {
 /// Read one session file into `history`. Oversized sessions count only as `skipped`;
 /// unreadable records (malformed lines, unknown roles) are counted otherwise.
 fn read_session(file: &Path, history: &mut History) {
-    if std::fs::symlink_metadata(file).map_or(u64::MAX, |m| m.len()) > MAX_FILE_BYTES {
-        history.skipped += 1;
-        return;
-    }
-    let Ok(handle) = std::fs::File::open(file) else {
-        history.unreadable_records += 1;
-        return;
+    let mut lines = match Lines::open(file, MAX_FILE_BYTES) {
+        Ok(lines) => lines,
+        Err(refused) => {
+            refused.count(history);
+            return;
+        }
     };
     let mut session = file
         .file_stem()
@@ -111,15 +109,23 @@ fn read_session(file: &Path, history: &mut History) {
     let mut saw_meta = false;
     let mut saw_message_record = false;
     let mut gaps = 0;
-    for line in std::io::BufReader::new(handle).split(b'\n') {
-        let Ok(line) = line else {
-            gaps += 1;
-            break;
+    loop {
+        let line = match lines.next_line() {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(Refused::TooLarge) => {
+                history.skipped += 1;
+                return;
+            }
+            Err(_) => {
+                gaps += 1;
+                break;
+            }
         };
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let Ok(v) = serde_json::from_slice::<Value>(&line) else {
+        let Ok(v) = serde_json::from_slice::<Value>(line) else {
             gaps += 1;
             continue;
         };
@@ -201,12 +207,7 @@ fn read_session(file: &Path, history: &mut History) {
         }
         return;
     }
-    let title = messages
-        .iter()
-        .find(|m| m.role == "user")
-        .and_then(|m| m.text.lines().find(|l| !l.trim().is_empty()))
-        .map(|l| l.trim().chars().take(80).collect())
-        .unwrap_or_else(|| "Untitled chat".into());
+    let title = title(&messages);
     let complete = gaps == 0 && messages.last().is_some_and(|m| m.role == "assistant");
     history.conversations.push(Conversation {
         id: format!("codex:{session}"),
@@ -230,38 +231,5 @@ fn injected(text: &str) -> bool {
         start
             .get(..marker.len())
             .is_some_and(|s| s.eq_ignore_ascii_case(marker))
-    }) || tag_wrapped(text)
-}
-
-/// Whether `text`, trimmed, is one or more `<tag ...>…</tag>` blocks separated only by
-/// whitespace. Tag names match `[A-Za-z][A-Za-z0-9_-]*`; any other text keeps the part.
-fn tag_wrapped(text: &str) -> bool {
-    let mut rest = text.trim();
-    if rest.is_empty() {
-        return false;
-    }
-    while !rest.is_empty() {
-        let Some(open) = rest.strip_prefix('<') else {
-            return false;
-        };
-        let len = open
-            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
-            .unwrap_or(open.len());
-        let (name, after) = open.split_at(len);
-        if !name.starts_with(|c: char| c.is_ascii_alphabetic())
-            || !after.starts_with(|c: char| c == '>' || c.is_whitespace())
-        {
-            return false;
-        }
-        let Some(gt) = after.find('>') else {
-            return false;
-        };
-        let body = &after[gt + 1..];
-        let close = format!("</{name}>");
-        let Some(end) = body.find(&close) else {
-            return false;
-        };
-        rest = body[end + close.len()..].trim_start();
-    }
-    true
+    }) || only_tag_blocks(text)
 }
