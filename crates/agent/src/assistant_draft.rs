@@ -50,6 +50,13 @@ pub(crate) fn build(
     let i: Input = serde_json::from_str(text).map_err(|_| {
         "invalid card JSON; expected title, intent, rationale, decisions, constraints, open_questions"
     })?;
+    let given: Vec<String> = [&i.title, &i.intent, &i.rationale]
+        .into_iter()
+        .chain(&i.decisions)
+        .chain(&i.constraints)
+        .chain(&i.open_questions)
+        .cloned()
+        .collect();
     let digest = format!(
         "{:x}",
         Sha256::digest(
@@ -86,9 +93,22 @@ pub(crate) fn build(
         observed_at_ms: None,
     };
     card.validate()?;
-    if wk_summarize::sensitive(&serde_json::to_string(&card).map_err(|_| "invalid card")?) {
+    // `sensitive_reason` returns a fixed label, never the matched text.
+    if let Some(reason) =
+        wk_summarize::sensitive_reason(&serde_json::to_string(&card).map_err(|_| "invalid card")?)
+    {
+        return Err(format!("card requires private review ({reason})"));
+    }
+    // The assistant's words are stored as written, not redacted. But anything the history
+    // masker would change looks like a credential `sensitive` can miss (a dotted JWT, `token=`).
+    if given
+        .iter()
+        .any(|f| wk_adapters::cursor_history::redact(f) != *f)
+    {
         return Err("card requires private review (possible credential)".into());
     }
+    // Assistant drafts are `Partial`, which `personal_sync::payload` refuses, so they are never
+    // uploaded to the owner's personal store automatically. A test pins that dependency.
     let record = json!({"card": card, "assistant": {"client": client}, "policy_hash": policy_hash, "model": "assistant"});
     Ok((format!("draft:{digest}"), record))
 }
@@ -100,6 +120,26 @@ fn copy_key(base: &str, n: u32) -> String {
         return base.to_string();
     }
     format!("draft:{:x}", Sha256::digest(format!("{base}:{n}")))
+}
+
+/// The error `LocalStore::update` gives for an id that was submitted or expired.
+const CLOSED: &str = "session closed; a new session identity is required";
+
+/// Create the draft under `id` unless it already exists (the first copy is kept).
+/// `false` means the id is closed: it was submitted or expired, and the store never reopens it.
+fn place(
+    store: &mut wk_local::LocalStore,
+    id: &str,
+    bytes: &[u8],
+    now: i64,
+) -> Result<bool, String> {
+    match store.update(id, now, TTL, |old| {
+        Ok(old.map_or_else(|| bytes.to_vec(), |b| b.to_vec()))
+    }) {
+        Ok(()) => Ok(true),
+        Err(e) if e == CLOSED => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// Write the draft and return its id. Drafting a card that is still pending
@@ -115,11 +155,9 @@ pub(crate) fn store_draft(
     let bytes = serde_json::to_vec(record).map_err(|_| "invalid draft")?;
     for n in 0..MAX_COPIES {
         let id = copy_key(key, n);
-        if store.contains(&id, now)? {
-            return Ok(id);
-        }
-        if !store.seen(&id)? {
-            store.update(&id, now, TTL, |_| Ok(bytes.clone()))?;
+        // Closed ids are found by the write itself, so another process acknowledging a
+        // copy between a check and the write cannot fail the draft.
+        if place(store, &id, &bytes, now)? {
             return Ok(id);
         }
     }
@@ -146,6 +184,66 @@ pub(crate) fn assistant_ready(draft: &Value, policy_hash: &str, revision: u64) -
     }
 }
 
+/// Apply the readiness decision for `submit`. Only a real policy mismatch consumes the draft
+/// (never a malformed policy reply, never a sensitive hold), and an owner-only sync consumes
+/// nothing. `Consume` and `Hold` are for the caller to report as errors.
+pub(crate) fn settle_assistant(
+    store: &mut wk_local::LocalStore,
+    id: &str,
+    draft: &Value,
+    policy_hash: &str,
+    policy_revision: &Value,
+    owner_only: bool,
+) -> Result<Readiness, String> {
+    let revision = policy_revision.as_u64().ok_or("invalid policy")?;
+    let readiness = assistant_ready(draft, policy_hash, revision);
+    if readiness == Readiness::Consume && !owner_only {
+        store.ack(id)?; // a draft for an older approval can never become valid
+    }
+    Ok(readiness)
+}
+
+const LISTS: [&str; 3] = ["decisions", "constraints", "open_questions"];
+
+/// How many list items `tidy` removed from the assistant's input.
+fn dropped(input: &str, record: &Value) -> usize {
+    let given: usize = serde_json::from_str::<Value>(input).map_or(0, |v| {
+        LISTS
+            .iter()
+            .map(|k| v[*k].as_array().map_or(0, Vec::len))
+            .sum()
+    });
+    let kept: usize = LISTS
+        .iter()
+        .map(|k| record["card"][*k].as_array().map_or(0, Vec::len))
+        .sum();
+    given.saturating_sub(kept)
+}
+
+fn quote(s: &str) -> String {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-:@%+=".contains(c))
+    {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
+/// The result `draft` prints. `note` appears only when list items were dropped.
+fn result(id: &str, dir: &std::path::Path, dropped: usize) -> Value {
+    let dir = quote(&dir.to_string_lossy());
+    let mut out = json!({"draft_id": id, "private": true, "published": false, "dropped": dropped,
+        "next": format!("review with `wk-agent --state-dir {dir} drafts`, then `wk-agent --state-dir {dir} submit --id {id} --reviewed`")});
+    if dropped > 0 {
+        out["note"] = json!(format!(
+            "{dropped} short list items were dropped; write items as full short sentences"
+        ));
+    }
+    out
+}
+
 /// `wk-agent draft`: check approval and policy, then store a private draft.
 pub(crate) async fn run(dir: &std::path::Path, client: &str, input: &str) -> Result<Value, String> {
     valid_client(client)?;
@@ -157,9 +255,7 @@ pub(crate) async fn run(dir: &std::path::Path, client: &str, input: &str) -> Res
     let (key, record) = build(input, &c.service, revision, &b.policy_hash, client)?;
     let mut store = crate::state::store(dir)?;
     let id = store_draft(&mut store, &key, &record, crate::daemon::now()?)?;
-    Ok(
-        json!({"draft_id": id, "private": true, "published": false, "next": "review with `wk-agent drafts`, then `wk-agent submit --id ID --reviewed`"}),
-    )
+    Ok(result(&id, dir, dropped(input, &record)))
 }
 
 #[cfg(test)]
@@ -210,8 +306,48 @@ mod tests {
         let credential = ["sk-", "proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"].concat();
         let bad = OK.replace("Avoid repeated charges", &format!("key {credential}"));
         let err = build(&bad, "backend", 1, "h", "x").unwrap_err();
-        assert_eq!(err, "card requires private review (possible credential)");
+        assert_eq!(err, "card requires private review (prefix:sk-)");
         assert!(!err.contains("proj-"));
+        // Every label is a fixed rule name, whatever the content was.
+        let bad = OK.replace(
+            "Avoid repeated charges",
+            "see /Users/someone/leaky-marker-7",
+        );
+        let err = build(&bad, "backend", 1, "h", "x").unwrap_err();
+        assert_eq!(err, "card requires private review (home_path)");
+        assert!(!err.contains("leaky-marker"));
+    }
+    #[test]
+    fn credentials_the_screen_misses_are_caught_by_the_masker() {
+        let jwt = [
+            "eyJhbGciOiJIUzI1NiJ9",
+            "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+            "c2lnbmF0dXJlMTIzNDU2Nzg5MA",
+        ]
+        .join(".");
+        let assignment = ["to", "ken=abc123xyz"].concat();
+        for (field, leak) in [
+            ("Avoid repeated charges", format!("sent {jwt} upstream")),
+            ("Avoid repeated charges", format!("ran with {assignment}")),
+            ("Retries capped at 3", format!("header {jwt}")),
+        ] {
+            let bad = OK.replace(field, &leak);
+            assert!(bad != OK);
+            let err = build(&bad, "backend", 1, "h", "x").unwrap_err();
+            assert_eq!(err, "card requires private review (possible credential)");
+            assert!(!err.contains("abc123") && !err.contains("eyJ"));
+        }
+        // Ordinary text is stored as written.
+        let (_, record) = build(OK, "backend", 1, "h", "x").unwrap();
+        assert_eq!(
+            record["card"]["rationale"],
+            serde_json::from_str::<Value>(OK).unwrap()["rationale"]
+        );
+    }
+    #[test]
+    fn assistant_drafts_are_never_uploaded_to_the_owner_store_automatically() {
+        let (_, draft) = build(OK, "backend", 7, "hash1", "codex").unwrap();
+        assert!(crate::personal_sync::payload(&draft["card"]).is_err());
     }
     #[test]
     fn client_labels_are_restricted() {
@@ -264,8 +400,110 @@ mod tests {
         let bytes = s.read_record(&third, now + 30).unwrap().unwrap();
         let stored: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(stored["card"]["idempotency_key"], key["draft:".len()..]);
-        // After expiry of the first copy's window a new draft can still be made.
-        assert!(store_draft(&mut s, &key, &draft, now + TTL + 100).is_ok());
+        assert_ne!(third, second);
+        // After expiry of the first copies' window a new draft can still be made, under an id
+        // none of the earlier copies used.
+        let fourth = store_draft(&mut s, &key, &draft, now + TTL + 100).unwrap();
+        assert!(![&key, &second, &third].contains(&&fourth));
+    }
+    #[test]
+    fn a_pending_record_is_kept_not_overwritten() {
+        let (_dir, mut s) = store();
+        let (key, draft) = build(OK, "backend", 7, "hash1", "claude-code").unwrap();
+        let first = serde_json::to_vec(&draft).unwrap();
+        s.enqueue(&key, &first, 1_000, 3_600).unwrap();
+        let mut other = draft.clone();
+        other["assistant"]["client"] = json!("copilot");
+        assert_eq!(store_draft(&mut s, &key, &other, 1_500).unwrap(), key);
+        assert_eq!(s.read_record(&key, 1_500).unwrap(), Some(first));
+    }
+    #[test]
+    fn a_closed_id_moves_to_the_next_copy_even_when_closed_after_a_check() {
+        let (_dir, mut s) = store();
+        let (key, draft) = build(OK, "backend", 7, "hash1", "codex").unwrap();
+        let bytes = serde_json::to_vec(&draft).unwrap();
+        // Another process submitted the id between a check and the write.
+        assert!(place(&mut s, &key, &bytes, 1_000).unwrap());
+        s.ack(&key).unwrap();
+        assert!(
+            !place(&mut s, &key, &bytes, 1_001).unwrap(),
+            "closed, not an error"
+        );
+        let id = store_draft(&mut s, &key, &draft, 1_002).unwrap();
+        assert_eq!(id, copy_key(&key, 1));
+    }
+    #[test]
+    fn dropped_items_are_counted_and_reported_with_a_note() {
+        let short = OK.replace(
+            r#""open_questions":[]"#,
+            r#""open_questions":["yes","Is the cap per call?"]"#,
+        );
+        let (_, record) = build(&short, "backend", 7, "h", "x").unwrap();
+        assert_eq!(dropped(&short, &record), 1);
+        assert_eq!(dropped(OK, &record), 0, "nothing given, nothing dropped");
+        let dir = std::path::Path::new("/tmp/wk state");
+        let out = result("draft:abc", dir, 1);
+        assert_eq!(out["dropped"], 1);
+        assert!(out["note"]
+            .as_str()
+            .unwrap()
+            .contains("1 short list items were dropped"));
+        let none = result("draft:abc", dir, 0);
+        assert_eq!(none["dropped"], 0);
+        assert!(none.get("note").is_none());
+        let next = none["next"].as_str().unwrap();
+        assert!(
+            next.contains("--state-dir '/tmp/wk state' drafts"),
+            "{next}"
+        );
+        assert!(next.contains("submit --id draft:abc --reviewed"));
+    }
+    fn settled(
+        draft: &Value,
+        hash: &str,
+        revision: &Value,
+        owner_only: bool,
+    ) -> (Result<Readiness, String>, bool) {
+        let (_dir, mut s) = store();
+        let (key, _) = build(OK, "backend", 7, "hash1", "codex").unwrap();
+        s.enqueue(&key, &serde_json::to_vec(draft).unwrap(), 1_000, 3_600)
+            .unwrap();
+        let out = settle_assistant(&mut s, &key, draft, hash, revision, owner_only);
+        (out, s.contains(&key, 1_001).unwrap())
+    }
+    #[test]
+    fn settling_consumes_only_a_real_policy_mismatch() {
+        let (_, draft) = build(OK, "backend", 7, "hash1", "codex").unwrap();
+        assert_eq!(
+            settled(&draft, "hash1", &json!(7), false),
+            (Ok(Readiness::Ready), true)
+        );
+        assert_eq!(
+            settled(&draft, "other", &json!(7), false),
+            (Ok(Readiness::Consume), false)
+        );
+        assert_eq!(
+            settled(&draft, "hash1", &json!(8), false),
+            (Ok(Readiness::Consume), false)
+        );
+        // A malformed policy reply never consumes a valid draft.
+        for bad in [json!(null), json!("7"), json!(-1), json!(7.5)] {
+            let (out, live) = settled(&draft, "other", &bad, false);
+            assert_eq!(out, Err("invalid policy".into()));
+            assert!(live, "{bad}");
+        }
+        // Sensitive content holds without consuming.
+        let mut sensitive = draft.clone();
+        sensitive["card"]["rationale"] = json!(["pass", "word"].concat());
+        assert_eq!(
+            settled(&sensitive, "hash1", &json!(7), false),
+            (Ok(Readiness::Hold), true)
+        );
+        // Owner-only sync changes nothing.
+        assert_eq!(
+            settled(&draft, "other", &json!(7), true),
+            (Ok(Readiness::Consume), true)
+        );
     }
     #[test]
     fn redrafting_is_bounded() {

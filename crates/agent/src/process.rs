@@ -271,17 +271,22 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
         return crate::memory_import::finish_submit(dir, &mut s, id, &v, response, owner_only);
     }
     if v.get("assistant").is_some() {
-        // A malformed policy reply must never consume a valid draft.
-        let revision = p["policy_revision"].as_u64().ok_or("invalid policy")?;
-        match crate::assistant_draft::assistant_ready(&v, &b.policy_hash, revision) {
-            crate::assistant_draft::Readiness::Consume => {
-                s.ack(id)?; // a draft for an older approval can never become valid
+        use crate::assistant_draft::Readiness;
+        match crate::assistant_draft::settle_assistant(
+            &mut s,
+            id,
+            &v,
+            &b.policy_hash,
+            &p["policy_revision"],
+            owner_only,
+        )? {
+            Readiness::Consume => {
                 return Err("policy changed; ask your assistant to draft again".into());
             }
-            crate::assistant_draft::Readiness::Hold => {
+            Readiness::Hold => {
                 return Err("draft requires sensitive-content review".into());
             }
-            crate::assistant_draft::Readiness::Ready => {}
+            Readiness::Ready => {}
         }
         let response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
         if !owner_only {
