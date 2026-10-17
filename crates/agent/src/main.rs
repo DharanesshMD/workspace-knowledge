@@ -16,7 +16,6 @@ mod process;
 mod protection;
 #[allow(dead_code)] // Integrated by the following transport task.
 mod repository;
-#[allow(dead_code)] // Wired in by the call-site task.
 mod rules_draft;
 mod state;
 mod team;

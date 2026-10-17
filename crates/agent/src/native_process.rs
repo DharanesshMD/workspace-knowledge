@@ -6,7 +6,7 @@ use crate::{
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use wk_adapters::native_evidence::eligible;
+use wk_adapters::native_evidence::{eligible, Evidence};
 
 fn matches(draft: &Value, r: &Record, now: i64, revision: u64) -> bool {
     r.expires_at > now
@@ -66,6 +66,37 @@ pub async fn validate_draft(dir: &Path, draft: &Value) -> Result<std::fs::File, 
     )?;
     Ok(guard)
 }
+/// One native turn's draft text, counted against the inference budget.
+async fn turn_extract(
+    c: &state::Config,
+    budget: &mut crate::process::InferenceBudget,
+    turn: &Evidence,
+) -> Option<Result<wk_summarize::Extract, String>> {
+    let source = format!("user: {}\nassistant: {}", turn.prompt, turn.response);
+    let shape = crate::rules_draft::Shape::Exchange {
+        prompt: &turn.prompt,
+        reply: &turn.response,
+    };
+    budget
+        .attempt(crate::rules_draft::extract(c, &shape, &source))
+        .await
+}
+fn turn_card(
+    c: &state::Config,
+    extract: wk_summarize::Extract,
+    hash: String,
+    revision: u64,
+) -> Result<wk_contracts::CardSubmission, String> {
+    let card = wk_summarize::card(
+        extract,
+        hash,
+        revision,
+        vec![c.service.clone()],
+        crate::rules_draft::complete(c, true),
+    )?;
+    card.validate()?;
+    Ok(card)
+}
 pub async fn run(dir: &Path) -> Result<usize, String> {
     if dir.join("capture-gap.json").exists() {
         return Ok(0);
@@ -107,11 +138,7 @@ pub async fn run(dir: &Path) -> Result<usize, String> {
             if store.seen(&id)? {
                 continue;
             }
-            let source = format!("user: {}\nassistant: {}", turn.prompt, turn.response);
-            let Some(result) = budget
-                .attempt(wk_summarize::extract(&c.inference, &c.model, &source))
-                .await
-            else {
+            let Some(result) = turn_extract(&c, &mut budget, turn).await else {
                 return Ok(created);
             };
             let Ok(extract) = result else {
@@ -120,8 +147,10 @@ pub async fn run(dir: &Path) -> Result<usize, String> {
             if crate::process::processing_current(dir, &c, &binding).is_err() {
                 return Ok(created);
             }
-            let card = wk_summarize::card(extract, hash, revision, vec![c.service.clone()], true)?;
-            card.validate()?;
+            let Some(card) = crate::process::or_hold(&c, turn_card(&c, extract, hash, revision))?
+            else {
+                continue;
+            };
             if wk_summarize::sensitive(&serde_json::to_string(&card).map_err(|_| "invalid_card")?) {
                 continue;
             }
@@ -288,5 +317,63 @@ mod tests {
         r.hold_reason = None;
         r.turns[0].terminal = Terminal::Cancelled;
         assert!(!matches(&draft, &r, 100, 1));
+    }
+
+    #[tokio::test]
+    async fn rules_turns_are_partial_drafts_without_a_model_request() {
+        let model = crate::process::rules_test::Model::start().await;
+        let mut c = crate::process::rules_test::rules_config(state::Config {
+            root: "/w".into(),
+            binding_file: "/b.json".into(),
+            service: "app".into(),
+            server: "http://127.0.0.1:1".into(),
+            model: "test".into(),
+            inference: String::new(),
+            summarizer: crate::state::Summarizer::Local,
+            port: 1,
+            account: "test".into(),
+            device_id: "d".into(),
+            repository: None,
+            device: None,
+        });
+        c.inference = model.url.clone();
+        let turn = Evidence {
+            client: Client::Codex,
+            client_version: "0.162.0-alpha.2".into(),
+            parser_version: 1,
+            session: "s".into(),
+            agent: "main".into(),
+            turn: "t".into(),
+            prompt: "Make retries idempotent".into(),
+            response: "Added an idempotency key".into(),
+            messages_complete: true,
+            scope: Scope::Verified,
+            terminal: Terminal::Complete,
+            digest: "d".into(),
+            files_read: vec![],
+            files_changed: vec![],
+            hold_reason: None,
+        };
+        let mut budget =
+            crate::process::InferenceBudget::new(10, std::time::Duration::from_secs(5));
+        let extract = turn_extract(&c, &mut budget, &turn)
+            .await
+            .expect("within budget")
+            .expect("rules draft");
+        let card = turn_card(&c, extract, "k".into(), 1).unwrap();
+        assert_eq!(card.title, "[auto-drafted] Make retries idempotent");
+        assert_eq!(
+            serde_json::to_value(&card).unwrap()["capture_completeness"],
+            "partial"
+        );
+        assert_eq!(model.hits(), 0);
+        // Held items stay held through the budgeted dispatcher.
+        let mut sensitive = turn;
+        sensitive.prompt = "my password is x".into();
+        assert!(turn_extract(&c, &mut budget, &sensitive)
+            .await
+            .unwrap()
+            .is_err());
+        assert_eq!(model.hits(), 0);
     }
 }

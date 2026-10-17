@@ -6,7 +6,9 @@ use crate::{
     memory_map::{self, Action, Entry},
     memory_sources::{self, Candidate},
     memory_split::{self, Section, SourceKind},
-    network, process, state,
+    network, process,
+    rules_draft::{self, Shape},
+    state,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -394,13 +396,37 @@ pub(crate) async fn draft_all(
             store.ack(&id)?;
             continue;
         }
-        match wk_summarize::extract(&c.inference, &c.model, &record.source()).await {
+        let title = if record.heading.is_empty() {
+            record.label.clone()
+        } else {
+            record.heading.join(" > ")
+        };
+        let body = match &record.hints {
+            Some(hint) if c.summarizer == state::Summarizer::Rules => {
+                format!("{hint}\n{}", record.body)
+            }
+            _ => record.body.clone(),
+        };
+        let shape = Shape::Note {
+            title: &title,
+            body: &body,
+        };
+        match rules_draft::extract(c, &shape, &record.source()).await {
             Ok(extract) => {
                 if process::processing_current(dir, c, b).is_err() {
                     break;
                 }
-                let card =
-                    wk_summarize::card(extract, hash, revision, vec![c.service.clone()], true)?;
+                let card = wk_summarize::card(
+                    extract,
+                    hash,
+                    revision,
+                    vec![c.service.clone()],
+                    rules_draft::complete(c, true),
+                );
+                let Some(card) = process::or_hold(c, card)? else {
+                    held += 1;
+                    continue;
+                };
                 let draft = json!({
                     "card": card,
                     "memory": {
@@ -1336,6 +1362,79 @@ mod tests {
             .pending_ids("draft:", "", now, 100)
             .unwrap()
             .is_empty());
+        server.abort();
+    }
+    #[tokio::test]
+    async fn rules_drafts_notes_without_a_model_request() {
+        let model = process::rules_test::Model::start().await;
+        let mut f = fixture(&model.url);
+        f.c = process::rules_test::rules_config(f.c.clone());
+        f.c.inference = model.url.clone();
+        state::save(&f.dir.join("agent.json"), &f.c).unwrap();
+        let dir = f.b.root.join("backend/.github/instructions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            f.b.root.join("backend/CLAUDE.md"),
+            "## Retries\nReuse the idempotency key.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("rust.instructions.md"),
+            "---\napplyTo: \"**/*.rs\"\ndescription: Rust style\n---\n## Errors\nUse thiserror.\n",
+        )
+        .unwrap();
+        let note = memory_sources::notes_dir(&f.home, &f.b.root).join("deploy.md");
+        std::fs::write(&note, "Deploys happen after the Tuesday sync.\n").unwrap();
+        let now = daemon::now().unwrap();
+        import_with(
+            &f.dir,
+            &f.b,
+            "backend",
+            &mut f.store,
+            Some(&f.home),
+            &[note],
+            now,
+        )
+        .unwrap();
+        assert_eq!(draft(&mut f).await.unwrap(), (3, 0));
+        assert_eq!(model.hits(), 0, "rules mode never contacts the model");
+        let mut cards = Vec::new();
+        for id in f.store.pending_ids("draft:", "", now, 100).unwrap() {
+            let draft: Value =
+                serde_json::from_slice(&f.store.read_record(&id, now).unwrap().unwrap()).unwrap();
+            assert_eq!(draft["card"]["capture_completeness"], "partial");
+            let title = draft["card"]["title"].as_str().unwrap().to_string();
+            assert!(title.starts_with("[auto-drafted] "), "{title}");
+            cards.push(draft["card"].clone());
+        }
+        let card = |title: &str| {
+            cards
+                .iter()
+                .find(|c| c["title"] == format!("[auto-drafted] {title}"))
+                .unwrap_or_else(|| panic!("no draft titled {title}"))
+        };
+        assert!(card("Retries")["rationale"]
+            .as_str()
+            .unwrap()
+            .contains("idempotency key"));
+        // The description of a scoped instruction file leads the text.
+        let errors = card("Errors")["rationale"].as_str().unwrap().to_string();
+        assert!(errors.starts_with("description: Rust style\n") && errors.contains("thiserror"));
+        // A note without a heading is titled by its label.
+        let titled = cards
+            .iter()
+            .filter(|c| c["rationale"].as_str().unwrap().contains("Tuesday"))
+            .count();
+        assert_eq!(titled, 1);
+    }
+    #[tokio::test]
+    async fn local_memory_drafts_are_unchanged_by_the_dispatcher() {
+        let (url, server, sources) = model().await;
+        let mut f = fixture(&url);
+        let now = daemon::now().unwrap();
+        one_section(&mut f, now);
+        assert_eq!(draft(&mut f).await.unwrap(), (1, 0));
+        assert_eq!(sources.lock().unwrap().len(), 1);
         server.abort();
     }
     #[tokio::test]

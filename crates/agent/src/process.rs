@@ -66,6 +66,16 @@ pub(crate) fn processing_current(
     }
     Ok(())
 }
+/// A card that cannot be built is a held item in rules mode: one unusable draft
+/// must not make every later `process` run fail the same way. With a model the
+/// error still surfaces as it always has.
+pub(crate) fn or_hold<T>(c: &state::Config, built: Result<T, String>) -> Result<Option<T>, String> {
+    match built {
+        Ok(v) => Ok(Some(v)),
+        Err(_) if c.summarizer == state::Summarizer::Rules => Ok(None),
+        Err(e) => Err(e),
+    }
+}
 pub(crate) async fn journal_turns(
     dir: &Path,
     c: &state::Config,
@@ -122,20 +132,34 @@ pub(crate) async fn journal_turns(
         if store.seen(&key)? {
             continue;
         }
-        match wk_summarize::extract(&c.inference, &c.model, &source).await {
+        let text = |kind: &str, last: bool| {
+            let mut found = events.iter().filter(|e| e["kind"] == kind);
+            let event = if last {
+                found.next_back()
+            } else {
+                found.next()
+            };
+            event.and_then(|e| e["text"].as_str()).unwrap_or("")
+        };
+        let shape = crate::rules_draft::Shape::Exchange {
+            prompt: text("user_prompt", false),
+            reply: text("assistant_response", true),
+        };
+        match crate::rules_draft::extract(c, &shape, &source).await {
             Ok(extract) => {
                 if processing_current(dir, c, b).is_err() {
                     break;
                 }
                 let complete = events.iter().any(|e| e["kind"] == "turn_end")
                     && events.iter().all(|e| e["agent_id"] == "managed-chat");
-                let card = wk_summarize::card(
-                    extract,
-                    hash,
-                    policy["policy_revision"].as_u64().ok_or("invalid policy")?,
-                    vec![c.service.clone()],
-                    complete,
-                )?;
+                let complete = crate::rules_draft::complete(c, complete);
+                let revision = policy["policy_revision"].as_u64().ok_or("invalid policy")?;
+                let card =
+                    wk_summarize::card(extract, hash, revision, vec![c.service.clone()], complete);
+                let Some(card) = or_hold(c, card)? else {
+                    held += 1;
+                    continue;
+                };
                 let draft = json!({"card":card,"source_id":id,"source_digest":format!("{:x}",Sha256::digest(serde_json::to_vec(events).map_err(|_|"invalid private events")?)),"turn_key":turn_key,"policy_hash":b.policy_hash,"model":c.model,"prompt_version":1,"privacy_policy_version":1});
                 let encoded = serde_json::to_vec(&draft).map_err(|_| "invalid draft")?;
                 store.update(&key, daemon::now()?, 3600, |old| {
@@ -330,6 +354,50 @@ fn native_matches(
                 && draft["source_digest"] == t.digest
         })
 }
+/// One Cursor turn's draft text, counted against the inference budget.
+async fn native_extract(
+    c: &state::Config,
+    budget: &mut InferenceBudget,
+    turn: &wk_adapters::cursor_session::CursorTurn,
+) -> Option<Result<wk_summarize::Extract, String>> {
+    let source = format!("user: {}\nassistant: {}", turn.prompt, turn.response);
+    let shape = crate::rules_draft::Shape::Exchange {
+        prompt: &turn.prompt,
+        reply: &turn.response,
+    };
+    budget
+        .attempt(crate::rules_draft::extract(c, &shape, &source))
+        .await
+}
+/// The card for a Cursor turn, with the files it read or changed as evidence.
+fn native_card(
+    c: &state::Config,
+    extract: wk_summarize::Extract,
+    hash: String,
+    revision: u64,
+    turn: &wk_adapters::cursor_session::CursorTurn,
+) -> Result<wk_contracts::CardSubmission, String> {
+    let mut card = wk_summarize::card(
+        extract,
+        hash,
+        revision,
+        vec![c.service.clone()],
+        crate::rules_draft::complete(c, true),
+    )?;
+    let files = turn
+        .files_read
+        .iter()
+        .chain(&turn.files_changed)
+        .collect::<std::collections::BTreeSet<_>>();
+    for file in files {
+        card.evidence.push(wk_contracts::Evidence {
+            kind: wk_contracts::EvidenceKind::FileObservation,
+            reference: file.clone(),
+        });
+    }
+    card.validate()?;
+    Ok(card)
+}
 pub(crate) struct InferenceBudget {
     remaining: usize,
     deadline: tokio::time::Instant,
@@ -411,11 +479,7 @@ async fn native_run(
             {
                 break;
             }
-            let source = format!("user: {}\nassistant: {}", turn.prompt, turn.response);
-            let Some(result) = budget
-                .attempt(wk_summarize::extract(&c.inference, &c.model, &source))
-                .await
-            else {
+            let Some(result) = native_extract(c, &mut budget, turn).await else {
                 return Ok(created);
             };
             let Ok(extract) = result else {
@@ -424,25 +488,10 @@ async fn native_run(
             if processing_current(dir, c, b).is_err() {
                 return Ok(created);
             }
-            let mut card = wk_summarize::card(
-                extract,
-                hash,
-                policy["policy_revision"].as_u64().ok_or("invalid_policy")?,
-                vec![c.service.clone()],
-                true,
-            )?;
-            let files = turn
-                .files_read
-                .iter()
-                .chain(&turn.files_changed)
-                .collect::<std::collections::BTreeSet<_>>();
-            for file in files {
-                card.evidence.push(wk_contracts::Evidence {
-                    kind: wk_contracts::EvidenceKind::FileObservation,
-                    reference: file.clone(),
-                });
-            }
-            card.validate()?;
+            let revision = policy["policy_revision"].as_u64().ok_or("invalid_policy")?;
+            let Some(card) = or_hold(c, native_card(c, extract, hash, revision, turn))? else {
+                continue;
+            };
             if wk_summarize::sensitive(&serde_json::to_string(&card).map_err(|_| "invalid_card")?) {
                 continue;
             }
@@ -691,5 +740,299 @@ mod pause_regression {
             .unwrap()
             .is_empty());
         server.abort();
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod rules_test {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    /// The same setup with `summarizer: rules` and no model configured.
+    pub(crate) fn rules_config(mut c: state::Config) -> state::Config {
+        c.summarizer = state::Summarizer::Rules;
+        c.inference = String::new();
+        c.model = String::new();
+        c
+    }
+    /// A real loopback model endpoint that counts every request it receives.
+    pub(crate) struct Model {
+        pub url: String,
+        hits: Arc<AtomicUsize>,
+        task: tokio::task::JoinHandle<()>,
+    }
+    impl Model {
+        pub(crate) async fn start() -> Self {
+            let hits = Arc::new(AtomicUsize::new(0));
+            let counter = hits.clone();
+            let app = axum::Router::new().route(
+                "/v1/chat/completions",
+                axum::routing::post(move || {
+                    let counter = counter.clone();
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!(
+                "http://{}/v1/chat/completions",
+                listener.local_addr().unwrap()
+            );
+            let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            Self { url, hits, task }
+        }
+        pub(crate) fn hits(&self) -> usize {
+            self.hits.load(Ordering::SeqCst)
+        }
+    }
+    impl Drop for Model {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+}
+
+#[cfg(test)]
+mod rules_tests {
+    use super::rules_test::*;
+    use super::*;
+    use wk_adapters::cursor_session::{CursorTurn, MessageState, ScopeState};
+
+    fn local(inference: &str) -> state::Config {
+        state::Config {
+            root: "/w".into(),
+            binding_file: "/b.json".into(),
+            service: "backend".into(),
+            server: "http://127.0.0.1:4318".into(),
+            model: "synthetic-local".into(),
+            inference: inference.into(),
+            summarizer: state::Summarizer::Local,
+            port: 4319,
+            account: "workspace".into(),
+            device_id: "d".into(),
+            repository: None,
+            device: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn rules_journal_turns_draft_each_turn_without_a_model() {
+        let model = Model::start().await;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("workspace");
+        std::fs::create_dir_all(root.join("backend")).unwrap();
+        let dir =
+            state::private_dir(&temp.path().canonicalize().unwrap().join("state"), true).unwrap();
+        let b =
+            wk_scope::enrollment::Binding::approve(&root, "demo", vec!["backend".into()]).unwrap();
+        let mut c = rules_config(state::Config {
+            root: b.root.clone(),
+            binding_file: dir.join("binding.json"),
+            ..local("")
+        });
+        c.inference = model.url.clone();
+        state::save(&c.binding_file, &b).unwrap();
+        state::save(&dir.join("agent.json"), &c).unwrap();
+        // Turn one holds two exchanges; turn two holds one.
+        let session = json!({"events":[
+            {"kind":"user_prompt","agent_id":"main","turn_id":"one","text":"Make retries idempotent"},
+            {"kind":"assistant_response","agent_id":"main","turn_id":"one","text":"Added a key"},
+            {"kind":"user_prompt","agent_id":"main","turn_id":"one","text":"Also cap them"},
+            {"kind":"assistant_response","agent_id":"main","turn_id":"one","text":"Capped retries at 3"},
+            {"kind":"user_prompt","agent_id":"main","turn_id":"two","text":"Name the limiter"},
+            {"kind":"assistant_response","agent_id":"main","turn_id":"two","text":"Called it Limiter"}]});
+        let mut store =
+            wk_local::LocalStore::open(&dir.join("journal.db"), [7; 32], 1000000).unwrap();
+        let base = state::base_binding(&c).unwrap();
+        let result = journal_turns(
+            &dir,
+            &c,
+            &base,
+            &json!({"policy_revision":1}),
+            &mut store,
+            "s",
+            &session,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, (2, 0));
+        assert_eq!(model.hits(), 0, "rules mode never contacts the model");
+        let now = daemon::now().unwrap();
+        let mut cards = Vec::new();
+        for id in store.pending_ids("draft:", "", now, 100).unwrap() {
+            let draft: Value =
+                serde_json::from_slice(&store.read_record(&id, now).unwrap().unwrap()).unwrap();
+            assert_eq!(draft["card"]["capture_completeness"], "partial");
+            cards.push(draft["card"].clone());
+        }
+        assert_eq!(cards.len(), 2);
+        assert!(cards.iter().all(|card| card["title"]
+            .as_str()
+            .unwrap()
+            .starts_with("[auto-drafted] ")));
+        // First prompt of the turn, last reply of the turn.
+        let one = cards
+            .iter()
+            .find(|card| card["title"] == "[auto-drafted] Make retries idempotent")
+            .expect("first prompt is the title");
+        assert_eq!(one["rationale"], "Capped retries at 3");
+    }
+
+    #[tokio::test]
+    async fn rules_journal_turns_hold_sensitive_turns() {
+        let model = Model::start().await;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("workspace");
+        std::fs::create_dir_all(root.join("backend")).unwrap();
+        let dir =
+            state::private_dir(&temp.path().canonicalize().unwrap().join("state"), true).unwrap();
+        let b =
+            wk_scope::enrollment::Binding::approve(&root, "demo", vec!["backend".into()]).unwrap();
+        let mut c = rules_config(state::Config {
+            root: b.root.clone(),
+            binding_file: dir.join("binding.json"),
+            ..local("")
+        });
+        c.inference = model.url.clone();
+        state::save(&c.binding_file, &b).unwrap();
+        state::save(&dir.join("agent.json"), &c).unwrap();
+        let session = json!({"events":[
+            {"kind":"user_prompt","agent_id":"main","turn_id":"one","text":"my password is hunter2"},
+            {"kind":"assistant_response","agent_id":"main","turn_id":"one","text":"ok"}]});
+        let mut store =
+            wk_local::LocalStore::open(&dir.join("journal.db"), [7; 32], 1000000).unwrap();
+        let base = state::base_binding(&c).unwrap();
+        let result = journal_turns(
+            &dir,
+            &c,
+            &base,
+            &json!({"policy_revision":1}),
+            &mut store,
+            "s",
+            &session,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, (0, 1));
+        assert_eq!(model.hits(), 0);
+    }
+
+    #[test]
+    fn unbuildable_cards_are_held_in_rules_mode_and_surface_with_a_model() {
+        let rules = rules_config(local(""));
+        assert_eq!(or_hold(&rules, Ok::<_, String>(1)), Ok(Some(1)));
+        assert_eq!(
+            or_hold(&rules, Err::<u8, _>("invalid card".into())),
+            Ok(None)
+        );
+        let model = local("http://127.0.0.1:1/x");
+        assert_eq!(or_hold(&model, Ok::<_, String>(1)), Ok(Some(1)));
+        assert_eq!(
+            or_hold(&model, Err::<u8, _>("invalid card".into())),
+            Err("invalid card".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unbuildable_rules_draft_is_held_without_stopping_later_turns() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("workspace");
+        // A service name no card accepts: every card fails validation after extraction.
+        std::fs::create_dir_all(root.join("bad service")).unwrap();
+        let dir =
+            state::private_dir(&temp.path().canonicalize().unwrap().join("state"), true).unwrap();
+        let b = wk_scope::enrollment::Binding::approve(&root, "demo", vec!["bad service".into()])
+            .unwrap();
+        let c = rules_config(state::Config {
+            root: b.root.clone(),
+            binding_file: dir.join("binding.json"),
+            service: "bad service".into(),
+            ..local("")
+        });
+        state::save(&c.binding_file, &b).unwrap();
+        state::save(&dir.join("agent.json"), &c).unwrap();
+        let session = json!({"events":[
+            {"kind":"user_prompt","agent_id":"main","turn_id":"a","text":"Make retries idempotent"},
+            {"kind":"assistant_response","agent_id":"main","turn_id":"a","text":"Added a key"},
+            {"kind":"user_prompt","agent_id":"main","turn_id":"b","text":"Name the limiter"},
+            {"kind":"assistant_response","agent_id":"main","turn_id":"b","text":"Called it Limiter"}]});
+        let mut store =
+            wk_local::LocalStore::open(&dir.join("journal.db"), [7; 32], 1000000).unwrap();
+        let base = state::base_binding(&c).unwrap();
+        let result = journal_turns(
+            &dir,
+            &c,
+            &base,
+            &json!({"policy_revision":1}),
+            &mut store,
+            "s",
+            &session,
+        )
+        .await
+        .expect("an unbuildable draft never aborts the run");
+        assert_eq!(result, (0, 2), "both turns are held, none lost to an error");
+        let now = daemon::now().unwrap();
+        assert!(store
+            .pending_ids("draft:", "", now, 100)
+            .unwrap()
+            .is_empty());
+    }
+
+    fn cursor_turn() -> CursorTurn {
+        CursorTurn {
+            index: 0,
+            prompt: "Make retries idempotent\nso payments are not repeated".into(),
+            response: "Added an idempotency key".into(),
+            files_read: vec!["src/pay.rs".into()],
+            files_changed: vec!["src/pay.rs".into(), "src/retry.rs".into()],
+            messages: MessageState::Complete,
+            scope: ScopeState::Verified,
+            digest: "digest".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn rules_cursor_turns_are_partial_and_keep_file_evidence() {
+        let model = Model::start().await;
+        let c = rules_config(local(&model.url));
+        let mut budget = InferenceBudget::new(10, std::time::Duration::from_secs(5));
+        let turn = cursor_turn();
+        let extract = native_extract(&c, &mut budget, &turn)
+            .await
+            .expect("within budget")
+            .expect("rules draft");
+        let card = native_card(&c, extract, "k".into(), 1, &turn).unwrap();
+        assert_eq!(card.title, "[auto-drafted] Make retries idempotent");
+        assert_eq!(
+            serde_json::to_value(&card).unwrap()["capture_completeness"],
+            "partial"
+        );
+        let refs: Vec<_> = card.evidence.iter().map(|e| e.reference.as_str()).collect();
+        assert_eq!(refs, ["src/pay.rs", "src/retry.rs"]);
+        assert_eq!(model.hits(), 0);
+    }
+
+    #[tokio::test]
+    async fn local_cursor_turns_stay_complete() {
+        let model = Model::start().await;
+        let c = local(&model.url);
+        let extract = wk_summarize::Extract {
+            title: "T".into(),
+            intent: "Keep retries safe".into(),
+            rationale: "R".into(),
+            decisions: vec![],
+            constraints: vec![],
+            open_questions: vec![],
+            sensitive: false,
+        };
+        let card = native_card(&c, extract, "k".into(), 1, &cursor_turn()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&card).unwrap()["capture_completeness"],
+            "complete"
+        );
     }
 }
