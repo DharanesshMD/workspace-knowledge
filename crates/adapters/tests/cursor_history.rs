@@ -95,7 +95,7 @@ fn redaction_masks_short_credential_assignments_but_keeps_the_key() {
             "access_key: [REDACTED]\nprivate_key: [REDACTED]",
         ),
         ("client_secret=c1;", "client_secret=[REDACTED]"),
-        ("auth: xyz", "auth: [REDACTED]"),
+        ("auth: Bearer xyz", "auth: Bearer [REDACTED]"),
         ("bearer: b1", "bearer: [REDACTED]"),
         (
             r#"{"password": "hunter2", "user": "me"}"#,
@@ -134,6 +134,8 @@ fn redaction_leaves_credential_words_without_assignments_alone() {
         "password: \"\"",
         "password == other",
         "see https://x.test/secret/path",
+        "auth: xyz",
+        "oauth=x ppwd=x signature=abc",
     ] {
         assert_eq!(redact(prose), prose);
     }
@@ -142,6 +144,153 @@ fn redaction_leaves_credential_words_without_assignments_alone() {
         redact("token=sk-SYNTHETICabcdef1234567890 ok"),
         "[REDACTED] ok"
     );
+}
+
+const COMPOUND_AND_QUOTED: [(&str, &str); 36] = [
+    ("accessToken=a1", "accessToken=[REDACTED]"),
+    (r#""refreshToken": "r1""#, r#""refreshToken": "[REDACTED]""#),
+    ("clientSecret: c1", "clientSecret: [REDACTED]"),
+    (
+        "secretAccessKey=wJalrXUtn/K7MDENG/bPxRfi",
+        "secretAccessKey=[REDACTED]",
+    ),
+    ("openaiApiKey=k1", "openaiApiKey=[REDACTED]"),
+    ("PGPASSWORD=pg1 psql", "PGPASSWORD=[REDACTED] psql"),
+    ("SECRET_KEY=s1", "SECRET_KEY=[REDACTED]"),
+    ("SECRET_KEY_BASE=s2", "SECRET_KEY_BASE=[REDACTED]"),
+    ("passphrase: pp", "passphrase: [REDACTED]"),
+    (
+        "signing_key=a session_key=b",
+        "signing_key=[REDACTED] session_key=[REDACTED]",
+    ),
+    (
+        "encryption_key=c credentials: d",
+        "encryption_key=[REDACTED] credentials: [REDACTED]",
+    ),
+    ("dbPwd=p", "dbPwd=[REDACTED]"),
+    (
+        "https://x.test/f?sig=abc123&se=2026",
+        "https://x.test/f?sig=[REDACTED]&se=2026",
+    ),
+    (
+        "https://x.test/f?X-Amz-Signature=ab/c+d==&x=1",
+        "https://x.test/f?X-Amz-Signature=[REDACTED]&x=1",
+    ),
+    (
+        r#"password = "correct horse battery staple""#,
+        r#"password = "[REDACTED]""#,
+    ),
+    (
+        r#"{"password": "a\"b c", "user": "me"}"#,
+        r#"{"password": "[REDACTED]", "user": "me"}"#,
+    ),
+    ("password='x, y' z", "password='[REDACTED]' z"),
+    ("password=a,b next", "password=[REDACTED] next"),
+    ("password=abc, next", "password=[REDACTED], next"),
+    (
+        r#"{\"password\":\"hu nter2\",\"x\":1}"#,
+        r#"{\"password\":\"[REDACTED]\",\"x\":1}"#,
+    ),
+    (
+        "postgres://app:hunter2@db.test:5432/app",
+        "postgres://app:[REDACTED]@db.test:5432/app",
+    ),
+    (
+        "git clone https://me:p%40ss@github.com/o/r.git",
+        "git clone https://me:[REDACTED]@github.com/o/r.git",
+    ),
+    (
+        "curl -u alice:s3cret https://x.test",
+        "curl -u alice:[REDACTED] https://x.test",
+    ),
+    (
+        r#"curl --user "alice:pass word" url"#,
+        r#"curl --user "alice:[REDACTED]" url"#,
+    ),
+    (
+        "curl --user=alice:pw url",
+        "curl --user=alice:[REDACTED] url",
+    ),
+    (
+        r#"const PASSWORD: &str = "hunter2";"#,
+        r#"const PASSWORD: &str = "[REDACTED]";"#,
+    ),
+    (
+        "static TOKEN: &'static str = 'abc';",
+        "static TOKEN: &'static str = '[REDACTED]';",
+    ),
+    (
+        "let x = {password => 'p1'}",
+        "let x = {password => '[REDACTED]'}",
+    ),
+    (
+        "password:\n  hunter2\nnext: x\n",
+        "password:\n  [REDACTED]\nnext: x\n",
+    ),
+    (
+        "token: |\n  line1\n  line2\n\n  line3\nafter\n",
+        "token: |\n  [REDACTED]\n  [REDACTED]\n\n  [REDACTED]\nafter\n",
+    ),
+    (
+        "  - secret:\n      name: foo\n  - other: 1",
+        "  - secret:\n      [REDACTED]\n  - other: 1",
+    ),
+    ("x-api-key: abc\r\nnext", "x-api-key: [REDACTED]\r\nnext"),
+    (
+        "Proxy-Authorization: Basic abc",
+        "Proxy-Authorization: Basic [REDACTED]",
+    ),
+    ("PASSWORD=été ünï", "PASSWORD=[REDACTED] ünï"),
+    (
+        "aws_secret_access_key = abc/def",
+        "aws_secret_access_key = [REDACTED]",
+    ),
+    ("token: Token abc", "token: Token [REDACTED]"),
+];
+
+#[test]
+fn redaction_masks_compound_names_quoted_values_urls_and_blocks() {
+    for (input, want) in COMPOUND_AND_QUOTED {
+        assert_eq!(redact(input), want, "{input}");
+    }
+}
+
+#[test]
+fn redaction_avoids_code_and_url_false_positives() {
+    for text in [
+        "crate::auth::login(token)",
+        "use crate::auth::token::verify;",
+        "pub token: &str,",
+        "token: String,",
+        "password: Option<String>",
+        "let password: &'static str;",
+        "secret: string; auth: bool",
+        "https://user@host/x",
+        "https://host:8080/a?email=me@x.test",
+        "curl -u alice https://x.test",
+        "curl --user-agent x:y",
+        "auth:\n  x",
+        "password:\n",
+        "a token:\nplain line",
+    ] {
+        assert_eq!(redact(text), text);
+    }
+}
+
+#[test]
+fn redaction_is_idempotent() {
+    let mut inputs: Vec<&str> = COMPOUND_AND_QUOTED.iter().map(|(i, _)| *i).collect();
+    inputs.extend([
+        "-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\nDone",
+        "key=sk-SYNTHETICabcdef1234567890 and ghp_abcdefghijklmnop1234 ok",
+        "Authorization: Bearer [REDACTED]",
+        "password: [REDACTED],",
+        "user:[REDACTED]@host",
+    ]);
+    for input in inputs {
+        let once = redact(input);
+        assert_eq!(redact(&once), once, "{input}");
+    }
 }
 
 #[test]
