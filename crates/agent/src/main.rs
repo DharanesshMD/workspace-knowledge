@@ -169,6 +169,9 @@ enum Command {
     Prompt {
         #[arg(long)]
         client: String,
+        /// Print only the instruction text, so it can be redirected to a file.
+        #[arg(long)]
+        raw: bool,
     },
     Uninstall {
         #[arg(long)]
@@ -228,7 +231,9 @@ async fn main() {
         _ => None,
     };
     let directory = cli.state_dir.clone();
+    let raw = matches!(&cli.command, Command::Prompt { raw: true, .. });
     match run(cli).await {
+        Ok(Value::String(text)) if raw => print!("{text}"),
         Ok(v) => println!("{v}"),
         Err(e) => {
             if let Some(output) = fallback {
@@ -538,10 +543,11 @@ async fn run(cli: Cli) -> Result<Value, String> {
             let text = stdin_limited()?;
             assistant_draft::run(&state, &client, &text).await
         }
-        Command::Prompt { client } => assistant_prompt::output(
+        Command::Prompt { client, raw } => assistant_prompt::output(
             &client,
             &std::env::current_exe().map_err(|_| "executable unavailable")?,
             &state,
+            raw,
         ),
         Command::Uninstall { client, file } => {
             if let Ok(native) = native_enrollment::parse_client(&client) {
@@ -674,7 +680,20 @@ mod cli_tests {
             "codex",
         ])
         .unwrap();
-        assert!(matches!(cli.command, Command::Prompt { client } if client == "codex"));
+        assert!(
+            matches!(cli.command, Command::Prompt { client, raw } if client == "codex" && !raw)
+        );
+        let raw = Cli::try_parse_from([
+            "wk-agent",
+            "--state-dir",
+            "/private/wk",
+            "prompt",
+            "--client",
+            "codex",
+            "--raw",
+        ])
+        .unwrap();
+        assert!(matches!(raw.command, Command::Prompt { raw: true, .. }));
         assert!(Cli::try_parse_from(["wk-agent", "--state-dir", "/private/wk", "prompt"]).is_err());
     }
 
