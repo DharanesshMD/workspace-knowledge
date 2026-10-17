@@ -10,11 +10,15 @@
 //! turn context are ignored. Injected context is dropped per content part, and counted in
 //! `dropped_injected`: parts starting with a known marker, and parts made up entirely of
 //! `<tag ...>…</tag>` blocks at least one of which has a tool-style name containing `_` or `-`
-//! (parts made only of plain-named tags such as `<task>` are typed prompts and kept). Messages
+//! (parts made only of plain-named tags such as `<task>` are typed prompts and kept). A new
+//! injected wrapper with a plain name (like `<skill>`) is therefore only dropped once it is
+//! added to the markers below; the general tag rule cannot see it. Messages
 //! with an unknown role and content parts of an unknown type (anything but `input_text`,
 //! `output_text` and text-less `input_image`) are counted, never guessed. A user message made only
 //! of injected context leaves no prompt, so the replies around it read as one assistant turn.
-//! The workspace is `session_meta.cwd` only when it is absolute. Session files are read through a
+//! The workspace is `session_meta.cwd` only when it is absolute and has no `.` or `..`
+//! component. A session id found in two files is imported once, from the most recently
+//! modified file; the dropped copy counts as an unreadable record. Session files are read through a
 //! bounded, symlink-refusing open; symlinks are never followed out of the sessions directory.
 //!
 //! Compaction: in the observed data compaction writes top-level `compacted` records, which are
@@ -27,28 +31,33 @@
 //! the same exchanges can appear in two conversations.
 use crate::cursor_history::{Conversation, History, Message};
 use crate::history_common::{
-    absolute_dir, injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Refused,
+    absolute_dir, injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Newest, Refused,
 };
 use serde_json::Value;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_MESSAGES: usize = 5_000;
 /// Directory levels searched for session files: `YYYY/MM/DD/`.
 const MAX_DEPTH: usize = 4;
 
-/// Context Codex sends as user messages (instructions, environment, skills, shell output,
-/// notices). Matched case-insensitively at the start of any text part, as Codex itself does.
-const INJECTED: [&str; 8] = [
-    "<environment_context>",
-    "<user_instructions>",
+/// Wrapper tags of context Codex sends as user messages (environment, instructions, skills,
+/// shell output, notices). A part opening with one, with or without attributes, is injected.
+const INJECTED_TAGS: [&str; 6] = [
+    "environment_context",
+    "user_instructions",
+    "skill",
+    "user_shell_command",
+    "turn_aborted",
+    "subagent_notification",
+];
+
+/// Other openings of injected context.
+const INJECTED_PREFIXES: [&str; 2] = [
     "<permissions instructions>",
     "# AGENTS.md instructions for ",
-    "<skill>",
-    "<user_shell_command>",
-    "<turn_aborted>",
-    "<subagent_notification>",
 ];
 
 /// `$CODEX_HOME/sessions`, else `~/.codex/sessions`.
@@ -77,8 +86,11 @@ pub fn read(sessions_dir: &Path) -> Result<History, String> {
     collect(entries, MAX_DEPTH, &mut files);
     files.sort();
     let mut history = History::default();
-    for file in files {
-        read_session(&file, &mut history);
+    let mut newest = Newest::default();
+    for (file, modified) in files {
+        if let Some(conversation) = read_session(&file, sessions_dir, &mut history) {
+            newest.push(&mut history, conversation, modified);
+        }
     }
     history
         .conversations
@@ -86,8 +98,11 @@ pub fn read(sessions_dir: &Path) -> Result<History, String> {
     Ok(history)
 }
 
+/// A session file and when it was last modified.
+type SessionFile = (PathBuf, Option<SystemTime>);
+
 /// `*.jsonl` files in `entries` and, while `depth` allows, in real (non-symlink) subfolders.
-fn collect(entries: std::fs::ReadDir, depth: usize, files: &mut Vec<PathBuf>) {
+fn collect(entries: std::fs::ReadDir, depth: usize, files: &mut Vec<SessionFile>) {
     for entry in entries.flatten() {
         let Ok(kind) = entry.file_type() else {
             continue;
@@ -98,19 +113,21 @@ fn collect(entries: std::fs::ReadDir, depth: usize, files: &mut Vec<PathBuf>) {
                 collect(inner, depth - 1, files);
             }
         } else if kind.is_file() && path.extension().is_some_and(|e| e == "jsonl") {
-            files.push(path);
+            let modified = entry.metadata().and_then(|m| m.modified()).ok();
+            files.push((path, modified));
         }
     }
 }
 
-/// Read one session file into `history`. Oversized sessions count only as `skipped`;
-/// unreadable records (malformed lines, unknown roles) are counted otherwise.
-fn read_session(file: &Path, history: &mut History) {
+/// Read one session file. Oversized sessions count only as `skipped`; unreadable records
+/// (malformed lines, unknown roles and content parts) and dropped injected parts are counted in
+/// `history` only for sessions that were read to the end.
+fn read_session(file: &Path, root: &Path, history: &mut History) -> Option<Conversation> {
     let mut lines = match Lines::open(file, MAX_FILE_BYTES) {
         Ok(lines) => lines,
         Err(refused) => {
             refused.count(history);
-            return;
+            return None;
         }
     };
     let mut session = None;
@@ -122,13 +139,14 @@ fn read_session(file: &Path, history: &mut History) {
     let mut saw_meta = false;
     let mut saw_message_record = false;
     let mut gaps = 0;
+    let mut dropped = 0;
     loop {
         let line = match lines.next_line() {
             Ok(Some(line)) => line,
             Ok(None) => break,
             Err(Refused::TooLarge) => {
                 history.skipped += 1;
-                return;
+                return None;
             }
             Err(_) => {
                 gaps += 1;
@@ -184,7 +202,7 @@ fn read_session(file: &Path, history: &mut History) {
             .filter_map(|p| p["text"].as_str())
             .filter(|t| {
                 let keep = role == "assistant" || !injected(t);
-                history.dropped_injected += usize::from(!keep);
+                dropped += usize::from(!keep);
                 keep
             })
             .collect();
@@ -203,7 +221,7 @@ fn read_session(file: &Path, history: &mut History) {
             _ => {
                 if messages.len() == MAX_MESSAGES {
                     history.skipped += 1;
-                    return;
+                    return None;
                 }
                 let id = if role == "user" {
                     counts.0 += 1;
@@ -221,16 +239,17 @@ fn read_session(file: &Path, history: &mut History) {
         }
     }
     history.unreadable_records += gaps;
+    history.dropped_injected += dropped;
     if messages.is_empty() {
         if saw_message_record {
             history.empty_conversations += 1;
         }
-        return;
+        return None;
     }
     let title = title(&messages);
     let complete = gaps == 0 && messages.last().is_some_and(|m| m.role == "assistant");
-    history.conversations.push(Conversation {
-        id: format!("codex:{}", session_id(session.as_deref(), file)),
+    Some(Conversation {
+        id: format!("codex:{}", session_id(session.as_deref(), file, root)),
         title,
         workspace,
         created_at_ms,
@@ -240,18 +259,26 @@ fn read_session(file: &Path, history: &mut History) {
         files_read: vec![],
         outcome,
         complete,
-    });
+    })
 }
 
 /// Whether a user text part is context Codex injected rather than a typed prompt: it starts
 /// with a known marker or consists only of tag blocks, one with a tool-style name.
 fn injected(text: &str) -> bool {
     let start = text.trim_start();
-    INJECTED.iter().any(|marker| {
+    // Matched case-insensitively at the start of any text part, as Codex itself does.
+    let opens = |prefix: &str| {
         start
-            .get(..marker.len())
-            .is_some_and(|s| s.eq_ignore_ascii_case(marker))
-    }) || injected_tag_blocks(text)
+            .get(..prefix.len())
+            .is_some_and(|s| s.eq_ignore_ascii_case(prefix))
+    };
+    let tag = |name: &str| {
+        opens(&format!("<{name}"))
+            && start[name.len() + 1..].starts_with(|c: char| c == '>' || c.is_whitespace())
+    };
+    INJECTED_TAGS.iter().any(|name| tag(name))
+        || INJECTED_PREFIXES.iter().any(|p| opens(p))
+        || injected_tag_blocks(text)
 }
 
 #[cfg(test)]

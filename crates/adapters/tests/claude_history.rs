@@ -333,32 +333,127 @@ fn developer_xml_prompts_are_kept_and_injected_parts_counted() {
     assert_eq!(history.unreadable_records, 0);
 }
 
-#[test]
-fn session_file_stems_that_are_not_safe_ids_are_hashed() {
-    let d = tempfile::tempdir().unwrap();
-    let records = bytes(&[user("u1", json!("Prompt")), reply("a1", "Reply")]);
-    write_lines(&d.path().join("-work-app/bad name.jsonl"), &records, b"\n");
-    let history = read(d.path()).unwrap();
-    let id = &history.conversations[0].id;
-    let hash = id.strip_prefix("claude-code:").unwrap();
-    assert!(
-        hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit()),
-        "{id}"
-    );
+/// `claude-code:h-` followed by 16 lowercase hex digits: the hashed fallback session id.
+fn is_hashed(id: &str) -> bool {
+    id.strip_prefix("claude-code:h-")
+        .is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 #[test]
-fn relative_cwd_is_never_a_workspace() {
+fn session_file_stems_that_are_not_safe_ids_get_a_path_hash() {
     let d = tempfile::tempdir().unwrap();
-    let mut prompt = user("u1", json!("Prompt"));
-    prompt["cwd"] = json!("relative/app");
-    let mut answer = reply("a1", "Reply");
-    answer["cwd"] = json!("relative/app");
-    write_lines(
-        &d.path().join("-work-app/s.jsonl"),
-        &bytes(&[prompt, answer]),
-        b"\n",
-    );
+    let records = bytes(&[user("u1", json!("Prompt")), reply("a1", "Reply")]);
+    // The same bad name in two project folders must not collide.
+    write_lines(&d.path().join("-work-a/bad name.jsonl"), &records, b"\n");
+    write_lines(&d.path().join("-work-b/bad name.jsonl"), &records, b"\n");
     let history = read(d.path()).unwrap();
-    assert_eq!(history.conversations[0].workspace, None);
+    let ids: Vec<_> = history.conversations.iter().map(|c| &c.id).collect();
+    assert_eq!(ids.len(), 2, "{ids:?}");
+    assert!(ids.iter().all(|id| is_hashed(id)), "{ids:?}");
+    assert_ne!(ids[0], ids[1]);
+    assert_eq!(history.unreadable_records, 0);
+}
+
+fn set_mtime(path: &Path, secs_ago: u64) {
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago);
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
+}
+
+#[test]
+fn a_session_id_found_in_two_project_folders_keeps_the_newest_file() {
+    let d = tempfile::tempdir().unwrap();
+    let write = |folder: &str, id: &str, prompt: &str, secs_ago: u64| {
+        let path = d.path().join(folder).join(format!("{id}.jsonl"));
+        let records = bytes(&[user("u1", json!(prompt)), reply("a1", "Reply")]);
+        write_lines(&path, &records, b"\n");
+        set_mtime(&path, secs_ago);
+    };
+    write("-work-a", "first", "Newest first", 10);
+    write("-work-b", "first", "Older first", 1_000);
+    write("-work-a", "second", "Older second", 1_000);
+    write("-work-b", "second", "Newest second", 10);
+    let history = read(d.path()).unwrap();
+    let mut got: Vec<_> = history
+        .conversations
+        .iter()
+        .map(|c| (c.id.as_str(), c.messages[0].text.as_str()))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("claude-code:first", "Newest first"),
+            ("claude-code:second", "Newest second")
+        ]
+    );
+    assert_eq!(history.unreadable_records, 2, "one dropped duplicate each");
+}
+
+#[test]
+fn only_the_first_absolute_cwd_without_dot_components_is_a_workspace() {
+    let d = tempfile::tempdir().unwrap();
+    let with_cwds = |name: &str, cwds: [&str; 2]| {
+        let mut prompt = user("u1", json!("Prompt"));
+        prompt["cwd"] = json!(cwds[0]);
+        let mut answer = reply("a1", "Reply");
+        answer["cwd"] = json!(cwds[1]);
+        write_lines(
+            &d.path().join(format!("-work-app/{name}.jsonl")),
+            &bytes(&[prompt, answer]),
+            b"\n",
+        );
+    };
+    with_cwds("relative", ["relative/app", "relative/other"]);
+    with_cwds("parent", ["/work/../etc", "/work/./app"]);
+    with_cwds("curdir", ["/work/./app", "/work/app/.."]);
+    with_cwds("later", ["relative/app", "/work/app"]);
+    let history = read(d.path()).unwrap();
+    let workspace = |id: &str| {
+        history
+            .conversations
+            .iter()
+            .find(|c| c.id == format!("claude-code:{id}"))
+            .unwrap()
+            .workspace
+            .clone()
+    };
+    assert_eq!(workspace("relative"), None);
+    assert_eq!(workspace("parent"), None);
+    assert_eq!(workspace("curdir"), None);
+    assert_eq!(workspace("later"), Some(Path::new("/work/app").into()));
+}
+
+#[test]
+fn aborted_sessions_add_nothing_to_the_counters() {
+    let d = tempfile::tempdir().unwrap();
+    let mut lines = vec![b"{not json".to_vec()];
+    lines.extend(bytes(&[user(
+        "inj",
+        json!("<ide_opened_file>x.rs</ide_opened_file>"),
+    )]));
+    // 5,001 alternating messages exceed the per-session limit.
+    lines.extend((0..5001).map(|i| {
+        if i % 2 == 0 {
+            user(&format!("u{i}"), json!("q")).to_string().into_bytes()
+        } else {
+            reply(&format!("a{i}"), "a").to_string().into_bytes()
+        }
+    }));
+    write_lines(&d.path().join("-work-app/huge.jsonl"), &lines, b"\n");
+    let history = read(d.path()).unwrap();
+    assert!(history.conversations.is_empty());
+    assert_eq!(history.skipped, 1);
+    assert_eq!(
+        history.unreadable_records, 0,
+        "the malformed line was not kept"
+    );
+    assert_eq!(
+        history.dropped_injected, 0,
+        "the injected part was not kept"
+    );
 }

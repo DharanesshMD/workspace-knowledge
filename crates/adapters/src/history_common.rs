@@ -1,10 +1,12 @@
 //! Helpers shared by the Claude Code, Codex and Copilot history readers: bounded, symlink-safe
 //! file reads, titles, RFC 3339 timestamps, the tag-wrapped part rule and `file://` URIs.
-use crate::cursor_history::{History, Message};
+use crate::cursor_history::{Conversation, History, Message};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Take};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// Why a session file was not read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +38,8 @@ impl Refused {
 /// refused. Residual races: on other platforms (Windows) a swap in that window is followed,
 /// since refusing it needs `O_NOFOLLOW`-style flags not available without a new dependency; and
 /// on every platform only the final component is checked, so a parent directory replaced by a
-/// symlink after the directory walk is followed.
+/// symlink after the directory walk is followed. A regular file swapped for a FIFO or device
+/// between the check and the open would also block the open (a non-blocking open needs `libc`).
 pub(crate) fn open_regular(file: &Path, limit: u64) -> Result<Take<File>, Refused> {
     let checked = std::fs::symlink_metadata(file).map_err(|_| Refused::Unreadable)?;
     if !checked.file_type().is_file() {
@@ -158,18 +161,25 @@ pub(crate) fn injected_tag_blocks(s: &str) -> bool {
     tool_style
 }
 
-/// The workspace a recorded working directory names, only when it is absolute. A relative
-/// path would be resolved against wherever `wk` runs and could match the wrong workspace.
+/// The workspace a recorded working directory names, only when it is absolute and has no `.`
+/// or `..` component. A relative path would be resolved against wherever `wk` runs and could
+/// match the wrong workspace; dot components could make a folder match outside its real place.
 /// Rooted paths count as absolute: on Windows that also admits `\dir` paths without a drive,
 /// though the agents record `C:\dir` in practice.
 pub(crate) fn absolute_dir(cwd: Option<&str>) -> Option<PathBuf> {
-    cwd.map(PathBuf::from).filter(|p| p.has_root())
+    let cwd = cwd?;
+    let dotted = cwd.split(['/', '\\']).any(|c| c == "." || c == "..");
+    (!dotted)
+        .then(|| PathBuf::from(cwd))
+        .filter(|p| p.has_root())
 }
 
 /// A session id safe to use in conversation ids and file names: `candidate` if it matches
 /// `[A-Za-z0-9._-]{1,128}` and is not `.` or `..`, else `file`'s stem under the same rule, else
-/// the first 16 hex digits of the SHA-256 of `file`'s name.
-pub(crate) fn session_id(candidate: Option<&str>, file: &Path) -> String {
+/// `h-` and the first 16 hex digits of the SHA-256 of `file`'s path below `root`. Hashing the
+/// path (not just the name) keeps equally named files in different folders apart, and the
+/// prefix keeps the result from being mistaken for an id the agent assigned.
+pub(crate) fn session_id(candidate: Option<&str>, file: &Path, root: &Path) -> String {
     let safe = |s: &str| {
         (1..=128).contains(&s.len())
             && s != "."
@@ -184,8 +194,47 @@ pub(crate) fn session_id(candidate: Option<&str>, file: &Path) -> String {
     if safe(&stem) {
         return stem.into_owned();
     }
-    let digest = Sha256::digest(file.file_name().unwrap_or_default().as_encoded_bytes());
-    digest[..8].iter().map(|b| format!("{b:02x}")).collect()
+    let relative = file.strip_prefix(root).unwrap_or(file);
+    let digest = Sha256::digest(relative.as_os_str().as_encoded_bytes());
+    let hex: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
+    format!("h-{hex}")
+}
+
+/// Keeps one conversation per id: the one read from the most recently modified file (ties go to
+/// the newer session start, then the file read first). A dropped duplicate is counted in
+/// `unreadable_records`, so it shows up in the usual unreadable-record report.
+#[derive(Default)]
+pub(crate) struct Newest {
+    seen: HashMap<String, (usize, Rank)>,
+}
+
+/// File modification time, then session start.
+type Rank = (Option<SystemTime>, Option<i64>);
+
+impl Newest {
+    /// Add `conversation`, read from a file last modified at `modified`, to `history`.
+    pub(crate) fn push(
+        &mut self,
+        history: &mut History,
+        conversation: Conversation,
+        modified: Option<SystemTime>,
+    ) {
+        let rank = (modified, conversation.created_at_ms);
+        match self.seen.get_mut(&conversation.id) {
+            Some((index, kept)) => {
+                history.unreadable_records += 1;
+                if rank > *kept {
+                    *kept = rank;
+                    history.conversations[*index] = conversation;
+                }
+            }
+            None => {
+                self.seen
+                    .insert(conversation.id.clone(), (history.conversations.len(), rank));
+                history.conversations.push(conversation);
+            }
+        }
+    }
 }
 
 /// Milliseconds since the Unix epoch for an RFC 3339 timestamp such as
@@ -410,16 +459,21 @@ mod tests {
             Some("work/app"),
             Some("./app"),
             Some("../app"),
+            Some("/work/../app"),
+            Some("/work/./app"),
+            Some("/work/app/.."),
+            Some("/work/app/."),
         ] {
             assert_eq!(absolute_dir(bad), None, "{bad:?}");
         }
     }
 
     #[test]
-    fn session_ids_fall_back_to_the_stem_then_a_hash() {
-        let file = Path::new("dir/stem.jsonl");
-        assert_eq!(session_id(Some("Ab9._-x"), file), "Ab9._-x");
-        assert_eq!(session_id(Some(&"x".repeat(128)), file).len(), 128);
+    fn session_ids_fall_back_to_the_stem_then_a_path_hash() {
+        let root = Path::new("root");
+        let file = Path::new("root/dir/stem.jsonl");
+        assert_eq!(session_id(Some("Ab9._-x"), file, root), "Ab9._-x");
+        assert_eq!(session_id(Some(&"x".repeat(128)), file, root).len(), 128);
         for bad in [
             "",
             ".",
@@ -432,14 +486,24 @@ mod tests {
             "é",
             &"x".repeat(129),
         ] {
-            assert_eq!(session_id(Some(bad), file), "stem", "{bad:?}");
+            assert_eq!(session_id(Some(bad), file, root), "stem", "{bad:?}");
         }
-        assert_eq!(session_id(None, file), "stem");
-        let hashed = session_id(Some("../x"), Path::new("dir/bad name.jsonl"));
-        assert_eq!(hashed.len(), 16);
-        assert!(hashed.bytes().all(|b| b.is_ascii_hexdigit()));
-        assert_ne!(hashed, session_id(None, Path::new("dir/bad name2.jsonl")));
-        assert_eq!(session_id(None, Path::new("..")).len(), 16);
+        assert_eq!(session_id(None, file, root), "stem");
+        let hashed = |file: &str| session_id(Some("../x"), Path::new(file), root);
+        let id = hashed("root/a/bad name.jsonl");
+        assert_eq!(id.len(), 18);
+        assert!(id.starts_with("h-") && id[2..].bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(
+            id,
+            hashed("root/b/bad name.jsonl"),
+            "the folder is part of the hash"
+        );
+        assert_ne!(id, hashed("root/a/bad name2.jsonl"));
+        assert_eq!(
+            id,
+            session_id(None, Path::new("root/a/bad name.jsonl"), root)
+        );
+        assert_eq!(session_id(None, Path::new("root/.."), root).len(), 18);
     }
 
     #[test]

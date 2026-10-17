@@ -16,7 +16,8 @@
 //! would let repeated operations nest values without bound) are counted and skipped. When a
 //! session has both files the log is read; only if the log cannot be read at all (oversized,
 //! unreadable, no leading snapshot) is the `.json` read instead, marked incomplete. A session
-//! copied into several storage folders is imported once, from the most recently modified file.
+//! copied into several storage folders is imported once, from the most recently modified file;
+//! the dropped copy counts as an unreadable record.
 //! Only the top-level `sessionId`, `customTitle`, `creationDate` and `requests` are parsed;
 //! other fields and log operations on them are skipped without building values for them.
 //!
@@ -38,13 +39,12 @@
 //! Known limits: only folder workspaces on the local disk are attributed (`file://` URIs without
 //! `.` or `..` components); remote, multi-root and empty-window chats have no workspace.
 use crate::cursor_history::{Conversation, History, Message};
-use crate::history_common::{file_uri_path, first_line, read_regular, session_id, title};
+use crate::history_common::{file_uri_path, first_line, read_regular, session_id, title, Newest};
 use serde::Deserialize;
 use serde_json::Value;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_WORKSPACE_BYTES: u64 = 64 * 1024;
@@ -204,26 +204,16 @@ pub fn read(user_dir: &Path) -> Result<History, String> {
     }
     files.sort();
     // The same session can be copied into several storage folders; keep the newest copy.
-    let mut newest: HashMap<String, (Option<SystemTime>, usize)> = HashMap::new();
+    let mut newest = Newest::default();
     for (file, fallback, modified, workspace) in files {
-        let Some(conversation) = read_session(&file, fallback.as_deref(), workspace, &mut history)
-        else {
-            continue;
-        };
-        match newest.get_mut(&conversation.id) {
-            Some((kept, index)) => {
-                if modified > *kept {
-                    *kept = modified;
-                    history.conversations[*index] = conversation;
-                }
-            }
-            None => {
-                newest.insert(
-                    conversation.id.clone(),
-                    (modified, history.conversations.len()),
-                );
-                history.conversations.push(conversation);
-            }
+        if let Some(conversation) = read_session(
+            &file,
+            fallback.as_deref(),
+            user_dir,
+            workspace,
+            &mut history,
+        ) {
+            newest.push(&mut history, conversation, modified);
         }
     }
     history
@@ -239,6 +229,7 @@ pub fn read(user_dir: &Path) -> Result<History, String> {
 fn read_session(
     file: &Path,
     fallback: Option<&Path>,
+    root: &Path,
     workspace: Option<PathBuf>,
     history: &mut History,
 ) -> Option<Conversation> {
@@ -247,7 +238,7 @@ fn read_session(
         None => (load(fallback?, history)?, true),
     };
     let requests = session["requests"].as_array()?;
-    let id = session_id(session["sessionId"].as_str(), file);
+    let id = session_id(session["sessionId"].as_str(), file, root);
     let mut messages: Vec<Message> = Vec::new();
     let mut outcome = None;
     for (index, request) in requests.iter().enumerate() {

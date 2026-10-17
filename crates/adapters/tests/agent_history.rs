@@ -1303,10 +1303,10 @@ fn copilot_counts_bad_log_lines_and_bounds_logs() {
     assert_eq!(history.skipped, 1);
 }
 
-/// `<source>:` followed by 16 lowercase hex digits: the hashed fallback session id.
+/// `<source>:h-` followed by 16 lowercase hex digits: the hashed fallback session id.
 fn is_hashed(id: &str, source: &str) -> bool {
     id.strip_prefix(source)
-        .and_then(|h| h.strip_prefix(':'))
+        .and_then(|h| h.strip_prefix(":h-"))
         .is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
@@ -1335,10 +1335,10 @@ fn codex_session_ids_are_validated_with_file_stem_and_hash_fallbacks() {
     let history = wk_adapters::codex_history::read(d.path()).unwrap();
     let mut ids: Vec<_> = history.conversations.iter().map(|c| c.id.clone()).collect();
     ids.sort();
-    assert_eq!(ids.len(), 6, "{ids:?}");
-    assert!(is_hashed(&ids[0], "codex"), "{ids:?}");
+    let (hashed, plain): (Vec<_>, Vec<_>) = ids.iter().partition(|id| is_hashed(id, "codex"));
+    assert_eq!(hashed.len(), 1, "{ids:?}");
     assert_eq!(
-        ids[1..],
+        plain,
         [
             "codex:Ab9._-id",
             "codex:dots",
@@ -1366,9 +1366,9 @@ fn copilot_session_ids_are_validated_with_file_stem_and_hash_fallbacks() {
     let history = wk_adapters::copilot_history::read(d.path()).unwrap();
     let mut ids: Vec<_> = history.conversations.iter().map(|c| c.id.clone()).collect();
     ids.sort();
-    assert_eq!(ids.len(), 3, "{ids:?}");
-    assert!(is_hashed(&ids[0], "copilot"), "{ids:?}");
-    assert_eq!(ids[1..], ["copilot:traversal", "copilot:windows"]);
+    let (hashed, plain): (Vec<_>, Vec<_>) = ids.iter().partition(|id| is_hashed(id, "copilot"));
+    assert_eq!(hashed.len(), 1, "{ids:?}");
+    assert_eq!(plain, ["copilot:traversal", "copilot:windows"]);
 }
 
 #[test]
@@ -1714,4 +1714,166 @@ fn copilot_log_ops_on_unread_top_level_fields_are_ignored() {
     assert_eq!(c.title, "Kept title");
     assert!(c.complete);
     assert_eq!(history.unreadable_records, 0);
+}
+
+#[test]
+fn codex_marks_skill_blocks_with_attributes_as_injected() {
+    let d = tempfile::tempdir().unwrap();
+    let t = "2026-10-15T10:00:00Z";
+    let user = |text: &str| codex(t, "response_item", codex_msg("user", "input_text", text));
+    write_jsonl(
+        &d.path().join("2026/10/15/skill.jsonl"),
+        &[
+            codex_meta(t, "skill", "/work/app"),
+            user("<skill name=\"x\">\nskill secret\n</skill>"),
+            user("<SKILL\n>newline secret</SKILL>"),
+            user("<skill>plain secret</skill>"),
+            user("<skills> are things I wrote</skills>"),
+            user("Real prompt"),
+            codex(
+                t,
+                "response_item",
+                codex_msg("assistant", "output_text", "Ok"),
+            ),
+        ],
+    );
+    let history = wk_adapters::codex_history::read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "{all}");
+    let c = find(&history, "codex:skill");
+    assert_eq!(
+        c.messages[0].text,
+        "<skills> are things I wrote</skills>\n\nReal prompt"
+    );
+    assert_eq!(history.dropped_injected, 3);
+}
+
+#[test]
+fn codex_cwd_with_dot_components_is_never_a_workspace() {
+    let d = tempfile::tempdir().unwrap();
+    let t = "2026-10-15T10:00:00Z";
+    for (name, cwd) in [
+        ("a", "/work/../etc"),
+        ("b", "/work/./app"),
+        ("c", "/work/app/.."),
+    ] {
+        write_jsonl(
+            &d.path().join(format!("2026/10/15/{name}.jsonl")),
+            &[
+                codex_meta(t, name, cwd),
+                codex(t, "response_item", codex_msg("user", "input_text", "Q")),
+            ],
+        );
+    }
+    let history = wk_adapters::codex_history::read(d.path()).unwrap();
+    assert_eq!(history.conversations.len(), 3);
+    assert!(history.conversations.iter().all(|c| c.workspace.is_none()));
+}
+
+#[test]
+fn codex_aborted_sessions_add_nothing_to_the_counters() {
+    let d = tempfile::tempdir().unwrap();
+    let t = "2026-10-15T10:00:00Z";
+    let mut records = vec![
+        codex_meta(t, "huge", "/work/app"),
+        codex(
+            t,
+            "response_item",
+            codex_msg(
+                "user",
+                "input_text",
+                "<environment_context>x</environment_context>",
+            ),
+        ),
+        codex(
+            t,
+            "response_item",
+            codex_msg("critic", "output_text", "unknown"),
+        ),
+    ];
+    records.extend((0..5001).map(|i| {
+        if i % 2 == 0 {
+            codex(t, "response_item", codex_msg("user", "input_text", "q"))
+        } else {
+            codex(
+                t,
+                "response_item",
+                codex_msg("assistant", "output_text", "a"),
+            )
+        }
+    }));
+    write_jsonl(&d.path().join("2026/10/15/huge.jsonl"), &records);
+    let history = wk_adapters::codex_history::read(d.path()).unwrap();
+    assert!(history.conversations.is_empty());
+    assert_eq!(history.skipped, 1);
+    assert_eq!(history.unreadable_records, 0);
+    assert_eq!(history.dropped_injected, 0);
+}
+
+#[test]
+fn codex_session_id_in_two_files_keeps_the_newest_file() {
+    let d = tempfile::tempdir().unwrap();
+    let t = "2026-10-15T10:00:00Z";
+    let session = |id: &str, prompt: &str| {
+        [
+            codex_meta(t, id, "/work/app"),
+            codex(t, "response_item", codex_msg("user", "input_text", prompt)),
+            codex(
+                t,
+                "response_item",
+                codex_msg("assistant", "output_text", "A"),
+            ),
+        ]
+    };
+    let set_mtime = |path: &Path, secs_ago: u64| {
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+    };
+    for (rel, id, prompt, secs_ago) in [
+        ("2026/10/14/a.jsonl", "first", "Older first", 1_000),
+        ("2026/10/15/b.jsonl", "first", "Newest first", 10),
+        ("2026/10/14/c.jsonl", "second", "Newest second", 10),
+        ("2026/10/15/d.jsonl", "second", "Older second", 1_000),
+    ] {
+        let path = d.path().join(rel);
+        write_jsonl(&path, &session(id, prompt));
+        set_mtime(&path, secs_ago);
+    }
+    // The same unsafe file name in two folders must not collide either.
+    write_jsonl(
+        &d.path().join("2026/10/14/bad name.jsonl"),
+        &session("..", "H1"),
+    );
+    write_jsonl(
+        &d.path().join("2026/10/15/bad name.jsonl"),
+        &session("..", "H2"),
+    );
+    let history = wk_adapters::codex_history::read(d.path()).unwrap();
+    let mut got: Vec<_> = history
+        .conversations
+        .iter()
+        .filter(|c| !is_hashed(&c.id, "codex"))
+        .map(|c| (c.id.as_str(), c.messages[0].text.as_str()))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("codex:first", "Newest first"),
+            ("codex:second", "Newest second")
+        ]
+    );
+    let hashed: Vec<_> = history
+        .conversations
+        .iter()
+        .filter(|c| is_hashed(&c.id, "codex"))
+        .collect();
+    assert_eq!(hashed.len(), 2);
+    assert_ne!(hashed[0].id, hashed[1].id);
+    assert_eq!(history.unreadable_records, 2, "one dropped duplicate each");
 }

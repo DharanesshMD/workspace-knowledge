@@ -13,15 +13,17 @@
 //! blocks) are ignored; dropped injected parts are counted in `dropped_injected`. Parts made only
 //! of plain-named tags such as `<task>…</task>` are prompts the developer wrote and are kept.
 //! Records that look like messages but have an unknown type are counted, never guessed. The
-//! workspace is the first record's `cwd` only when it is absolute. Symlinks are never followed
-//! out of the projects directory.
+//! workspace is the first record `cwd` that is absolute and has no `.` or `..` component. A
+//! session id found in two project folders is imported once, from the most recently modified
+//! file; the dropped copy counts as an unreadable record. Symlinks are never followed out of the
+//! projects directory.
 //!
 //! Session files are read in place rather than snapshotted: they are append-only JSONL, so a
 //! concurrent write can at worst leave a partial last line, which is counted as a malformed
 //! record and marks the session incomplete. Copying would add I/O without a consistency gain.
 use crate::cursor_history::{Conversation, History, Message};
 use crate::history_common::{
-    absolute_dir, injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Refused,
+    absolute_dir, injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Newest, Refused,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -73,13 +75,17 @@ pub fn read(projects_dir: &Path) -> Result<History, String> {
             if file.file_type().is_ok_and(|t| t.is_file())
                 && path.extension().is_some_and(|e| e == "jsonl")
             {
-                files.push(path);
+                let modified = file.metadata().and_then(|m| m.modified()).ok();
+                files.push((path, modified));
             }
         }
     }
     files.sort();
-    for file in files {
-        read_session(&file, &mut history);
+    let mut newest = Newest::default();
+    for (file, modified) in files {
+        if let Some(conversation) = read_session(&file, projects_dir, &mut history) {
+            newest.push(&mut history, conversation, modified);
+        }
     }
     history
         .conversations
@@ -87,30 +93,32 @@ pub fn read(projects_dir: &Path) -> Result<History, String> {
     Ok(history)
 }
 
-/// Read one session file into `history`. Oversized sessions count only as `skipped`;
-/// unreadable records (malformed lines, unknown message types) are counted otherwise.
-fn read_session(file: &Path, history: &mut History) {
+/// Read one session file. Oversized sessions count only as `skipped`; unreadable records
+/// (malformed lines, unknown message types) and dropped injected parts are counted in `history`
+/// only for sessions that were read to the end.
+fn read_session(file: &Path, root: &Path, history: &mut History) -> Option<Conversation> {
     let mut lines = match Lines::open(file, MAX_FILE_BYTES) {
         Ok(lines) => lines,
         Err(refused) => {
             refused.count(history);
-            return;
+            return None;
         }
     };
-    let session = session_id(None, file);
+    let session = session_id(None, file, root);
     let mut messages: Vec<Message> = Vec::new();
     let mut workspace = None;
     let mut created_at_ms = None;
     let mut outcome = None;
     let mut saw_message_record = false;
     let mut gaps = 0;
+    let mut dropped = 0;
     loop {
         let line = match lines.next_line() {
             Ok(Some(line)) => line,
             Ok(None) => break,
             Err(Refused::TooLarge) => {
                 history.skipped += 1;
-                return;
+                return None;
             }
             Err(_) => {
                 gaps += 1;
@@ -145,7 +153,7 @@ fn read_session(file: &Path, history: &mut History) {
             workspace = absolute_dir(v["cwd"].as_str());
         }
         let text = match role {
-            "user" => prompt_text(&v, &mut history.dropped_injected),
+            "user" => prompt_text(&v, &mut dropped),
             _ => reply_text(&v),
         };
         let Some(text) = text else { continue };
@@ -160,7 +168,7 @@ fn read_session(file: &Path, history: &mut History) {
             _ => {
                 if messages.len() == MAX_MESSAGES {
                     history.skipped += 1;
-                    return;
+                    return None;
                 }
                 let id = v["uuid"]
                     .as_str()
@@ -175,15 +183,16 @@ fn read_session(file: &Path, history: &mut History) {
         }
     }
     history.unreadable_records += gaps;
+    history.dropped_injected += dropped;
     if messages.is_empty() {
         if saw_message_record {
             history.empty_conversations += 1;
         }
-        return;
+        return None;
     }
     let title = title(&messages);
     let complete = gaps == 0 && messages.last().is_some_and(|m| m.role == "assistant");
-    history.conversations.push(Conversation {
+    Some(Conversation {
         id: format!("claude-code:{session}"),
         title,
         workspace,
@@ -194,7 +203,7 @@ fn read_session(file: &Path, history: &mut History) {
         files_read: vec![],
         outcome,
         complete,
-    });
+    })
 }
 
 /// A typed prompt: string content or `text` parts, each kept only if the developer wrote it;
