@@ -49,6 +49,10 @@ pub fn inference_allowed(endpoint: &str, restrictions: &Value) -> Result<(), Str
     Ok(())
 }
 fn check_inference(c: &Config, policy: &Value) -> Result<(), String> {
+    // Rules mode sends nothing to a model, so there is no destination to approve.
+    if c.summarizer == crate::state::Summarizer::Rules {
+        return Ok(());
+    }
     if c.device.is_some() && policy.get("restrictions").is_none() {
         return Err("missing inference policy".into());
     }
@@ -147,5 +151,79 @@ mod policy_tests {
         assert!(inference_allowed("https://model.synthetic.example.evil.test/v1",&serde_json::json!({"allow_loopback":false,"https_origins":["https://model.synthetic.example"]})).is_err());
         assert!(inference_allowed("https://user:secret@model.synthetic.example/v1",&serde_json::json!({"allow_loopback":false,"https_origins":["https://model.synthetic.example"]})).is_err());
         assert!(inference_allowed(url, &serde_json::Value::Null).is_err());
+    }
+    fn config(server: &str, summarizer: crate::state::Summarizer, inference: &str) -> Config {
+        Config {
+            root: "/w".into(),
+            binding_file: "/b.json".into(),
+            service: "backend".into(),
+            server: server.into(),
+            model: String::new(),
+            inference: inference.into(),
+            summarizer,
+            port: 4319,
+            account: "workspace".into(),
+            device_id: "d".into(),
+            device: None,
+            repository: None,
+        }
+    }
+    #[test]
+    fn rules_configs_have_no_inference_to_check() {
+        use crate::state::Summarizer::{Local, Rules};
+        let strict = serde_json::json!({"allow_loopback":false,"https_origins":[]});
+        let mut rules = config("http://127.0.0.1:1", Rules, "");
+        assert!(check_inference(&rules, &strict).is_ok());
+        assert!(check_inference(&rules, &serde_json::json!({})).is_ok());
+        // Nothing is sent to a model, so even a hosted policy without restrictions is fine.
+        rules.device = Some(crate::device::Connection {
+            state_dir: "/s".into(),
+        });
+        assert!(check_inference(&rules, &serde_json::json!({})).is_ok());
+        let local = config("http://127.0.0.1:1", Local, "");
+        assert!(check_inference(&local, &serde_json::json!({})).is_err());
+        let mut hosted_local = config(
+            "http://127.0.0.1:1",
+            Local,
+            "http://127.0.0.1:11434/v1/chat/completions",
+        );
+        hosted_local.device = rules.device.clone();
+        assert!(check_inference(&hosted_local, &serde_json::json!({})).is_err());
+        assert!(check_inference(
+            &hosted_local,
+            &serde_json::json!({"restrictions":{"allow_loopback":false,"https_origins":[]}})
+        )
+        .is_err());
+    }
+    #[tokio::test]
+    async fn server_policy_succeeds_for_rules_and_still_checks_local_inference() {
+        use crate::state::Summarizer::{Local, Rules};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/v1/policy",
+            axum::routing::get(|| async {
+                axum::Json(
+                    serde_json::json!({"policy":{"services":["backend"],"policy_revision":1}}),
+                )
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let url = format!("http://{address}");
+        let b = wk_scope::enrollment::Binding {
+            root: "/tmp".into(),
+            product: "demo".into(),
+            services: vec!["backend".into()],
+            enabled: true,
+            policy_hash: "h".into(),
+        };
+        let rules = config(&url, Rules, "");
+        let policy = super::policy(&rules, &b, "token").await.unwrap();
+        assert_eq!(policy["policy_revision"], 1);
+        let bad = config(&url, Local, "");
+        assert!(super::policy(&bad, &b, "token").await.is_err());
+        let good = config(&url, Local, "http://127.0.0.1:11434/v1/chat/completions");
+        assert!(super::policy(&good, &b, "token").await.is_ok());
+        server.abort();
     }
 }

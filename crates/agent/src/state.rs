@@ -14,7 +14,7 @@ pub struct Config {
     pub server: String,
     pub model: String,
     pub inference: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Summarizer::is_local")]
     pub summarizer: Summarizer,
     pub port: u16,
     pub account: String,
@@ -34,6 +34,10 @@ pub enum Summarizer {
     Rules,
 }
 impl Summarizer {
+    /// Local configs omit the field so older binaries, which reject unknown keys, still read them.
+    pub fn is_local(&self) -> bool {
+        *self == Summarizer::Local
+    }
     pub fn as_str(self) -> &'static str {
         match self {
             Summarizer::Local => "local",
@@ -41,16 +45,20 @@ impl Summarizer {
         }
     }
 }
-/// Pick the mode and the inference URL to store. Local needs a URL; rules must not have one.
+/// Pick the mode and the inference URL and model to store. Local needs a URL and keeps the
+/// model name; rules must not have a URL and stores neither.
 pub fn resolve_summarizer(
     flag: Option<Summarizer>,
     inference: Option<String>,
-) -> Result<(Summarizer, String), String> {
+    model: String,
+) -> Result<(Summarizer, String, String), String> {
     match (flag, inference) {
-        (None, None) | (Some(Summarizer::Rules), None) => Ok((Summarizer::Rules, String::new())),
+        (None, None) | (Some(Summarizer::Rules), None) => {
+            Ok((Summarizer::Rules, String::new(), String::new()))
+        }
         (None, Some(url)) | (Some(Summarizer::Local), Some(url)) => {
             wk_summarize::local_url(&url)?;
-            Ok((Summarizer::Local, url))
+            Ok((Summarizer::Local, url, model))
         }
         (Some(Summarizer::Local), None) => Err("--summarizer local needs --inference".into()),
         (Some(Summarizer::Rules), Some(_)) => {
@@ -265,31 +273,45 @@ mod summarizer_tests {
     fn summarizer_choice_follows_the_flags() {
         use Summarizer::*;
         let url = "http://127.0.0.1:11434/v1/chat/completions";
+        let pick = |flag, inference: Option<&str>| {
+            resolve_summarizer(flag, inference.map(Into::into), "m".into())
+        };
         assert_eq!(
-            resolve_summarizer(None, None).unwrap(),
-            (Rules, String::new())
+            pick(None, None).unwrap(),
+            (Rules, String::new(), String::new()),
+            "rules stores neither an inference URL nor a model"
         );
         assert_eq!(
-            resolve_summarizer(None, Some(url.into())).unwrap(),
-            (Local, url.to_string())
+            pick(None, Some(url)).unwrap(),
+            (Local, url.to_string(), "m".to_string()),
+            "local keeps both"
         );
-        assert_eq!(resolve_summarizer(Some(Rules), None).unwrap().0, Rules);
-        assert_eq!(
-            resolve_summarizer(Some(Local), Some(url.into())).unwrap().0,
-            Local
-        );
+        assert_eq!(pick(Some(Rules), None).unwrap().0, Rules);
+        assert_eq!(pick(Some(Local), Some(url)).unwrap().0, Local);
         assert!(
-            resolve_summarizer(Some(Local), None).is_err(),
+            pick(Some(Local), None).is_err(),
             "local needs an inference URL"
         );
         assert!(
-            resolve_summarizer(Some(Rules), Some("http://127.0.0.1:1/x".into())).is_err(),
+            pick(Some(Rules), Some("http://127.0.0.1:1/x")).is_err(),
             "rules must not carry an inference URL"
         );
         assert!(
-            resolve_summarizer(None, Some("https://example.com/v1".into())).is_err(),
+            pick(None, Some("https://example.com/v1")).is_err(),
             "inference must stay on this machine"
         );
+    }
+    #[test]
+    fn local_configs_omit_the_summarizer_so_older_binaries_can_read_them() {
+        let old = r#"{"root":"/w","binding_file":"/b.json","service":"backend","server":"http://127.0.0.1:4318","model":"m","inference":"http://127.0.0.1:11434/v1/chat/completions","port":4319,"account":"workspace","device_id":"d"}"#;
+        let mut c: Config = serde_json::from_str(old).unwrap();
+        let local = serde_json::to_value(&c).unwrap();
+        assert!(local.get("summarizer").is_none(), "{local}");
+        c.summarizer = Summarizer::Rules;
+        let rules = serde_json::to_value(&c).unwrap();
+        assert_eq!(rules["summarizer"], "rules");
+        let back: Config = serde_json::from_value(rules).unwrap();
+        assert_eq!(back.summarizer, Summarizer::Rules);
     }
     #[test]
     fn summarizer_serializes_lowercase_and_names_itself() {

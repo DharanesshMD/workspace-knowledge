@@ -362,8 +362,11 @@ pub struct ConnectArgs {
     /// Loopback model endpoint; omit it to build drafts from rules instead.
     #[arg(long)]
     pub inference: Option<String>,
+    /// local drafts with a model on this machine; rules builds drafts from the
+    /// conversation's structure. Defaults to rules when --inference is absent.
     #[arg(long, value_enum)]
     pub summarizer: Option<state::Summarizer>,
+    /// Model name sent to the local endpoint; ignored with --summarizer rules.
     #[arg(long, default_value = "local-model")]
     pub model: String,
     #[arg(long, default_value_t = 4319)]
@@ -459,12 +462,8 @@ pub async fn connect(dir: &std::path::Path, args: ConnectArgs) -> Result<Value, 
         return Err("invalid local approval or state location".into());
     }
     network::server_url(&args.server)?;
-    let (summarizer, inference) = state::resolve_summarizer(args.summarizer, args.inference)?;
-    let model = if summarizer == state::Summarizer::Local {
-        args.model
-    } else {
-        String::new()
-    };
+    let (summarizer, inference, model) =
+        state::resolve_summarizer(args.summarizer, args.inference, args.model)?;
     let c = state::Config {
         root: b.root.clone(),
         binding_file: args

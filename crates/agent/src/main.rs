@@ -47,8 +47,11 @@ enum Command {
         /// Loopback model endpoint; omit it to build drafts from rules instead.
         #[arg(long)]
         inference: Option<String>,
+        /// local drafts with a model on this machine; rules builds drafts from the
+        /// conversation's structure. Defaults to rules when --inference is absent.
         #[arg(long, value_enum)]
         summarizer: Option<state::Summarizer>,
+        /// Model name sent to the local endpoint; ignored with --summarizer rules.
         #[arg(long, default_value = "local-model")]
         model: String,
         #[arg(long, default_value_t = 4319)]
@@ -188,6 +191,10 @@ enum Command {
         binding: PathBuf,
     },
 }
+/// The `doctor` line that tells which summarizer this setup uses.
+fn summarizer_status(c: &state::Config) -> &'static str {
+    c.summarizer.as_str()
+}
 fn stdin_limited() -> Result<String, String> {
     let mut s = String::new();
     std::io::stdin()
@@ -262,12 +269,8 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 return Err("invalid approval or state location".into());
             }
             network::server_url(&server)?;
-            let (summarizer, inference) = state::resolve_summarizer(summarizer, inference)?;
-            let model = if summarizer == state::Summarizer::Local {
-                model
-            } else {
-                String::new()
-            };
+            let (summarizer, inference, model) =
+                state::resolve_summarizer(summarizer, inference, model)?;
             let token = zeroize::Zeroizing::new(
                 std::env::var("WK_ACCESS_TOKEN")
                     .map_err(|_| "WK_ACCESS_TOKEN required for enrollment")?,
@@ -471,7 +474,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 .await
                 .unwrap_or(json!({"available":false}));
             Ok(
-                json!({"native_clients":native_capture::status(&state).unwrap_or(json!({"unavailable":true})),"native_cursor":cursor_capture::status(&state).unwrap_or(json!({"unavailable":true})),"code_change_protection":protection::status(&state),"summarizer":c.summarizer.as_str(),"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
+                json!({"native_clients":native_capture::status(&state).unwrap_or(json!({"unavailable":true})),"native_cursor":cursor_capture::status(&state).unwrap_or(json!({"unavailable":true})),"code_change_protection":protection::status(&state),"summarizer":summarizer_status(&c),"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
             )
         }
         Command::Config { client } => wk_adapters::config(
@@ -603,6 +606,37 @@ mod cli_tests {
             _ => panic!("expected init"),
         }
         assert!(init(&["--summarizer", "bogus"]).is_err());
+    }
+
+    #[test]
+    fn connect_validates_the_summarizer_flag_and_needs_no_inference() {
+        let connect = |summarizer: &str| {
+            Cli::try_parse_from([
+                "wk-agent",
+                "--state-dir",
+                "/s",
+                "device",
+                "connect",
+                "--binding",
+                "/b",
+                "--service",
+                "backend",
+                "--server",
+                "https://team.example",
+                "--summarizer",
+                summarizer,
+            ])
+        };
+        assert!(connect("rules").is_ok());
+        assert!(connect("bogus").is_err());
+    }
+
+    #[test]
+    fn doctor_names_the_summarizer() {
+        let mut c: crate::state::Config = serde_json::from_str(r#"{"root":"/w","binding_file":"/b.json","service":"backend","server":"http://127.0.0.1:4318","model":"m","inference":"http://127.0.0.1:11434/v1/chat/completions","port":4319,"account":"workspace","device_id":"d"}"#).unwrap();
+        assert_eq!(super::summarizer_status(&c), "local");
+        c.summarizer = crate::state::Summarizer::Rules;
+        assert_eq!(super::summarizer_status(&c), "rules");
     }
 
     #[test]
