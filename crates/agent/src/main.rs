@@ -10,6 +10,8 @@ mod memory_import;
 mod memory_map;
 mod memory_sources;
 mod memory_split;
+#[cfg(test)]
+mod modelfree_e2e;
 mod native_login;
 mod network;
 mod personal_sync;

@@ -175,11 +175,18 @@ pub(crate) async fn journal_turns(
     Ok((drafts, held))
 }
 
-pub fn list(dir: &Path, after: &str) -> Result<Value, String> {
+fn check_cursor(after: &str) -> Result<(), String> {
     if !after.is_empty() && (!after.starts_with("draft:") || after.len() != 70) {
         return Err("invalid draft cursor".into());
     }
-    let s = state::store(dir)?;
+    Ok(())
+}
+pub fn list(dir: &Path, after: &str) -> Result<Value, String> {
+    check_cursor(after)?;
+    list_from(&state::store(dir)?, after)
+}
+pub(crate) fn list_from(s: &wk_local::LocalStore, after: &str) -> Result<Value, String> {
+    check_cursor(after)?;
     let ids = s.pending_ids("draft:", after, daemon::now()?, 100)?;
     let next_cursor = if ids.len() == 100 {
         ids.last().cloned()

@@ -225,7 +225,7 @@ const PART_SESSION_SUFFIX: usize = ":0123456789ab:part-5000".len();
 /// identical re-import adds nothing, while a grown or edited export gets new sessions,
 /// so earlier parts are never held by conflicting text. Event sequences are positions
 /// in the export, stable only while the message prefix is unchanged.
-fn import_into(
+pub(crate) fn import_into(
     store: &mut wk_local::LocalStore,
     b: &wk_scope::enrollment::Binding,
     service: &str,
