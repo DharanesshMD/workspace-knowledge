@@ -33,7 +33,7 @@ wk-agent --state-dir /private/collector device connect --binding /private/consen
 - A hosted (`device connect`) collector still needs the product's signed policy, including its inference restrictions field, to be present and well formed. In `rules` mode the allowed inference destinations simply do not apply, because nothing is sent to a model.
 - Managed chat (`wk-agent chat`) talks to a local model and refuses to run in `rules` mode. Use the `local` mode for it.
 
-Raw conversations stay on your machine in `rules` mode: no model, local or remote, is called and the collector sends nothing new anywhere. The usual review and submission steps are unchanged.
+Raw conversations stay on your machine in `rules` mode: no model, local or remote, is called and no conversation text leaves the machine. The collector still talks to the server as in other modes — each processing pass fetches the product's signed policy over an authenticated request that names the product — and the usual review and submission steps are unchanged.
 
 ### Rule drafts and their limits
 

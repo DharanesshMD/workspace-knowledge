@@ -15,7 +15,10 @@ struct Choice {
     model: String,
     inference: String,
     /// Consent made before the setting existed was given under a local model.
-    #[serde(default)]
+    /// Like `Config`, `Summarizer` is not serialized in `local`, the old format.
+    /// Consent made before the setting existed was given under a local model.
+    /// Like `Config`, `Summarizer` is not serialized in `local`, the old format.
+    #[serde(default, skip_serializing_if = "state::Summarizer::is_local")]
     summarizer: state::Summarizer,
     policy_revision: u64,
     #[serde(default)]
@@ -259,6 +262,37 @@ mod tests {
             !matches(&rules_choice, &c, &b),
             "rules consent is not local consent"
         );
+    }
+
+    /// A pre-branch binary reads `owner-sync.json` with `deny_unknown_fields`, so local consent
+    /// must serialize exactly like the old format: no `summarizer` key at all.
+    #[test]
+    fn local_consent_serializes_without_the_summarizer_key() {
+        let (temp, c, b) = fixture("http://127.0.0.1:4318");
+        let choice = Choice {
+            enabled: true,
+            policy_hash: b.policy_hash.clone(),
+            server: c.server.clone(),
+            product: b.product.clone(),
+            service: c.service.clone(),
+            device_id: c.device_id.clone(),
+            model: c.model.clone(),
+            inference: c.inference.clone(),
+            summarizer: c.summarizer,
+            policy_revision: 1,
+            account: c.account.clone(),
+        };
+        let saved = serde_json::to_value(&choice).unwrap();
+        assert!(
+            saved.get("summarizer").is_none(),
+            "{saved} must match the pre-branch schema"
+        );
+        // The new file is readable by the old schema shape.
+        let old_shape: Choice = serde_json::from_value(saved).unwrap();
+        assert!(matches(&old_shape, &c, &b));
+        // Round-trip through what `configure` writes keeps enabling consent.
+        state::save(&temp.path().join("owner-sync.json"), &choice).unwrap();
+        assert_eq!(status(temp.path()).unwrap()["enabled"], true);
     }
     #[test]
     fn consent_is_invalidated_by_scope_destination_model_or_remote_policy_changes() {

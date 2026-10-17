@@ -430,11 +430,13 @@ fn native_card(
         vec![c.service.clone()],
         crate::rules_draft::complete(c, true),
     )?;
-    let files = turn
-        .files_read
-        .iter()
-        .chain(&turn.files_changed)
-        .collect::<std::collections::BTreeSet<_>>();
+    // Rules drafts are auto-built from structure, so evidence admits only files this
+    // turn changed, never the files it read. Local capture keeps both, as on main.
+    let mut files = std::collections::BTreeSet::<&String>::new();
+    files.extend(&turn.files_changed);
+    if c.summarizer != crate::state::Summarizer::Rules {
+        files.extend(&turn.files_read);
+    }
     for file in files {
         card.evidence.push(wk_contracts::Evidence {
             kind: wk_contracts::EvidenceKind::FileObservation,
@@ -1137,7 +1139,8 @@ mod rules_tests {
             index: 0,
             prompt: "Make retries idempotent\nso payments are not repeated".into(),
             response: "Added an idempotency key".into(),
-            files_read: vec!["src/pay.rs".into()],
+            // files not in files_changed prove the evidence is changes only.
+            files_read: vec!["src/pay.rs".into(), "src/side.rs".into()],
             files_changed: vec!["src/pay.rs".into(), "src/retry.rs".into()],
             messages: MessageState::Complete,
             scope: ScopeState::Verified,
@@ -1163,6 +1166,7 @@ mod rules_tests {
             "partial"
         );
         let refs: Vec<_> = card.evidence.iter().map(|e| e.reference.as_str()).collect();
+        // Rules evidence is files_changed only; local capture also records what was read.
         assert_eq!(refs, ["src/pay.rs", "src/retry.rs"]);
         assert_eq!(model.hits(), 0);
     }
@@ -1185,5 +1189,7 @@ mod rules_tests {
             serde_json::to_value(&card).unwrap()["capture_completeness"],
             "complete"
         );
+        let refs: Vec<_> = card.evidence.iter().map(|e| e.reference.as_str()).collect();
+        assert_eq!(refs, ["src/pay.rs", "src/retry.rs", "src/side.rs"]);
     }
 }

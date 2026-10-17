@@ -12,7 +12,7 @@ fn quote(s: &str) -> String {
     }
 }
 
-const BODY: &str = "Summarise this working session for my team as one knowledge card. Use only what actually happened in this session.\n\nWrite a JSON object with exactly these fields:\n- title: short, specific (under 120 characters)\n- intent: what we were trying to achieve, 1-2 sentences\n- rationale: why the code ended up this way, including approaches that failed\n- decisions: array of short strings\n- constraints: array of short strings (things a future change must respect)\n- open_questions: array of short strings\n\nRules: never include secrets, credentials, tokens, personal data or customer data; do not paste code, file contents or raw conversation text; describe in your own words. Leave an array empty rather than guessing.\n\nThen run this command, with the JSON between the two marker lines, and show me the result:\n\n    {CMD} draft --client {CLIENT} <<'WK_JSON'\n    { ...the JSON object... }\n    WK_JSON\n\nNever include the text WK_JSON in the content. If the command refuses the card, tell me why instead of rewording it to get past the screening.\n\nThe draft stays private on my machine until I review and submit it. Do not publish anything.\n";
+const BODY: &str = "Summarise this working session for my team as one knowledge card. Use only what actually happened in this session.\n\nWrite a JSON object with exactly these fields:\n- title: short, specific (under 120 characters)\n- intent: what we were trying to achieve, 1-2 sentences\n- rationale: why the code ended up this way, including approaches that failed\n- decisions: array of short strings\n- constraints: array of short strings (things a future change must respect)\n- open_questions: array of short strings\n\nRules: never include secrets, credentials, tokens, personal data or customer data; do not paste code, file contents or raw conversation text; describe in your own words. Leave an array empty rather than guessing.\n\nThen run this command, with the JSON between the two marker lines, and show me the result:\n\n{CMD} draft --client {CLIENT} <<'WK_JSON'\n{ ...the JSON object... }\nWK_JSON\n\nNever include the text WK_JSON in the content. If the command refuses the card, tell me why instead of rewording it to get past the screening.\n\nThe draft stays private on my machine until I review and submit it. Do not publish anything.\n";
 
 const CODEX_GATE: &str = "When I ask you to summarise this session for Workspace Knowledge (wk-summarize), do the following. Otherwise ignore this section.\n\n";
 
@@ -132,12 +132,22 @@ mod tests {
     }
 
     #[test]
-    fn the_command_reads_the_card_from_a_quoted_heredoc_and_refusals_are_reported() {
+    fn the_heredoc_terminator_is_at_column_zero() {
         for client in ["claude-code", "copilot", "codex"] {
             let t = text(client, "/bin/wk", "/s").unwrap();
             let cmd = format!("/bin/wk --state-dir /s draft --client {client} <<'WK_JSON'\n");
             let start = t.find(&cmd).expect(client);
-            assert!(t[start..].contains("\n    WK_JSON\n"), "{client}");
+            // A quoted heredoc closes only on a delimiter at the start of the line; an
+            // indented one runs to EOF and `draft` would see no JSON at all.
+            assert!(
+                t[start..].starts_with(cmd.as_str()),
+                "{client} command line is indented"
+            );
+            assert!(
+                t.contains("\nWK_JSON\n"),
+                "{client} terminator must be unindented"
+            );
+            assert!(!t[start..].contains("\n    "), "{client} snippet indented");
             assert!(t.contains("Never include the text WK_JSON in the content."));
             assert!(t.contains(
                 "If the command refuses the card, tell me why instead of rewording it to get past the screening."
