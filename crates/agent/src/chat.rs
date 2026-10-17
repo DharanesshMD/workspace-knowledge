@@ -40,12 +40,8 @@ pub struct Record<'a> {
     pub seq: u32,
     pub agent: &'a str,
 }
-pub fn record(
-    store: &mut wk_local::LocalStore,
-    b: &wk_scope::enrollment::Binding,
-    service: &str,
-    r: Record<'_>,
-) -> Result<(), String> {
+/// The journal event for `r`, as `ingest` receives it.
+fn event_json(b: &wk_scope::enrollment::Binding, service: &str, r: &Record<'_>) -> String {
     let Record {
         session,
         turn,
@@ -55,8 +51,18 @@ pub fn record(
         seq,
         agent,
     } = r;
-    let event = json!({"schema_version":1,"event_id":id,"session_id":session,"agent_id":agent,"turn_id":turn,"sequence":seq,"kind":kind,"path":b.root.join(service),"text":text});
-    let r = wk_capture::journal::ingest(store, b, &event.to_string(), daemon::now()?)?;
+    json!({"schema_version":1,"event_id":id,"session_id":session,"agent_id":agent,"turn_id":turn,"sequence":seq,"kind":kind,"path":b.root.join(service),"text":text}).to_string()
+}
+/// The journal's per-event size limit, checked by `ingest`.
+const MAX_EVENT_BYTES: usize = 256 * 1024;
+pub fn record(
+    store: &mut wk_local::LocalStore,
+    b: &wk_scope::enrollment::Binding,
+    service: &str,
+    r: Record<'_>,
+) -> Result<(), String> {
+    let event = event_json(b, service, &r);
+    let r = wk_capture::journal::ingest(store, b, &event, daemon::now()?)?;
     if r["held"] == true {
         return Err("session held; start a clean conversation".into());
     }
@@ -221,29 +227,44 @@ fn import_into(
         Sha256::digest(serde_json::to_vec(&e.messages).map_err(|_| "invalid scoped export")?)
     );
     let parts = parts(&e.messages, 96 * 1024);
-    let mut seq = 0;
+    // Each message with the journal session and turn of its part; sequence numbers follow.
+    let mut placed: Vec<(String, String, &Message)> = vec![];
     for (n, part) in parts.iter().enumerate() {
         let turn = format!("part-{}", n + 1);
         let journal = format!("export:{session}:{}:{turn}", &digest[..12]);
-        for m in &part.messages {
-            seq += 1;
-            // Text that JSON-escapes heavily (e.g. mostly control characters) can exceed the
-            // journal's per-event limit; `ingest` then rejects that event explicitly.
-            record(
-                store,
-                b,
-                service,
-                Record {
-                    session: &journal,
-                    turn: &turn,
-                    id: &m.id,
-                    kind: kind(&m.role)?,
-                    text: &m.text,
-                    seq,
-                    agent: "explicit-export",
-                },
-            )?;
-        }
+        placed.extend(
+            part.messages
+                .iter()
+                .map(|m| (journal.clone(), turn.clone(), m)),
+        );
+    }
+    let records = placed
+        .iter()
+        .zip(1..)
+        .map(|((journal, turn, m), seq)| {
+            Ok(Record {
+                session: journal,
+                turn,
+                id: &m.id,
+                kind: kind(&m.role)?,
+                text: &m.text,
+                seq,
+                agent: "explicit-export",
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    // Text that JSON-escapes heavily (e.g. mostly control characters) can outgrow the journal's
+    // per-event limit even within a part's text budget. Check every event before recording
+    // any, so an import never records only some of its messages.
+    if records
+        .iter()
+        .any(|r| event_json(b, service, r).len() > MAX_EVENT_BYTES)
+    {
+        return Err("export message too large to record".into());
+    }
+    let seq = records.len();
+    for r in records {
+        record(store, b, service, r)?;
     }
     let truncated_parts = parts.iter().filter(|p| p.truncated).count();
     // `process` drafts at most 10 journal sessions per run, one session per part.
@@ -252,8 +273,8 @@ fn import_into(
         json!({"captured_messages":seq,"parts":parts.len(),"truncated_parts":truncated_parts,"process_runs_needed":process_runs_needed,"coverage":"partial_export","published":false}),
     )
 }
-/// Checks the whole export before anything is recorded, so an import never records
-/// only some of its messages.
+/// Checks the export's shape and identities before anything is recorded. `import_into` adds a
+/// check of every event's size, so an import never records only some of its messages.
 fn validated(
     b: &wk_scope::enrollment::Binding,
     export: &str,
@@ -836,6 +857,23 @@ mod import_tests {
         .unwrap_err();
         assert!(err.contains("session ID"), "{err}");
         assert!(sessions(&mut f).is_empty());
+        f.server.abort();
+    }
+    #[tokio::test]
+    async fn an_event_over_the_journal_limit_is_rejected_before_anything_is_recorded() {
+        let mut f = fixture().await;
+        // 90 KiB of control characters fits a part but escapes to 6 bytes each in the event.
+        let heavy = "\u{1}".repeat(90 * 1024);
+        let ok = export(&f, &[("q", "a".into()), ("q2", heavy)]);
+        let err = import(&mut f, &ok).unwrap_err();
+        assert!(err.contains("too large to record"), "{err}");
+        assert!(
+            sessions(&mut f).is_empty(),
+            "earlier messages must not be recorded"
+        );
+        // The same text in a smaller message is fine.
+        let fine = export(&f, &[("q", "a".into()), ("q2", "\u{1}".repeat(10 * 1024))]);
+        assert_eq!(import(&mut f, &fine).unwrap()["captured_messages"], 4);
         f.server.abort();
     }
 }
