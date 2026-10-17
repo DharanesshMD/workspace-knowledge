@@ -457,9 +457,13 @@ pub(crate) async fn draft_all(
     }
     Ok((drafts, held))
 }
-/// One `wk-agent drafts` row. Memory drafts also show where they came from.
+/// One `wk-agent drafts` row. Memory drafts also show where they came from, and
+/// assistant-written drafts which assistant wrote them.
 pub(crate) fn draft_item(id: &str, v: &Value) -> Value {
     let mut item = json!({"id": id, "card": v["card"], "model": v["model"]});
+    if let Some(a) = v.get("assistant") {
+        item["assistant"] = json!({"client": a["client"]});
+    }
     if let Some(m) = v.get("memory") {
         item["memory"] =
             json!({"label": m["label"], "heading": m["heading"], "updates": m["updates"]});
@@ -1464,6 +1468,18 @@ mod tests {
         );
         assert!(draft_item("draft:y", &json!({"card": {}, "model": "m"}))
             .get("memory")
+            .is_none());
+    }
+    #[test]
+    fn draft_items_mark_assistant_written_drafts() {
+        let v = json!({"card": {"title": "T"}, "model": "assistant",
+            "assistant": {"client": "claude-code"}, "policy_hash": "internal"});
+        let item = draft_item("draft:x", &v);
+        assert_eq!(item["assistant"], json!({"client": "claude-code"}));
+        assert_eq!(item["model"], "assistant");
+        assert!(item.get("policy_hash").is_none() && item.get("memory").is_none());
+        assert!(draft_item("draft:y", &json!({"card": {}, "model": "m"}))
+            .get("assistant")
             .is_none());
     }
     #[tokio::test]

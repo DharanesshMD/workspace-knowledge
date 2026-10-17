@@ -1,3 +1,4 @@
+mod assistant_draft;
 mod assistant_prompt;
 mod chat;
 mod compliance;
@@ -155,6 +156,12 @@ enum Command {
         file: PathBuf,
         #[arg(long)]
         yes: bool,
+    },
+    /// Store a card written by your assistant as a private draft (reads JSON on standard input).
+    Draft {
+        /// Which assistant wrote it (label only): claude-code, copilot, codex or other.
+        #[arg(long, default_value = "other")]
+        client: String,
     },
     /// Print the instructions that make an assistant write a private draft summary.
     Prompt {
@@ -524,6 +531,11 @@ async fn run(cli: Cli) -> Result<Value, String> {
             state::save(&receipt, &json!({"file":file,"fragment":fragment}))?;
             Ok(json!({"installed":true,"live_verified":false}))
         }
+        Command::Draft { client } => {
+            assistant_draft::valid_client(&client)?;
+            let text = stdin_limited()?;
+            assistant_draft::run(&state, &client, &text).await
+        }
         Command::Prompt { client } => assistant_prompt::output(
             &client,
             &std::env::current_exe().map_err(|_| "executable unavailable")?,
@@ -662,6 +674,19 @@ mod cli_tests {
         .unwrap();
         assert!(matches!(cli.command, Command::Prompt { client } if client == "codex"));
         assert!(Cli::try_parse_from(["wk-agent", "--state-dir", "/private/wk", "prompt"]).is_err());
+    }
+
+    #[test]
+    fn draft_command_takes_an_optional_client() {
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["wk-agent", "--state-dir", "/private/wk", "draft"];
+            args.extend_from_slice(extra);
+            Cli::try_parse_from(args).unwrap().command
+        };
+        assert!(matches!(parse(&[]), Command::Draft { client } if client == "other"));
+        assert!(
+            matches!(parse(&["--client", "codex"]), Command::Draft { client } if client == "codex")
+        );
     }
 
     #[test]

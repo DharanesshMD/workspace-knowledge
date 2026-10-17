@@ -251,6 +251,25 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
         let response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
         return crate::memory_import::finish_submit(dir, &mut s, id, &v, response, owner_only);
     }
+    if v.get("assistant").is_some() {
+        // A malformed policy reply must never consume a valid draft.
+        let revision = p["policy_revision"].as_u64().ok_or("invalid policy")?;
+        match crate::assistant_draft::assistant_ready(&v, &b.policy_hash, revision) {
+            crate::assistant_draft::Readiness::Consume => {
+                s.ack(id)?; // a draft for an older approval can never become valid
+                return Err("policy changed; ask your assistant to draft again".into());
+            }
+            crate::assistant_draft::Readiness::Hold => {
+                return Err("draft requires sensitive-content review".into());
+            }
+            crate::assistant_draft::Readiness::Ready => {}
+        }
+        let response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
+        if !owner_only {
+            s.ack(id)?;
+        }
+        return Ok(response);
+    }
     if v.get("native_adapter").is_some() {
         let _guard = crate::native_process::validate_draft(dir, &v).await?;
         if wk_summarize::sensitive(&v["card"].to_string()) {
