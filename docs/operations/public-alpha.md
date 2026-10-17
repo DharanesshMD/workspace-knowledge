@@ -1,14 +1,14 @@
 # Public source alpha launch packet
 
-Label: **v0.1.0-alpha.2**. Status: **source-only prerelease tagged on 2026-10-15**. Scope: source evaluation for Linux Docker servers and macOS developers. The sections below are the runbook; the release record states what actually happened.
+Label: **v0.1.0-alpha.3**. Status: **source-only prerelease tagged on 2026-10-17**. Scope: source evaluation for Linux Docker servers and macOS developers. The sections below are the runbook; the release record states what actually happened.
 
 ## Release record
 
 - PR #1 merged into `main` as `038c935`. Stale branches `feat/foundation` and `codex/cursor-native-capture` were deleted after confirming they were fully contained in `main`.
-- `v0.1.0-alpha.1` was tagged at `038c935` on 2026-10-14 but never published. The same day, RUSTSEC-2026-0346 (medium) and RUSTSEC-2026-0347/0348/0349 (low) were published against rustls 0.23.45; PR #16 (`d45072d`) updated rustls to 0.23.46.
-- PR #17 (agent memory import, `c986f77`) and PR #18 (meaning-based prompt context, `1563eb0`) were merged after their combined tree was verified locally.
-- Tag `v0.1.0-alpha.2` → `1563eb0`, a [GitHub prerelease](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.2) with no attached assets.
-- **Verification:** an account billing block prevented GitHub Actions from starting jobs, so every CI job was reproduced locally on the exact tree of `1563eb0`: fmt, workspace clippy with warnings denied, 401 Rust tests including PostgreSQL, build, Python tests, demo, plain-PostgreSQL acceptance, HTTP/MCP integration, code-context check, cargo and npm audits, and the console tests. The Linux container build with its non-root and fail-closed checks, the environments job, the portal identity/owner/team/admin/device smoke tests and the Claude Code 2.1.296 Edit/Write checks passed on the earlier release candidate. Windows was not verified. Re-run the Actions checks once jobs can start and record the result.
+- `v0.1.0-alpha.1` was tagged at `038c935` on 2026-10-14 and `v0.1.0-alpha.2` at `1563eb0` on 2026-10-15; neither was ever published, and both prereleases and their tags were deleted before publication. The same day, RUSTSEC-2026-0346 (medium) and RUSTSEC-2026-0347/0348/0349 (low) were published against rustls 0.23.45; PR #16 (`d45072d`) updated rustls to 0.23.46.
+- PR #17 (agent memory import, `c986f77`) and PR #18 (meaning-based prompt context, `1563eb0`) were merged after their combined tree was verified locally. PR #19 (agent history import for Claude Code, Codex, VS Code Copilot and Cursor, `5b982a5`) was merged the same way.
+- Tag `v0.1.0-alpha.3` → `5b982a5`, a [GitHub prerelease](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.3) with no attached assets.
+- **Verification:** an account billing block prevented GitHub Actions from starting jobs, so every CI job was reproduced locally on the exact tree of `5b982a5`: fmt, workspace clippy with warnings denied, 500 Rust tests including PostgreSQL, build, Python tests, demo, plain-PostgreSQL acceptance, HTTP/MCP integration, code-context check, cargo and npm audits, and the console tests. The Linux container build with its non-root and fail-closed checks, the environments job, the portal identity/owner/team/admin/device smoke tests and the Claude Code 2.1.296 Edit/Write checks passed on the earlier release candidate. Windows was not verified. Re-run the Actions checks once jobs can start and record the result.
 
 ## Publication (complete before merging this record)
 
@@ -20,7 +20,7 @@ Label: **v0.1.0-alpha.2**. Status: **source-only prerelease tagged on 2026-10-15
 
 1. Review the [dependency remediation and maintenance warning](../security/rsa-runtime-disposition.md). The old RSA package is removed; no advisory waiver is requested. Source-alpha scope remains experimental, with production/model/capture/distribution gates explicit.
 2. Accept the [historical disclosure findings](../reviews/2026-10-12-public-alpha.md): older document versions retain a local username/project path, and Git author/committer names and email metadata remain visible. Current examples are generalized. Retained Actions logs also expose normal workflow/run metadata when public; the bounded log review and remaining refresh requirements are recorded in that report. If those exposures are unacceptable, choose a separately reviewed history-sanitization plan before publication; history has not been rewritten.
-3. Approve integration of draft [PR #1](https://github.com/DharanesshMD/workspace-knowledge/pull/1), changing repository visibility to public, enabling private reporting and creating the source-only prerelease/tag **v0.1.0-alpha.2**. Approve each action explicitly. Do not upload the private unsigned binary candidates or local evidence directory.
+3. Approve integration of draft [PR #1](https://github.com/DharanesshMD/workspace-knowledge/pull/1), changing repository visibility to public, enabling private reporting and creating the source-only prerelease/tag **v0.1.0-alpha.3**. Approve each action explicitly. Do not upload the private unsigned binary candidates or local evidence directory.
 
 The owner has confirmed monitoring GitHub private vulnerability reports after launch. Production sign-in, real-server/team testing and Apple signing remain deferred by the owner.
 
@@ -41,7 +41,7 @@ These steps are manual and contingent on the owner decisions above. Stop if a ne
 2. Recheck all reachable history and retained Actions runs/artifacts before making it public. Confirm the owner-approved metadata exposure, resolved log review, absence of prohibited artifacts, disabled candidate-build workflow/no active candidate-build runs and license/asset inventory. Record the exact merge SHA; do not publish a different revision.
 3. Change visibility in repository **Settings → General → Danger Zone** only with the explicit visibility approval. Verify the resulting repository is public. Public history can be copied immediately; reverting visibility cannot undo disclosure.
 4. In **Settings → Advanced Security**, enable GitHub private vulnerability reporting. Verify **Security → Report a vulnerability** is available, the reporting policy is correct and the owner can access repository security advisories. Do not submit a fake report or contact others as a verification shortcut. If enablement fails, halt tag/release publication and tell the owner; SECURITY.md must state the actual available channel. Configure main-branch protection with the verified foundation/history/dependency check contexts after the public-repository features become available; the private main is currently unprotected.
-5. With separate tag/release approval, tag the reviewed main SHA as `v0.1.0-alpha.2` and create a GitHub release marked **prerelease**. Use the unreleased changelog, advisory disclosure and support boundaries as release notes. Attach **no binary, capture or private evidence files**. GitHub's generated source archives are the alpha deliverable. Verify the tag resolves to the approved SHA and notes accurately disclose the audit result and remaining informational warning.
+5. With separate tag/release approval, tag the reviewed main SHA as `v0.1.0-alpha.3` and create a GitHub release marked **prerelease**. Use the unreleased changelog, advisory disclosure and support boundaries as release notes. Attach **no binary, capture or private evidence files**. GitHub's generated source archives are the alpha deliverable. Verify the tag resolves to the approved SHA and notes accurately disclose the audit result and remaining informational warning.
 6. Record the resulting SHA/tag, reporting verification and URLs. Move the changelog entry out of Unreleased and update README status only after those actions succeed. Review any follow-up documentation change normally.
 
 GitHub documents that [visibility changes expose Actions logs](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/setting-repository-visibility) and [repository readers can download workflow artifacts](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts). These are part of the publication boundary even when no release files are attached.
@@ -53,7 +53,7 @@ GitHub's [private reporting documentation](https://docs.github.com/en/code-secur
 Follow [quickstart](../../README.md#quickstart) for the default branch or [installation](install.md) for a team evaluation. To evaluate exactly the prerelease, clone its tag:
 
 ```sh
-git clone --branch v0.1.0-alpha.2 https://github.com/DharanesshMD/workspace-knowledge.git
+git clone --branch v0.1.0-alpha.3 https://github.com/DharanesshMD/workspace-knowledge.git
 cd workspace-knowledge
 cargo build --locked -p wk-cli
 python3 scripts/demo.py

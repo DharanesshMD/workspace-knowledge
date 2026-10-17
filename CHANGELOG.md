@@ -6,9 +6,9 @@ All notable changes are recorded here.
 
 Nothing yet.
 
-## [v0.1.0-alpha.2](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.2) — 2026-10-15 (source-only prerelease)
+## [v0.1.0-alpha.3](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.3) — 2026-10-17 (source-only prerelease)
 
-First published prerelease. It supersedes v0.1.0-alpha.1, which was tagged on 2026-10-14 but never published and predates the rustls security update.
+First published prerelease. It supersedes v0.1.0-alpha.1 and v0.1.0-alpha.2, which were tagged earlier but never published and predate the agent history import (alpha.1 also predates the rustls security update).
 
 ### Included
 
