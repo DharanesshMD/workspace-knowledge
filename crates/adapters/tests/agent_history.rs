@@ -211,8 +211,8 @@ fn claude_reads_visible_prompts_and_replies_only() {
         !all.contains("secret"),
         "hidden or tool content leaked: {all}"
     );
-    assert_eq!(c.title, LONG.lines().next().unwrap()[..80]);
-    assert_eq!(c.title.chars().count(), 80);
+    // Readers keep up to 400 characters; the CLI masks and clips titles to 80 for display.
+    assert_eq!(c.title, LONG.lines().next().unwrap());
     assert_eq!(c.workspace.as_deref(), Some(Path::new("/work/app")));
     assert_eq!(c.created_at_ms, Some(1_792_058_400_000));
     assert_eq!(c.source, "claude-code");
@@ -544,7 +544,7 @@ fn codex_reads_visible_prompts_and_replies_only() {
         !all.contains("secret"),
         "hidden, injected or tool content leaked: {all}"
     );
-    assert_eq!(c.title, LONG.lines().next().unwrap()[..80]);
+    assert_eq!(c.title, LONG.lines().next().unwrap());
     assert_eq!(c.workspace.as_deref(), Some(Path::new("/work/app")));
     assert_eq!(c.created_at_ms, Some(1_792_058_400_000));
     assert_eq!(c.source, "codex");
@@ -948,7 +948,7 @@ fn copilot_reads_visible_prompts_and_replies_only() {
         !all.contains("secret"),
         "hidden, tool, reference or variable content leaked: {all}"
     );
-    assert_eq!(c.title, LONG.lines().next().unwrap()[..80]);
+    assert_eq!(c.title, LONG.lines().next().unwrap());
     assert_eq!(c.workspace.as_deref(), Some(Path::new("/work/my app")));
     assert_eq!(c.created_at_ms, Some(1_792_058_400_000));
     assert_eq!(c.source, "copilot");

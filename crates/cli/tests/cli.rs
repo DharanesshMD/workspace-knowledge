@@ -716,6 +716,36 @@ fn agent_history_lists_shows_and_exports_each_client_scoped_and_masked() {
 }
 
 #[test]
+fn agent_history_list_masks_a_keyless_secret_that_straddles_the_title_clip() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join("home");
+    let product = d.path().join("product");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&product).unwrap();
+    let sessions = d.path().join("codex-sessions");
+    // A 42-character token with no prefix or key, starting at column 62 and ending after 80.
+    let token = "Zk3".repeat(14);
+    let title = format!("{} {token} and more", "x".repeat(60));
+    codex_session(&sessions, "rollout-a.jsonl", "in", Some(&product), &title);
+    let listed = json_out(&run_home(
+        &home,
+        &[
+            "agent-history",
+            "--client",
+            "codex",
+            "--source-dir",
+            sessions.to_str().unwrap(),
+            "list",
+            "--workspace",
+            product.to_str().unwrap(),
+        ],
+    ));
+    let shown = listed["sessions"][0]["title"].as_str().unwrap();
+    assert!(!shown.contains("Zk3"), "token fragment leaked: {shown}");
+    assert_eq!(shown, format!("{} [REDACTED] and more", "x".repeat(60)));
+}
+
+#[test]
 fn agent_history_export_names_never_escape_the_output_directory() {
     let d = tempfile::tempdir().unwrap();
     let home = d.path().join("home");

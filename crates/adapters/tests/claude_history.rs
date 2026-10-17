@@ -457,3 +457,16 @@ fn aborted_sessions_add_nothing_to_the_counters() {
         "the injected part was not kept"
     );
 }
+
+#[test]
+fn titles_keep_up_to_four_hundred_characters_of_the_first_line() {
+    let d = tempfile::tempdir().unwrap();
+    let prompt = format!("{}\nsecond line", "t".repeat(500));
+    write_lines(
+        &d.path().join("-work-app/s.jsonl"),
+        &bytes(&[user("u1", json!(prompt)), reply("a1", "Reply")]),
+        b"\n",
+    );
+    let history = read(d.path()).unwrap();
+    assert_eq!(history.conversations[0].title, "t".repeat(400));
+}

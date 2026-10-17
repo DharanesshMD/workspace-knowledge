@@ -109,15 +109,19 @@ impl Lines {
     }
 }
 
-/// The first non-blank line of `text`, trimmed, at most 80 characters.
+/// Longest title a reader keeps. Display code masks secrets in a title before clipping it
+/// shorter, so a secret that straddles the display width is still recognised whole.
+pub(crate) const TITLE_CHARS: usize = 400;
+
+/// The first non-blank line of `text`, trimmed, at most [`TITLE_CHARS`] characters.
 pub(crate) fn first_line(text: &str) -> Option<String> {
     text.lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
-        .map(|l| l.chars().take(80).collect())
+        .map(|l| l.chars().take(TITLE_CHARS).collect())
 }
 
-/// The first non-blank line of the first prompt, at most 80 characters.
+/// The first non-blank line of the first prompt, at most [`TITLE_CHARS`] characters.
 pub(crate) fn title(messages: &[Message]) -> String {
     messages
         .iter()
@@ -518,6 +522,6 @@ mod tests {
             title(&[m("assistant", "Hi"), m("user", "\n  First  \nsecond")]),
             "First"
         );
-        assert_eq!(title(&[m("user", &"x".repeat(100))]).len(), 80);
+        assert_eq!(title(&[m("user", &"x".repeat(500))]).len(), TITLE_CHARS);
     }
 }

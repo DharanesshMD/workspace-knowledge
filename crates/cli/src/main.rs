@@ -708,7 +708,9 @@ fn agent_history(
         ),
     }
 }
-/// One display line for a session title: first line, likely secrets masked, clipped.
+/// One display line for a session title: first line, likely secrets masked, then clipped to 80
+/// characters. Masking comes first so a secret that straddles column 80 is seen whole; readers
+/// keep titles longer than that for this reason.
 fn display_title(c: &wk_adapters::cursor_history::Conversation) -> String {
     let first = c.title.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
     wk_adapters::cursor_history::redact(first.trim())
