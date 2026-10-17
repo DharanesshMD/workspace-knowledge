@@ -1,4 +1,4 @@
-# Extend every default rule. This one exception requires BOTH an exact test
+# Extend every default rule. Each exception below requires BOTH an exact test
 # file and the entire reviewed synthetic source line; other values still fail.
 [extend]
 useDefault = true
@@ -12,3 +12,36 @@ condition = "AND"
 regexTarget = "line"
 paths = ['''^crates/knowledge/tests/personal\.rs$''']
 regexes = ['''^\s*\+?\s*secret\.body\.intent\ =\ "sk\-proj\-THIS_IS_A_SYNTHETIC_SECRET_CANARY_012345678901234567890"\.into\(\);\s*$''']
+
+[[rules.allowlists]]
+description = "Reviewed synthetic masking examples for the history redaction tests"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^crates/adapters/tests/cursor_history\.rs$''']
+regexes = [
+  '''^\s*\+?\s*redact\("token=sk\-SYNTHETICabcdef1234567890\ ok"\),\s*$''',
+  '''^\s*\+?\s*"key=sk\-SYNTHETICabcdef1234567890\ and\ ghp_abcdefghijklmnop1234\ ok",\s*$''',
+  '''^\s*\+?\s*"secretAccessKey=wJalrXUtn/K7MDENG/bPxRfi",\s*$''',
+]
+
+[[rules.allowlists]]
+description = "Reviewed synthetic CLI masking canary"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^crates/cli/tests/cli\.rs$''']
+regexes = [
+  '''^\s*\+?\s*const\ SECRET:\ \&str\ =\ "password=SYNTHETIC_SECRET_0123456789abcdefghij";\s*$''',
+]
+
+[[rules]]
+id = "curl-auth-user"
+
+[[rules.allowlists]]
+description = "Reviewed synthetic curl credential examples for the history redaction tests"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^crates/adapters/tests/cursor_history\.rs$''']
+regexes = [
+  '''^\s*\+?\s*"curl\ \-u\ alice:s3cret\ https://x\.test",\s*$''',
+  '''^\s*\+?\s*"curl\ \-\-user=alice:pw\ url",\s*$''',
+]
