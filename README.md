@@ -61,6 +61,7 @@ The useful result is a source-backed brief before a change. Its quality depends 
 | Capability | What developers can do |
 |---|---|
 | **My context** | Keep owner-only summaries and structured manual notes; edit, delete or submit an explicit copy for review |
+| **No local model needed** | Set up with no model: drafts are built from the conversation's structure and marked `[auto-drafted]`, or your own assistant writes a card with `/wk-summarize`; a loopback model stays optional ([setup](docs/adapters/setup.md#set-up-without-a-local-model)) |
 | **Agent memory import** | Turn existing `CLAUDE.md`, `AGENTS.md`, GitHub Copilot instruction files and Claude Code project notes into private drafts for review ([setup](docs/adapters/setup.md#import-existing-agent-memory)) |
 | **Agent history import** | Review, mask and export past Claude Code, Codex, VS Code Copilot and Cursor sessions for an approved folder, then import them as one private draft per session part ([setup](docs/adapters/setup.md#import-past-agent-sessions)) |
 | **Team context** | Browse published summaries by developer, service, date and file, within current membership scope |
@@ -96,7 +97,7 @@ flowchart LR
         Approval[Approved product and service folders]
         Client[Supported client adapter]
         Journal[Encrypted private journal]
-        Model[Explicit loopback model]
+        Model[Rules or optional loopback model]
         Draft[Screened private summary]
         Approval --> Client --> Journal --> Model --> Draft
     end
@@ -118,7 +119,7 @@ flowchart LR
 
 1. **Approve scope locally.** A developer approves explicit product/service folders. Personal, sibling and unknown contexts stay outside that approval.
 2. **Capture only supported visible content.** Enabled adapters feed a private encrypted journal. Unsupported or ambiguous sessions are partial or held.
-3. **Summarize locally.** An explicitly configured loopback model creates screened, encrypted drafts. There is no cloud summarization fallback.
+3. **Summarize locally.** By default, drafts are built on your machine from the conversation's structure, without a model. You can instead configure a loopback model for written summaries, or ask your own coding assistant to write a card with `/wk-summarize`. Drafts are screened, encrypted and private until you submit them. There is no cloud summarization fallback.
 4. **Choose what to share.** Optional owner synchronization creates private server summaries. Explicit submission creates a review copy; authorized publication makes that copy available to the team.
 5. **Retrieve within scope.** The portal, CLI and MCP enforce current identity and product/service membership. Code-change context adds reviewed provenance and local Git snapshot observations for enrolled repositories.
 
@@ -168,7 +169,7 @@ It removes its temporary state and does not read real chats or publish anything.
 |---|---|---|
 | Try consent and scope | Rust, C toolchain, Python | [Quickstart](#quickstart) |
 | Use the portal and manual notes | A provisioned team account and browser | [Join a team server](#join-a-team-server) |
-| Capture and summarize locally | User tools, native credential store, compatible local model, configured adapter | [Collector setup](docs/adapters/setup.md) |
+| Capture and summarize locally | User tools, native credential store, configured adapter; a local model is optional | [Collector setup](docs/adapters/setup.md) |
 | Host for a team | Linux Docker/Compose host, PostgreSQL, OIDC and HTTPS proxy | [Server installation](docs/operations/install.md#host-a-team-server) |
 | Contribute code | Pinned Rust toolchain; Node.js 22 for web work | [Contributing](CONTRIBUTING.md) |
 
@@ -201,7 +202,7 @@ Copy the five executables from `target/release` to a user-owned directory on PAT
 
 Get the portal URL, product and permitted services from your administrator, then sign in through the team's configured OIDC provider. You can use My context, Team context and manual notes without installing a collector.
 
-For local capture, run a compatible local model with a loopback OpenAI-compatible endpoint. Replace the placeholders below with your own approved values, and keep private state outside the product folder.
+For local capture you do not need a model. Replace the placeholders below with your own approved values, and keep private state outside the product folder. Without a model, the collector builds drafts from the conversation's structure (quoted, marked `[auto-drafted]` and partial), and you can ask your own assistant for better cards; see [setup without a local model](docs/adapters/setup.md#set-up-without-a-local-model). To have a local model write drafts instead, add `--model MODEL --inference URL` with a loopback OpenAI-compatible endpoint to the connect command below.
 
 **1. Approve the local workspace and service.**
 
@@ -218,11 +219,10 @@ Copy the exact `binding_file` path returned by this command.
 ```sh
 wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" \
   device connect --binding /absolute/path/from/binding_file.json \
-  --service backend --server https://knowledge.internal \
-  --model MODEL --inference http://127.0.0.1:11434/v1/chat/completions --yes
+  --service backend --server https://knowledge.internal --yes
 ```
 
-Connection checks membership and stores device credentials in the native credential store. It does not install hooks or start capture. Allow only expected Workspace Knowledge credential-store prompts.
+Optionally add `--model MODEL --inference http://127.0.0.1:11434/v1/chat/completions` to use a local model; without `--inference` the summarizer is `rules`. Connection checks membership and stores device credentials in the native credential store. It does not install hooks or start capture. The mode cannot be changed later without a new state directory. Allow only expected Workspace Knowledge credential-store prompts.
 
 **3. Run and check the collector.**
 
@@ -348,7 +348,7 @@ The architecture uses explicit scope and separate permissions throughout:
 - **Identity and membership are enforced.** Browser sign-in uses configured OIDC, cookie sessions and CSRF protection. API access, administration and collector audiences have distinct boundaries.
 - **Secrets use a separate path.** Environment schemas contain metadata; OpenBao value access requires independently authorized credentials.
 
-Screening and local inference reduce exposure, but they do not guarantee perfect redaction. Review summaries before submission. A local model is another local processing boundary, and client-owned transcript retention is outside this collector's control.
+Screening and local inference reduce exposure, but they do not guarantee perfect redaction. Review summaries before submission. Rule drafts quote the conversation (masked, and held when sensitive), so read them before submitting. With `/wk-summarize` your coding assistant writes the card: its provider already has the conversation and nothing new is sent, but the card is only as careful as the assistant that follows the instruction, and it is screened, not guaranteed clean. It stays a private draft until you submit it. If you configure a local model, that is another local processing boundary. Client-owned transcript retention is outside this collector's control.
 
 Hook capture failures let development continue. The hosted **Devices** page highlights reported missing context and distinguishes missing, stale and unknown reports, with local recovery guidance. Refreshing a report or resetting capture does not recover missing messages. A connection cannot prove complete capture, and some missing callbacks are undetectable. Existing code-change review requirements and summary privacy holds still apply.
 
@@ -358,7 +358,7 @@ The earlier **RUSTSEC-2023-0071** dependency was removed using a pinned AWS-LC O
 
 ## Server operations and sizing
 
-Local inference runs on developer machines in the current capture architecture. Server load comes from summaries, revisions, identity checks, retrieval, activity and portal/API traffic. Framework count alone does not determine load or storage.
+In the current capture architecture summaries are drafted on developer machines (by rules, an optional local model or the developer's own assistant), not on the server. Server load comes from summaries, revisions, identity checks, retrieval, activity and portal/API traffic. Framework count alone does not determine load or storage.
 
 | Operation | Starting point |
 |---|---|
@@ -483,7 +483,7 @@ No. Local approval, device connection, adapter configuration and exact supported
 
 **Do all developers need PostgreSQL, Docker or Node.js?**
 
-No. Browser-only users need a provisioned account. Developers running collectors need user tools, secure local storage and a configured local model. The operator runs the server/database; Node.js is for local portal builds.
+No. Browser-only users need a provisioned account. Developers running collectors need user tools and secure local storage; a local model is optional. The operator runs the server/database; Node.js is for local portal builds.
 
 **Can we use multiple frameworks or services?**
 

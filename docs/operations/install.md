@@ -29,7 +29,7 @@ Copy `wk.exe`, `wk-agent.exe`, `wk-env.exe`, `wk-server.exe` and `wk-mcp.exe` fr
 
 Get the portal URL, product name and permitted services from your administrator. Sign in to that portal through the team's OIDC provider. My context and Team context are available without installing a collector; installation adds local capture and synchronization.
 
-To connect capture, first run a compatible local model and choose its loopback OpenAI-compatible endpoint. The example below uses placeholders: replace the product path, product, service, model and server URL with your reviewed values. Private state must stay outside the approved product folder.
+To connect capture you do not need a model. The example below uses placeholders: replace the product path, product, service and server URL with your reviewed values. Without `--inference` the collector builds drafts from rules; to use a local model instead, run one and add `--model MODEL --inference URL` with its loopback OpenAI-compatible endpoint (see [setup without a local model](../adapters/setup.md#set-up-without-a-local-model)). Private state must stay outside the approved product folder.
 
 ```sh
 wk --state-dir "$HOME/.local/share/workspace-knowledge/consent" workspace approve /absolute/work/product --product PRODUCT --service backend --yes
@@ -38,7 +38,7 @@ wk --state-dir "$HOME/.local/share/workspace-knowledge/consent" workspace approv
 The response contains `binding_file`, the exact saved approval JSON path. Copy that value into `--binding` below; there is no need to calculate a filename or find a hash.
 
 ```sh
-wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" device connect --binding /absolute/path/from/binding_file.json --service backend --server https://knowledge.internal --model MODEL --inference http://127.0.0.1:11434/v1/chat/completions --yes
+wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" device connect --binding /absolute/path/from/binding_file.json --service backend --server https://knowledge.internal --yes
 wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" serve
 ```
 
@@ -46,7 +46,7 @@ wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" serve
 
 In another terminal, run `wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" doctor`. Then follow the [adapter instructions](../adapters/setup.md) for your exact client/version. Connecting a device alone does not install hooks or establish capture coverage. Each collector state binds one chosen service; multiple services require explicit attribution.
 
-Owner summary synchronization and activity sharing default off. If wanted, grant the matching hosted setting under Devices and explicitly enable the corresponding local permission; both are required. Owner sync uses `owner-sync enable --yes`. Publication still requires review. A changed local scope, destination or model requires a new explicit local connection/consent.
+Owner summary synchronization and activity sharing default off. If wanted, grant the matching hosted setting under Devices and explicitly enable the corresponding local permission; both are required. Owner sync uses `owner-sync enable --yes`. Publication still requires review. A changed local scope, destination, model or summarizer mode requires a new explicit local connection/consent.
 
 ### Renewal and device controls
 
@@ -56,7 +56,7 @@ The hosted Devices page lists only the signed-in developer's installations, with
 
 A collector token is bound to one installation through expiry plus 120 seconds. Replacing a revoked installation requires a fresh upstream sign-in with a distinct access token, for the collector audience only, with at most 12 hours remaining lifetime. At most 1,000 unexpired credential hashes per owner are retained; token text is not stored in that binding table. Transport outages retain held data under its existing TTL; authorization denial clears native held records.
 
-Legacy `init`, environment-token replacement and `device connect --test-token` are for literal-loopback synthetic development only. They are not hosted sign-in instructions. An acknowledged pause prevents further inference and discards pending results, although a request already sent to the local model cannot be recalled.
+Legacy `init`, environment-token replacement and `device connect --test-token` are for literal-loopback synthetic development only. They are not hosted sign-in instructions. An acknowledged pause prevents further drafting by `process` and discards pending results, although a request already sent to a local model cannot be recalled.
 
 ### Optional startup
 

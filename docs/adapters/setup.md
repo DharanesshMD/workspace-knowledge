@@ -3,22 +3,86 @@
 Install the [user tools](../operations/install.md#install-the-tools), then follow the steps below. Live acceptance uses isolated synthetic conversations; these examples do not authorize collecting existing chats.
 
 1. Approve only intended service folders using `wk --state-dir /private/consent workspace approve /work/product --product PRODUCT --service backend --service frontend --yes`. The consent directory must be outside the product and private. Each separate collector state binds one chosen service. A multi-service capture must be explicitly attributed; unknown attribution remains partial.
-2. Ask the operator to provision your product/service membership. Copy the `binding_file` returned by approval, then run `wk-agent --state-dir /private/collector device connect --binding /private/consent/APPROVAL.json --service backend --server https://knowledge.example --model LOCAL_MODEL --inference http://127.0.0.1:11434/v1/chat/completions --yes`. Complete the browser sign-in to the configured upstream provider. Connection validates membership and stores credentials in the native keyring; it does not start capture or install hooks. See [team connection](../operations/install.md#join-a-team-server). Legacy `init` and environment tokens are limited to loopback development.
+2. Ask the operator to provision your product/service membership. Copy the `binding_file` returned by approval, then run `wk-agent --state-dir /private/collector device connect --binding /private/consent/APPROVAL.json --service backend --server https://knowledge.example --yes`. Add `--model LOCAL_MODEL --inference http://127.0.0.1:11434/v1/chat/completions` only if you want a local model to write drafts; both are optional, and without `--inference` the collector builds drafts from rules (see [Set up without a local model](#set-up-without-a-local-model)). Complete the browser sign-in to the configured upstream provider. Connection validates membership and stores credentials in the native keyring; it does not start capture or install hooks. See [team connection](../operations/install.md#join-a-team-server). Legacy `init` and environment tokens are limited to loopback development; `init` takes the same optional `--inference`, `--summarizer` and `--model` flags.
 3. Run `wk-agent --state-dir /private/collector serve` in the user's session. Linux requires Secret Service/DBus. Missing secure storage disables persistence. Windows uses native Credential Store plus a private-directory ACL check. Platform certification remains required.
 4. Generate hook config with `wk-agent --state-dir /private/collector config --client cursor` (also `claude-code`, `gemini`). Inspect the fragment, then use `install --client CLIENT --file ABS_CONFIG --yes`. Installation merges strict JSON, backs up the prior object privately, and records owned entries. JSONC is refused unchanged. Uninstall removes exact owned entries and preserves user-modified entries. Do not install into real profiles until synthetic client certification is complete.
 5. `doctor` separately reports local approval, current membership, key availability, event counters and client capability labels. It does not turn untested fields green. Renew an expired hosted credential with `wk-agent --state-dir /private/collector device login` through upstream browser sign-in.
 
 A hook failure returns normally to the developer's agent and records a content-free capture gap locally. Knowledge generation/submission stops until `reset-capture --yes` closes pending sessions and discards private drafts. Then start a genuinely new client session. Restarts alone must not change client session identity. Hooks do not extract thinking/reasoning. The opt-in Cursor recovery described below validates callback-supplied transcript paths before a background reader may open them; other hooks do not read transcript paths. Product cwd is attribution metadata, not proof that all model context was in scope. Unknown external context therefore prevents automatic publication.
 
+## Set up without a local model
+
+You do not need to install or run a model. `wk-agent` writes drafts in one of two ways, chosen when the collector is first set up:
+
+| Mode | How to choose it | Where draft text comes from |
+|---|---|---|
+| `rules` | Omit `--inference` (or pass `--summarizer rules`) | Built from the conversation's structure on your machine, without a model (see [Rule drafts](#rule-drafts-and-their-limits)) |
+| `local` | Pass `--inference URL` (or `--summarizer local --inference URL`) | A model on your machine through a loopback OpenAI-compatible endpoint, as before |
+
+`device connect` and `init` take the same flags: `--inference URL` (optional), `--summarizer local|rules` (optional) and `--model NAME` (only used by `local`). For example:
+
+```sh
+wk-agent --state-dir /private/collector device connect --binding /private/consent/APPROVAL.json \
+  --service backend --server https://knowledge.example --yes
+```
+
+- With no flags the mode is `rules` and nothing is stored about a model. Passing `--inference` selects `local` and validates the URL exactly as before. Combinations that contradict each other are refused: `--summarizer rules` with `--inference`, or `--summarizer local` without `--inference`. `--model` is ignored in `rules`.
+- Collectors set up before this option existed keep working as `local`; their configuration file is unchanged.
+- `wk-agent doctor` reports the current mode as `summarizer`.
+- The mode cannot be changed in place. Set up a new private state directory to switch (the existing "refusing credential rotation" rule applies). Owner-sync consent records the mode, so a new setup needs new consent.
+- A hosted (`device connect`) collector still needs the product's signed policy, including its inference restrictions field, to be present and well formed. In `rules` mode the allowed inference destinations simply do not apply, because nothing is sent to a model.
+- Managed chat (`wk-agent chat`) talks to a local model and refuses to run in `rules` mode. Use the `local` mode for it.
+
+Raw conversations stay on your machine in `rules` mode: no model, local or remote, is called and the collector sends nothing new anywhere. The usual review and submission steps are unchanged.
+
+### Rule drafts and their limits
+
+In `rules` mode `process` still runs every 15 seconds (or on demand) and still reads live captured turns, native turns, imported session parts and memory notes. It builds each draft from structure:
+
+- **Conversation turns and imported parts:** the title is the first line of the first prompt, the goal (`intent`) is the first prompt clipped to 400 characters and the outcome (`rationale`) is the last reply clipped to 1,500 characters. A part with several exchanges uses its first prompt and its last reply. `decisions`, `constraints` and `open_questions` are empty.
+- **Memory notes and instruction sections:** the title and goal are the heading (the note's name when it has none) and the rationale is the section text, clipped. A frontmatter hint such as `description` is put in front of the section text instead of being passed to a model.
+- **Marking:** every title starts with `[auto-drafted] ` (titles are cut to 256 bytes, marker included) and the card is `partial`, so reviewers see that it is built from structure and was not summarised.
+- **Safety:** quoted text is masked with the same pattern masking as the history tools (see [Masking](#import-past-agent-sessions)), and the source is held when it looks sensitive, as with a model. Held items are counted and no draft is made.
+- **Files:** a draft carries file evidence only where the source already provides it (Cursor and native adapters). Imports of Claude Code, Codex and Copilot sessions do not read tool calls, so those drafts have no files.
+
+A rule draft **quotes your conversation**; it does not summarise it. Masking is pattern-based and not exhaustive, so read every draft with `drafts` and submit only the ones you are happy for the team to see. A draft you do not submit expires. There is no command to edit a stored draft; for a card in your own words, or one with decisions, constraints and open questions, use [`/wk-summarize`](#summarize-with-your-assistant-wk-summarize), write a note under My context in the portal, or choose `--summarizer local` and run a model.
+
+### Summarize with your assistant (`/wk-summarize`)
+
+Your coding assistant already has the conversation, so it can write the summary. `wk-agent prompt --client claude-code|copilot|codex` prints a JSON object `{"client", "text", "save_as"}`. The text is a short instruction that makes the assistant write a card and give it to `wk-agent draft`. The command only prints; it writes no files and starts nothing in the background. Save the text yourself, once per project:
+
+| Client | Save `text` as | Run it with |
+|---|---|---|
+| Claude Code | `.claude/commands/wk-summarize.md` in the project (or `~/.claude/commands/` for all projects) | `/wk-summarize` |
+| VS Code Copilot Chat | `.github/prompts/wk-summarize.prompt.md` | `/wk-summarize` in agent mode (prompt files are a VS Code feature; check your version) |
+| Codex | Add the text to the project's `AGENTS.md` | Ask Codex to "summarise this session for Workspace Knowledge" |
+
+```sh
+wk-agent --state-dir /private/collector prompt --client claude-code
+```
+
+Copy the `text` value (JSON escapes such as `\n` become real line breaks) into the file named by `save_as`. For Codex, put it under its own heading in `AGENTS.md` and add a line saying to follow it only when you ask for it, because `AGENTS.md` is read at the start of every session. The text contains the absolute path of `wk-agent` and the state directory you passed, so run `prompt` with the state directory of the collector that should receive drafts and run it again if either path changes. Check and edit the file like any other instruction file.
+
+When you run the command, the assistant is asked to:
+
+1. Write one JSON card from what happened in the session: `title`, `intent`, `rationale`, and the arrays `decisions`, `constraints` and `open_questions`, and to include no secrets or personal data, no code and no pasted conversation text. This relies on the assistant following the instruction. Write decisions and constraints as full short sentences: list items that are shorter than 8 characters or a single word, that read as "none" or "n/a", or that repeat another item are dropped without notice.
+2. Run `wk-agent --state-dir DIR draft --client NAME` with the card on standard input.
+
+`draft` accepts only those six fields (anything else is refused) and at most 64 KiB, fills in the rest of the card (your service, the current policy revision, status `proposed`, completeness `partial`, no evidence) and screens the card for credentials and personal data. A card that fails screening is refused with a fixed message and is never echoed. Screening is pattern-based: it reduces the chance of sharing something sensitive, it does not guarantee a clean card.
+
+An accepted card is stored as a **private, encrypted local draft that lives for 24 hours** (other drafts expire within an hour). `wk-agent drafts` lists it and `wk-agent submit --id ID --reviewed` sends it; nothing reaches the team server before you do that, and a draft made under an older policy revision is discarded on submit, so run the command again. With owner-only synchronization on, the draft stays pending as for other drafts. Asking again for an identical card while one is pending keeps the pending draft; asking again after you submitted it creates a new draft that you can review and submit, and the server recognises identical cards and does not duplicate them.
+
+Privacy: the assistant's provider already receives your conversation, and `/wk-summarize` sends nothing new to anyone; the card is a private local draft until you submit it. The instruction is developer-initiated: there are no new hooks and no automatic token spend. `prompt` and `draft` work in either mode.
+
 ## Private summaries and review
 
-The daemon schedules local inference every 15 seconds; one inference pass runs at a time. Each pass rotates through at most ten sessions using a durable metadata-only cursor, so held/older sessions cannot trap later sessions behind a fixed first page. Model calls may take longer than the scheduling interval. `process` runs it on demand. `drafts` shows only the current user's locally encrypted candidate summaries, up to 100 per page. Pass the returned `next_cursor` as `drafts --after CURSOR` to read subsequent pages. Submitted or expired drafts are not regenerated automatically from unchanged source/model/policy inputs. Changed inputs create a new draft identity; content-free closure guards remain bounded at 100,000 records. After checking one, `submit --id draft:HASH --reviewed` sends that summary as a server draft, with membership, consent, policy and source digest rechecked. Reviewers publish complete approved summaries in the console. Partial hooks stay labeled partial and cannot be automatically published.
+The daemon schedules drafting every 15 seconds (a local model call in `local` mode, a structural build in `rules` mode); one pass runs at a time. Each pass rotates through at most ten sessions using a durable metadata-only cursor, so held/older sessions cannot trap later sessions behind a fixed first page. Model calls may take longer than the scheduling interval. `process` runs it on demand. `drafts` shows only the current user's locally encrypted candidate summaries, up to 100 per page. Pass the returned `next_cursor` as `drafts --after CURSOR` to read subsequent pages. Submitted or expired drafts are not regenerated automatically from unchanged source/model/policy inputs. Changed inputs create a new draft identity; content-free closure guards remain bounded at 100,000 records. After checking one, `submit --id draft:HASH --reviewed` sends that summary as a server draft, with membership, consent, policy and source digest rechecked. Reviewers publish complete approved summaries in the console. Partial hooks stay labeled partial and cannot be automatically published.
 
-Policy-auto remains disabled until the configured real model passes the privacy corpus and the team/developer policy is provisioned. Regex screening and model classification are not proof of perfect privacy. No cloud summarization fallback exists.
+Policy-auto remains disabled until the configured real model passes the privacy corpus and the team/developer policy is provisioned; rule drafts are always partial and never eligible. Regex screening and model classification are not proof of perfect privacy. No cloud summarization fallback exists.
 
 ## Instrumented chat and explicit exports
 
-`chat --message-file ABS_FILE` starts an explicitly managed local conversation and returns its session ID and visible response. Pass `--session managed:UUID` to continue. Every visible prompt/response is captured; only ordinary visible content is read from the model response. No file tools or agent reasoning are exposed. This is a controlled chat, not interception of an arbitrary existing desktop chat.
+`chat --message-file ABS_FILE` (requires the `local` mode and a model; it is refused in `rules` mode) starts an explicitly managed local conversation and returns its session ID and visible response. Pass `--session managed:UUID` to continue. Every visible prompt/response is captured; only ordinary visible content is read from the model response. No file tools or agent reasoning are exposed. This is a controlled chat, not interception of an arbitrary existing desktop chat.
 
 An explicit export is `{ "schema_version":1, "workspace":"/work/product", "product":"PRODUCT", "session_id":"SOURCE_SESSION", "messages":[{"id":"m1","role":"user","text":"synthetic request"}] }`. Import only that file using `import --file ABS_FILE --session SOURCE_SESSION --approve-transcript`. Metadata must match the current binding. Imports remain partial and do not scan adjacent files.
 
@@ -26,9 +90,9 @@ An explicit export is `{ "schema_version":1, "workspace":"/work/product", "produ
 
 Start with what your coding agents already know. `wk-agent --state-dir /absolute/private/state memory scan` lists the `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md` and GitHub Copilot instruction files in your approved service folder and this project's Claude Code notes (`~/.claude/projects/<project>/memory/*.md`), with a status for each. It is offline and prints no file content. Workspace-root files are reported as outside the approved service.
 
-GitHub Copilot instruction files are `.github/copilot-instructions.md` (kind `instructions`) and `.github/instructions/*.instructions.md` (kind `scoped_instructions`; only files directly in that folder, not its subfolders) inside the service folder, labelled `repo:<service>/.github/...`. They follow the same scope, size, UTF-8 and symlink rules as `CLAUDE.md`; a symlinked folder on the way to `.github/instructions` is not listed. In a `*.instructions.md` file the leading `---` frontmatter (`applyTo`, `description`, …) is removed from the imported text, and `description` is passed to the local model as a hint for every section. Without a closing `---` line the file has no frontmatter and is imported as written.
+GitHub Copilot instruction files are `.github/copilot-instructions.md` (kind `instructions`) and `.github/instructions/*.instructions.md` (kind `scoped_instructions`; only files directly in that folder, not its subfolders) inside the service folder, labelled `repo:<service>/.github/...`. They follow the same scope, size, UTF-8 and symlink rules as `CLAUDE.md`; a symlinked folder on the way to `.github/instructions` is not listed. In a `*.instructions.md` file the leading `---` frontmatter (`applyTo`, `description`, …) is removed from the imported text, and `description` is passed to the local model as a hint for every section (in `rules` mode it is put in front of each section's text instead). Without a closing `---` line the file has no frontmatter and is imported as written.
 
-Import with `memory import --yes`, adding `--file ABSOLUTE_PATH` for each Claude Code note you choose. The global `~/.claude/CLAUDE.md`, Codex's cross-project memories and other projects' notes are refused. Each note or section (split at the highest heading level used more than once) becomes one encrypted private record; `wk-agent process` drafts it with your local model and the usual privacy screening, then `wk-agent drafts` shows each draft with its source. Nothing is shared until you submit a reviewed draft. With owner synchronization enabled, memory drafts upload as owner-only summaries like other drafts.
+Import with `memory import --yes`, adding `--file ABSOLUTE_PATH` for each Claude Code note you choose. The global `~/.claude/CLAUDE.md`, Codex's cross-project memories and other projects' notes are refused. Each note or section (split at the highest heading level used more than once) becomes one encrypted private record; `wk-agent process` drafts it with your local model (or, in `rules` mode, from the heading and text, see [Rule drafts](#rule-drafts-and-their-limits)) and the usual privacy screening, then `wk-agent drafts` shows each draft with its source. Nothing is shared until you submit a reviewed draft. With owner synchronization enabled, memory drafts upload as owner-only summaries like other drafts.
 
 Re-running the import skips unchanged sections, replaces unsubmitted drafts of changed sections and links a changed, already-submitted section to its earlier summary (`updates`), so a reviewer can supersede it. Renaming or restructuring headings retires the old unsubmitted drafts and creates new ones without an `updates` link; reviewers supersede earlier summaries manually. Deleted sources are reported, not withdrawn. Memory files can contain credentials or personal notes: review every draft before submission, including the source label and heading that `drafts` shows. A submission reports `memory_link`: `recorded` when the summary was linked for later updates, `not_linked` when a newer import had already replaced or retired that section, or `failed` if the local record could not be written. After `failed`, the next import may draft that section again, so do not submit it twice.
 
