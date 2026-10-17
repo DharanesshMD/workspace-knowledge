@@ -342,8 +342,10 @@ pub(crate) fn file_uri_path(uri: &str) -> Option<PathBuf> {
         [b'/', drive, b':', ..] if cfg!(windows) && drive.is_ascii_alphabetic() => &path[1..],
         _ => &path,
     };
+    // Rooted, like `absolute_dir`: `is_absolute` would reject `/work/app` on Windows, where a
+    // rooted path without a drive is not absolute. Dot components were rejected above.
     let path = PathBuf::from(path);
-    path.is_absolute().then_some(path)
+    path.has_root().then_some(path)
 }
 
 #[cfg(test)]
@@ -409,16 +411,14 @@ mod tests {
 
     #[test]
     fn decodes_local_file_uris_only() {
-        #[cfg(unix)]
-        {
-            let ok = |uri: &str| file_uri_path(uri).map(|p| p.to_string_lossy().into_owned());
-            assert_eq!(ok("file:///work/my%20app").as_deref(), Some("/work/my app"));
-            assert_eq!(
-                ok("file://localhost/work/app").as_deref(),
-                Some("/work/app")
-            );
-            assert_eq!(ok("file:///w/%E2%9C%93").as_deref(), Some("/w/\u{2713}"));
-        }
+        // Rooted paths are accepted on every platform, Windows included.
+        let ok = |uri: &str| file_uri_path(uri).map(|p| p.to_string_lossy().into_owned());
+        assert_eq!(ok("file:///work/my%20app").as_deref(), Some("/work/my app"));
+        assert_eq!(
+            ok("file://localhost/work/app").as_deref(),
+            Some("/work/app")
+        );
+        assert_eq!(ok("file:///w/%E2%9C%93").as_deref(), Some("/w/\u{2713}"));
         #[cfg(windows)]
         assert_eq!(
             file_uri_path("file:///c%3A/Users/me/app"),
