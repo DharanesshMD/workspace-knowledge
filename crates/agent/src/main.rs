@@ -1,3 +1,4 @@
+mod assistant_prompt;
 mod chat;
 mod compliance;
 mod cursor_capture;
@@ -155,6 +156,11 @@ enum Command {
         file: PathBuf,
         #[arg(long)]
         yes: bool,
+    },
+    /// Print the instructions that make an assistant write a private draft summary.
+    Prompt {
+        #[arg(long)]
+        client: String,
     },
     Uninstall {
         #[arg(long)]
@@ -519,6 +525,11 @@ async fn run(cli: Cli) -> Result<Value, String> {
             state::save(&receipt, &json!({"file":file,"fragment":fragment}))?;
             Ok(json!({"installed":true,"live_verified":false}))
         }
+        Command::Prompt { client } => assistant_prompt::output(
+            &client,
+            &std::env::current_exe().map_err(|_| "executable unavailable")?,
+            &state,
+        ),
         Command::Uninstall { client, file } => {
             if let Ok(native) = native_enrollment::parse_client(&client) {
                 let _guard = native_capture::lock(&state).await?;
@@ -637,6 +648,21 @@ mod cli_tests {
         assert_eq!(super::summarizer_status(&c), "local");
         c.summarizer = crate::state::Summarizer::Rules;
         assert_eq!(super::summarizer_status(&c), "rules");
+    }
+
+    #[test]
+    fn prompt_command_takes_a_client() {
+        let cli = Cli::try_parse_from([
+            "wk-agent",
+            "--state-dir",
+            "/private/wk",
+            "prompt",
+            "--client",
+            "codex",
+        ])
+        .unwrap();
+        assert!(matches!(cli.command, Command::Prompt { client } if client == "codex"));
+        assert!(Cli::try_parse_from(["wk-agent", "--state-dir", "/private/wk", "prompt"]).is_err());
     }
 
     #[test]
