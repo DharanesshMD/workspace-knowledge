@@ -1,5 +1,12 @@
 # Agent History Import Implementation Plan
 
+> **Historical plan.** The implementation diverged from this plan; the [design spec](../specs/2026-10-15-agent-history-import-design.md) and [setup guide](../../adapters/setup.md#import-past-agent-sessions) describe what shipped. Main differences:
+> - The readers share `crates/adapters/src/history_common.rs` (bounded symlink-safe reads, titles, timestamps, session-ID validation, file URIs, newest-copy dedupe) and masking lives in `crates/adapters/src/redact.rs`, far broader than planned (compound names, quoted values, URL userinfo, credential flags, cookies).
+> - Injected context: only tool-style tag blocks (`_` or `-` in the name) are dropped by the general rule, known per-client markers stay, and drops are counted in `dropped_injected`.
+> - Copilot also replays `.jsonl` mutation logs (bounded paths and lines, `.json` fallback marked incomplete).
+> - Session IDs are validated with a hash fallback; titles are masked before clipping to 80 characters; list/show accept any folder and only `wk-agent import` enforces the binding.
+> - Export is hardened (private `--out`, no `..`, duplicate and case-clash refusals, cleanup of partial files) and `wk-agent import` rejects an oversized journal event before recording anything.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** `wk agent-history --client claude-code|codex|copilot|cursor list|show|export` exports reviewed past agent sessions for the enrolled folder; `wk-agent import` drafts one summary per session part; memory import also reads Copilot instruction files.
