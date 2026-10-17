@@ -146,7 +146,7 @@ fn redaction_leaves_credential_words_without_assignments_alone() {
     );
 }
 
-const COMPOUND_AND_QUOTED: [(&str, &str); 36] = [
+const COMPOUND_AND_QUOTED: &[(&str, &str)] = &[
     ("accessToken=a1", "accessToken=[REDACTED]"),
     (r#""refreshToken": "r1""#, r#""refreshToken": "[REDACTED]""#),
     ("clientSecret: c1", "clientSecret: [REDACTED]"),
@@ -251,8 +251,92 @@ const COMPOUND_AND_QUOTED: [(&str, &str); 36] = [
 #[test]
 fn redaction_masks_compound_names_quoted_values_urls_and_blocks() {
     for (input, want) in COMPOUND_AND_QUOTED {
-        assert_eq!(redact(input), want, "{input}");
+        assert_eq!(redact(input), *want, "{input}");
     }
+}
+
+const TOKEN_USERINFO: &str = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+/// Examples written with `{T}` standing for a 40-character GitHub token.
+fn with_token(text: &str) -> String {
+    text.replace("{T}", TOKEN_USERINFO)
+}
+
+const FLAGS_USERINFO_COOKIES: &[(&str, &str)] = &[
+    (
+        "git clone https://{T}@github.com/o/r.git",
+        "git clone https://[REDACTED]@github.com/o/r.git",
+    ),
+    (
+        "https://{T}:x-oauth-basic@github.com/o/r.git",
+        "https://[REDACTED]:[REDACTED]@github.com/o/r.git",
+    ),
+    (
+        "mytool --password hunter2 --verbose",
+        "mytool --password [REDACTED] --verbose",
+    ),
+    (
+        "t --token abc --secret \"two words\" --api-key k --auth-token t --passwd p",
+        "t --token [REDACTED] --secret \"[REDACTED]\" --api-key [REDACTED] --auth-token [REDACTED] --passwd [REDACTED]",
+    ),
+    ("t --access-token tk --db-password 'a b'", "t --access-token [REDACTED] --db-password '[REDACTED]'"),
+    ("t --password=x --token=y z", "t --password=[REDACTED] --token=[REDACTED] z"),
+    (
+        "Cookie: a=1; b=two",
+        "Cookie: a=[REDACTED]; b=[REDACTED]",
+    ),
+    (
+        "Set-Cookie: sid=abc123; Path=/; HttpOnly",
+        "Set-Cookie: sid=[REDACTED]; Path=/; HttpOnly",
+    ),
+    (
+        "curl -H 'Cookie: a=1; b=2' url",
+        "curl -H 'Cookie: a=[REDACTED]; b=[REDACTED]' url",
+    ),
+    (
+        r#"{"Cookie": "a=1; b=2", "x": "y"}"#,
+        r#"{"Cookie": "a=[REDACTED]; b=[REDACTED]", "x": "y"}"#,
+    ),
+    ("cookie: a=b", "cookie: a=[REDACTED]"),
+];
+
+#[test]
+fn redaction_masks_userinfo_tokens_secret_flags_and_cookies() {
+    for (input, want) in FLAGS_USERINFO_COOKIES {
+        let (input, want) = (with_token(input), with_token(want));
+        assert_eq!(redact(&input), want, "{input}");
+    }
+}
+
+#[test]
+fn redaction_leaves_ordinary_flags_users_and_cookie_words_alone() {
+    for text in [
+        "https://alice@host/x",
+        "t --no-password next",
+        "t --token-file /tmp/f --verbose",
+        "t --password --verbose",
+        "t --password",
+        "ssh -p 22 host; docker run -p 80:80 img",
+        "cookies are tasty: yes",
+        "Cookie:",
+        "Cookie: ",
+        "set cookie: later",
+    ] {
+        assert_eq!(redact(text), text);
+    }
+}
+
+#[test]
+fn redaction_stays_linear_on_pathological_lines() {
+    // Every key is followed by a type annotation and a long run that never reaches `=`.
+    let line = "token: String ".repeat(60_000);
+    let started = std::time::Instant::now();
+    assert_eq!(redact(&line), line);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
+    );
 }
 
 #[test]
@@ -279,16 +363,23 @@ fn redaction_avoids_code_and_url_false_positives() {
 
 #[test]
 fn redaction_is_idempotent() {
-    let mut inputs: Vec<&str> = COMPOUND_AND_QUOTED.iter().map(|(i, _)| *i).collect();
-    inputs.extend([
-        "-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\nDone",
-        "key=sk-SYNTHETICabcdef1234567890 and ghp_abcdefghijklmnop1234 ok",
-        "Authorization: Bearer [REDACTED]",
-        "password: [REDACTED],",
-        "user:[REDACTED]@host",
-    ]);
+    let mut inputs: Vec<String> = COMPOUND_AND_QUOTED
+        .iter()
+        .chain(FLAGS_USERINFO_COOKIES)
+        .map(|(i, _)| with_token(i))
+        .collect();
+    inputs.extend(
+        [
+            "-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\nDone",
+            "key=sk-SYNTHETICabcdef1234567890 and ghp_abcdefghijklmnop1234 ok",
+            "Authorization: Bearer [REDACTED]",
+            "password: [REDACTED],",
+            "user:[REDACTED]@host",
+        ]
+        .map(String::from),
+    );
     for input in inputs {
-        let once = redact(input);
+        let once = redact(&input);
         assert_eq!(redact(&once), once, "{input}");
     }
 }

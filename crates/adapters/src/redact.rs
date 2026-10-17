@@ -11,13 +11,15 @@
 //!   `PGPASSWORD`, `SECRET_KEY_BASE`); `pwd`, `auth` and `bearer` also need a word boundary,
 //!   and `auth` only counts when a `Bearer`, `Basic` or `Token` scheme follows.
 //! - Quoted values are masked through their closing quote; unquoted ones through whitespace.
-//! - URL userinfo passwords, `sig`/`signature` query parameters and `curl -u user:pass` are
-//!   masked.
+//! - URL userinfo passwords and bare tokens (`https://ghp_…@host`), `sig`/`signature` query
+//!   parameters, `curl -u user:pass`, the argument of long credential flags (`--password x`,
+//!   `--api-key x`) and the values of `Cookie:` and `Set-Cookie:` headers are masked.
 //! - A credential key that ends its line with `:` or a YAML block indicator masks the more
 //!   deeply indented lines that follow.
 //!
 //! Known limits: values continued on later lines in any other way (a JSON string split by the
-//! client, a heredoc) and credentials with no recognisable name are not found.
+//! client, a heredoc), credentials with no recognisable name, secrets stated in prose ("my
+//! password is x") and short flag values (`-p x`) are not found.
 
 const SUFFIX_KEYS: [&str; 16] = [
     "password",
@@ -81,7 +83,7 @@ pub fn redact(text: &str) -> String {
             })
             .collect::<Vec<_>>()
             .join(" ");
-        let masked = mask_assignments(&mask_flags(&mask_userinfo(&words)));
+        let masked = mask_assignments(&mask_cookies(&mask_flags(&mask_userinfo(&words))));
         out.push_str(&masked);
         out.push_str(newline);
         block_indent = block_key(body);
@@ -205,9 +207,11 @@ fn assigned_value(s: &str, key_end: usize, kind: Kind, query: bool) -> Option<(u
             Found::Value(from, to) => return Some((from, to)),
             Found::Type(end) => {
                 // `NAME: &str = "value"`: the value follows the `=` after the type.
+                // A bounded look ahead: types are short, and an unbounded scan would make a
+                // line of repeated `token: String` quadratic.
+                let limit = b.len().min(end + MAX_TYPE_SCAN);
                 let mut j = end;
-                while j < b.len() && (b[j].is_ascii_alphanumeric() || b" _<>&':[]?".contains(&b[j]))
-                {
+                while j < limit && (b[j].is_ascii_alphanumeric() || b" _<>&':[]?".contains(&b[j])) {
                     j += 1;
                 }
                 if b.get(j) == Some(&b'=') && b.get(j + 1) != Some(&b'=') {
@@ -219,6 +223,9 @@ fn assigned_value(s: &str, key_end: usize, kind: Kind, query: bool) -> Option<(u
         }
     }
 }
+
+/// Longest stretch after a type annotation searched for the `=` of `NAME: Type = value`.
+const MAX_TYPE_SCAN: usize = 64;
 
 const SCHEMES: [&str; 3] = ["bearer", "basic", "token"];
 
@@ -354,13 +361,25 @@ fn mask_userinfo(line: &str) -> String {
             .unwrap_or(tail.len());
         let span = &tail[..end];
         let masked = span.rfind('@').and_then(|at| {
-            let colon = span[..at].find(':')?;
-            let (user, pass) = (&span[..colon], &span[colon + 1..at]);
+            let info = &span[..at];
+            let hide = |part: &str| {
+                if secret_like(part) {
+                    "[REDACTED]".to_owned()
+                } else {
+                    part.to_owned()
+                }
+            };
+            let Some(colon) = info.find(':') else {
+                // `https://TOKEN@host`: the token alone is the credential.
+                return (secret_like(info) && !info.contains(['/', '?', '#']))
+                    .then(|| format!("[REDACTED]{}", &span[at..]));
+            };
+            let (user, pass) = (&info[..colon], &info[colon + 1..]);
             let digits = pass.len() - pass.trim_start_matches(|c: char| c.is_ascii_digit()).len();
             // `host:8080/path@x` is a port and a path, not user and password.
             let port = digits > 0 && pass[digits..].starts_with(['/', '?', '#']);
             (!pass.is_empty() && !port && !user.contains(['/', '?', '#']))
-                .then(|| format!("{}[REDACTED]{}", &span[..=colon], &span[at..]))
+                .then(|| format!("{}:[REDACTED]{}", hide(user), &span[at..]))
         });
         out.push_str(masked.as_deref().unwrap_or(span));
         rest = &tail[end..];
@@ -376,10 +395,18 @@ fn mask_flags(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let (mut copied, mut i) = (0, 0);
     while i < b.len() {
-        let flag = (b[i] == b'-' && (i == 0 || b[i - 1].is_ascii_whitespace()))
-            .then(|| FLAGS.iter().find(|f| line[i..].starts_with(**f)))
-            .flatten();
-        let Some(flag) = flag else {
+        let at_flag = b[i] == b'-' && (i == 0 || b[i - 1].is_ascii_whitespace());
+        if !at_flag {
+            i += 1;
+            continue;
+        }
+        if let Some((from, to)) = secret_flag_value(line, i) {
+            out.push_str(&line[copied..from]);
+            out.push_str("[REDACTED]");
+            (copied, i) = (to, to);
+            continue;
+        }
+        let Some(flag) = FLAGS.iter().find(|f| line[i..].starts_with(**f)) else {
             i += 1;
             continue;
         };
@@ -415,6 +442,102 @@ fn mask_flags(line: &str) -> String {
             copied = end;
         }
         i = end.max(i + 1);
+    }
+    out.push_str(&line[copied..]);
+    out
+}
+
+/// The argument after a long flag that names a credential (`--password x`, `--api-key x`,
+/// `--db-token "x y"`), when it is separated by whitespace and is not another flag. Short flags
+/// are not handled: `-p` is a port, a path or a password depending on the tool.
+fn secret_flag_value(line: &str, at: usize) -> Option<(usize, usize)> {
+    let b = line.as_bytes();
+    let name = line[at..].strip_prefix("--")?;
+    let len = name.find(|c: char| !name_char(c)).unwrap_or(name.len());
+    let name = &name[..len];
+    if name.is_empty() || name.starts_with("no-") || classify(name, false) != Some(Kind::Credential)
+    {
+        return None;
+    }
+    let after = at + 2 + len;
+    if !b.get(after)?.is_ascii_whitespace() {
+        return None;
+    }
+    let arg = after + line[after..].len() - line[after..].trim_start().len();
+    let first = *b.get(arg)?;
+    if first == b'-' {
+        return None;
+    }
+    if is_quote(first) {
+        let end = line[arg + 1..]
+            .find(first as char)
+            .map_or(b.len(), |p| arg + 1 + p);
+        return (arg + 1 < end).then_some((arg + 1, end));
+    }
+    let end = line[arg..]
+        .find(char::is_whitespace)
+        .map_or(b.len(), |p| arg + p);
+    Some((arg, end))
+}
+
+/// Mask the value of each `name=value` pair in `Cookie:` and `Set-Cookie:` headers (the first
+/// pair only for `Set-Cookie`, whose later pairs are attributes such as `Path=/`).
+fn mask_cookies(line: &str) -> String {
+    let b = line.as_bytes();
+    let space = |mut j: usize| {
+        while j < b.len() && matches!(b[j], b' ' | b'\t') {
+            j += 1;
+        }
+        j
+    };
+    // Length of a quote at `j`, plain or backslash-escaped inside embedded JSON.
+    let quote_len = |j: usize| match (b.get(j), b.get(j + 1)) {
+        (Some(b'\\'), Some(q)) if is_quote(*q) => 2,
+        (Some(q), _) if is_quote(*q) => 1,
+        _ => 0,
+    };
+    let mut out = String::with_capacity(line.len());
+    let (mut copied, mut i) = (0, 0);
+    while i < b.len() {
+        if !name_char(b[i] as char) || (i > 0 && name_char(b[i - 1] as char)) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && name_char(b[i] as char) {
+            i += 1;
+        }
+        let ident = line[start..i].to_ascii_lowercase();
+        if ident != "cookie" && !ident.ends_with("-cookie") {
+            continue;
+        }
+        // Optional closing quote of a JSON key, the colon, an optional opening quote.
+        let colon = space(i + quote_len(i));
+        if b.get(colon) != Some(&b':') {
+            continue;
+        }
+        let begin = space(colon + 1);
+        let begin = begin + quote_len(begin);
+        let end = (begin..b.len())
+            .find(|&k| quote_len(k) > 0)
+            .unwrap_or(b.len());
+        let mut seg = begin;
+        while seg < end {
+            let seg_end = line[seg..end].find(';').map_or(end, |p| seg + p);
+            if let Some(eq) = line[seg..seg_end]
+                .find('=')
+                .filter(|e| seg + e + 1 < seg_end)
+            {
+                out.push_str(&line[copied..seg + eq + 1]);
+                out.push_str("[REDACTED]");
+                copied = seg_end;
+            }
+            if ident == "set-cookie" {
+                break;
+            }
+            seg = seg_end + 1;
+        }
+        i = end.max(i);
     }
     out.push_str(&line[copied..]);
     out
