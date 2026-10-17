@@ -4,7 +4,8 @@ use wk_summarize::Extract;
 
 pub(crate) const INTENT_MAX: usize = 400;
 pub(crate) const RATIONALE_MAX: usize = 1500;
-const TITLE_MAX: usize = 200;
+/// `CardSubmission::validate` limits titles to 256 UTF-8 bytes, marker included.
+const TITLE_BYTES: usize = 256 - MARK.len();
 pub(crate) const MARK: &str = "[auto-drafted] ";
 
 /// What a draft is built from. Borrowed text is the visible conversation or note only.
@@ -23,6 +24,19 @@ fn clip(s: &str, max: usize) -> String {
     let mut out: String = s.chars().take(max).collect();
     out.push('…');
     out
+}
+
+/// Clip to `TITLE_BYTES` bytes at a character boundary, ending in `…` when clipped.
+fn clip_title(s: &str) -> String {
+    let s = s.trim();
+    if s.len() <= TITLE_BYTES {
+        return s.to_string();
+    }
+    let mut end = TITLE_BYTES - '…'.len_utf8();
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
 }
 
 fn first_line(s: &str) -> &str {
@@ -45,10 +59,10 @@ pub(crate) fn from_shape(shape: &Shape<'_>) -> Result<Extract, String> {
             clean(reply, RATIONALE_MAX),
             format!("{prompt}\n{reply}"),
         ),
-        // A note's heading is its intent and its text the rationale.
+        // A note's heading is its intent and its text the rationale (matches the plan).
         Shape::Note { title, body } => (
-            title.trim(),
-            clean(title, INTENT_MAX),
+            first_line(title),
+            clean(first_line(title), INTENT_MAX),
             clean(body, RATIONALE_MAX),
             format!("{title}\n{body}"),
         ),
@@ -64,7 +78,10 @@ pub(crate) fn from_shape(shape: &Shape<'_>) -> Result<Extract, String> {
         return Err("source requires private review".into());
     }
     Ok(Extract {
-        title: format!("{MARK}{}", clean(title, TITLE_MAX)),
+        title: format!(
+            "{MARK}{}",
+            clip_title(&wk_adapters::cursor_history::redact(title))
+        ),
         intent,
         rationale,
         decisions: vec![],
@@ -137,6 +154,11 @@ mod tests {
         );
     }
 
+    /// A card built from the extract passes the contract's own validation.
+    fn validates(e: Extract) {
+        wk_summarize::card(e, "key".into(), 1, vec!["backend".into()], false).unwrap();
+    }
+
     #[test]
     fn long_text_is_clipped_on_character_boundaries() {
         let long = "é".repeat(5000);
@@ -145,8 +167,81 @@ mod tests {
         assert_eq!(e.rationale.chars().count(), RATIONALE_MAX + 1);
         assert!(e.intent.ends_with('…') && e.rationale.ends_with('…'));
         assert!(e.title.starts_with(MARK) && e.title.ends_with('…'));
-        assert_eq!(e.title.chars().count(), MARK.len() + TITLE_MAX + 1);
-        assert!(e.title.chars().count() <= 256);
+    }
+
+    #[test]
+    fn titles_fit_the_contract_limit_in_bytes_for_any_script() {
+        let samples = [
+            "é".repeat(5000),
+            "数据库迁移需要幂等 ".repeat(100),
+            "Сделать повторы идемпотентными ".repeat(50),
+            "🚀 ship it ".repeat(100),
+            "retry ".repeat(300),
+        ];
+        for text in &samples {
+            let e = from_shape(&exchange(text, "ok")).unwrap();
+            assert!(e.title.starts_with(MARK));
+            assert!(e.title.len() <= 256, "{} bytes", e.title.len());
+            assert!(e.title.ends_with('…'));
+            validates(e);
+        }
+        let e = from_shape(&Shape::Note {
+            title: &samples[1],
+            body: "body text",
+        })
+        .unwrap();
+        assert!(e.title.len() <= 256);
+        validates(e);
+        // Text that already fits is kept whole, without a marker.
+        let e = from_shape(&exchange("Short title", "ok")).unwrap();
+        assert_eq!(e.title, "[auto-drafted] Short title");
+        validates(e);
+    }
+
+    #[test]
+    fn note_headings_use_only_their_first_line() {
+        let e = from_shape(&Shape::Note {
+            title: "\nRetries\nsecond line",
+            body: "Retries are capped at 3.",
+        })
+        .unwrap();
+        assert_eq!(e.title, "[auto-drafted] Retries");
+        assert_eq!(e.intent, "Retries");
+    }
+
+    #[test]
+    fn credentials_straddling_a_clip_boundary_are_fully_masked() {
+        let secret = ["qzvj", "wxmk93"].concat();
+        let filler = |n: usize| "abcd ".repeat(n / 5);
+        let cases = [
+            // Straddles the 400-character intent clip (and is past the title budget).
+            (
+                format!("{}token={secret} tail", filler(390)),
+                "ok".to_string(),
+            ),
+            // Straddles the title's byte budget as well as the intent.
+            (
+                format!("{}token={secret} tail", filler(230)),
+                "ok".to_string(),
+            ),
+            // Straddles the 1500-character rationale clip.
+            (
+                "Add a limiter".to_string(),
+                format!("{}token={secret} tail", filler(1490)),
+            ),
+        ];
+        for (prompt, reply) in &cases {
+            let e = from_shape(&exchange(prompt, reply)).unwrap();
+            for field in [&e.title, &e.intent, &e.rationale] {
+                for len in 4..=secret.len() {
+                    assert!(
+                        !field.contains(&secret[..len]),
+                        "{} leaked in {field}",
+                        &secret[..len]
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -215,21 +310,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rules_mode_never_contacts_the_model() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}/x", listener.local_addr().unwrap());
-        let c = config(Summarizer::Rules, &url);
+    async fn rules_mode_never_reaches_the_model_path() {
+        // The model path rejects anything but a loopback URL before connecting, so success
+        // with an invalid endpoint shows the dispatcher did not call it.
+        let c = config(Summarizer::Rules, "not a url");
+        assert!(wk_summarize::extract(&c.inference, &c.model, "x")
+            .await
+            .is_err());
         let shape = exchange("Add a limiter", "Used middleware");
         let e = extract(&c, &shape, "unused source").await.unwrap();
         assert_eq!(e.title, "[auto-drafted] Add a limiter");
-        let accepted =
-            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept()).await;
-        assert!(accepted.is_err(), "rules mode opened a connection");
-        // An unroutable endpoint changes nothing either.
-        let c = config(Summarizer::Rules, "http://127.0.0.1:1/x");
-        assert!(extract(&c, &shape, "unused source").await.is_ok());
+        assert_eq!(e.rationale, "Used middleware");
         // A held item stays held through the dispatcher.
-        let bad = exchange("", "r");
-        assert!(extract(&c, &bad, "").await.is_err());
+        assert!(extract(&c, &exchange("", "r"), "").await.is_err());
     }
 }
