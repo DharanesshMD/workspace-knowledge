@@ -407,6 +407,11 @@ pub(crate) async fn draft_all(
             }
             _ => record.body.clone(),
         };
+        // A hint alone is not a note: an empty section would become a hint-only draft.
+        if c.summarizer == state::Summarizer::Rules && record.body.trim().is_empty() {
+            held += 1;
+            continue;
+        }
         let shape = Shape::Note {
             title: &title,
             body: &body,
@@ -437,7 +442,7 @@ pub(crate) async fn draft_all(
                         "updates": record.updates,
                     },
                     "policy_hash": b.policy_hash,
-                    "model": c.model,
+                    "model": process::model_label(c),
                 });
                 let encoded = serde_json::to_vec(&draft).map_err(|_| "invalid draft")?;
                 store.update(&key, daemon::now()?, 3600, |old| {
@@ -1407,6 +1412,7 @@ mod tests {
             let draft: Value =
                 serde_json::from_slice(&f.store.read_record(&id, now).unwrap().unwrap()).unwrap();
             assert_eq!(draft["card"]["capture_completeness"], "partial");
+            assert_eq!(draft["model"], "rules");
             let title = draft["card"]["title"].as_str().unwrap().to_string();
             assert!(title.starts_with("[auto-drafted] "), "{title}");
             cards.push(draft["card"].clone());
@@ -1440,6 +1446,38 @@ mod tests {
         assert_eq!(draft(&mut f).await.unwrap(), (1, 0));
         assert_eq!(sources.lock().unwrap().len(), 1);
         server.abort();
+    }
+    #[tokio::test]
+    async fn rules_hold_a_section_that_is_only_a_hint() {
+        let model = process::rules_test::Model::start().await;
+        let mut f = fixture(&model.url);
+        f.c = process::rules_test::rules_config(f.c.clone());
+        f.c.inference = model.url.clone();
+        state::save(&f.dir.join("agent.json"), &f.c).unwrap();
+        let now = daemon::now().unwrap();
+        // The splitter drops empty sections today; a record can still arrive without a body.
+        let record = Record {
+            version: 1,
+            key: "k".into(),
+            generation: 1,
+            label: BACKEND.into(),
+            heading: vec!["Errors".into()],
+            hints: Some("description: Rust style".into()),
+            body: " \n".into(),
+            policy_hash: f.b.policy_hash.clone(),
+            updates: None,
+        };
+        let id = record_id("k", 1).unwrap();
+        let bytes = serde_json::to_vec(&record).unwrap();
+        assert!(f.store.enqueue(&id, &bytes, now, RECORD_TTL).unwrap());
+        assert_eq!(draft(&mut f).await.unwrap(), (0, 1));
+        assert!(f.store.contains(&id, now).unwrap(), "record stays pending");
+        assert!(f
+            .store
+            .pending_ids("draft:", "", now, 100)
+            .unwrap()
+            .is_empty());
+        assert_eq!(model.hits(), 0);
     }
     #[tokio::test]
     async fn invalid_policies_fail_before_any_record_is_read() {

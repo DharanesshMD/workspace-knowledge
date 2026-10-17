@@ -77,9 +77,12 @@ async fn turn_extract(
         prompt: &turn.prompt,
         reply: &turn.response,
     };
-    budget
-        .attempt(crate::rules_draft::extract(c, &shape, &source))
-        .await
+    let work = crate::rules_draft::extract(c, &shape, &source);
+    // Rules extraction is CPU-only: deterministic holds never starve later turns.
+    if c.summarizer == state::Summarizer::Rules {
+        return Some(work.await);
+    }
+    budget.attempt(work).await
 }
 fn turn_card(
     c: &state::Config,
@@ -154,7 +157,7 @@ pub async fn run(dir: &Path) -> Result<usize, String> {
             if wk_summarize::sensitive(&serde_json::to_string(&card).map_err(|_| "invalid_card")?) {
                 continue;
             }
-            let draft = json!({"card":card,"native_adapter":native_enrollment::name(turn.client),"source_id":key,"source_digest":turn.digest,"turn_id":turn.turn,"parser_version":turn.parser_version,"client_version":turn.client_version,"policy_hash":r.enrollment.policy_hash,"policy_revision":revision,"model":c.model,"prompt_version":1});
+            let draft = json!({"card":card,"native_adapter":native_enrollment::name(turn.client),"source_id":key,"source_digest":turn.digest,"turn_id":turn.turn,"parser_version":turn.parser_version,"client_version":turn.client_version,"policy_hash":r.enrollment.policy_hash,"policy_revision":revision,"model":crate::process::model_label(&c),"prompt_version":1});
             let Ok(_guard) = validate_draft(dir, &draft).await else {
                 continue;
             };
@@ -375,5 +378,52 @@ mod tests {
             .unwrap()
             .is_err());
         assert_eq!(model.hits(), 0);
+    }
+
+    #[tokio::test]
+    async fn held_rule_turns_do_not_use_up_the_inference_budget() {
+        let c = crate::process::rules_test::rules_config(state::Config {
+            root: "/w".into(),
+            binding_file: "/b.json".into(),
+            service: "app".into(),
+            server: "http://127.0.0.1:1".into(),
+            model: "test".into(),
+            inference: String::new(),
+            summarizer: crate::state::Summarizer::Local,
+            port: 1,
+            account: "test".into(),
+            device_id: "d".into(),
+            repository: None,
+            device: None,
+        });
+        let turn = |prompt: &str| Evidence {
+            client: Client::Codex,
+            client_version: "0.162.0-alpha.2".into(),
+            parser_version: 1,
+            session: "s".into(),
+            agent: "main".into(),
+            turn: "t".into(),
+            prompt: prompt.into(),
+            response: "ok".into(),
+            messages_complete: true,
+            scope: Scope::Verified,
+            terminal: Terminal::Complete,
+            digest: "d".into(),
+            files_read: vec![],
+            files_changed: vec![],
+            hold_reason: None,
+        };
+        let mut budget =
+            crate::process::InferenceBudget::new(10, std::time::Duration::from_secs(5));
+        for _ in 0..12 {
+            assert!(turn_extract(&c, &mut budget, &turn("my password is x"))
+                .await
+                .expect("rules mode ignores the budget")
+                .is_err());
+        }
+        assert!(turn_extract(&c, &mut budget, &turn("Name the limiter"))
+            .await
+            .expect("still within budget")
+            .is_ok());
     }
 }

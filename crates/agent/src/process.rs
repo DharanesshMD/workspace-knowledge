@@ -66,6 +66,13 @@ pub(crate) fn processing_current(
     }
     Ok(())
 }
+/// What a stored draft shows as its origin. Hashes keep using the configured model.
+pub(crate) fn model_label(c: &state::Config) -> &str {
+    match c.summarizer {
+        state::Summarizer::Rules => "rules",
+        state::Summarizer::Local => &c.model,
+    }
+}
 /// A card that cannot be built is a held item in rules mode: one unusable draft
 /// must not make every later `process` run fail the same way. With a model the
 /// error still surfaces as it always has.
@@ -132,14 +139,19 @@ pub(crate) async fn journal_turns(
         if store.seen(&key)? {
             continue;
         }
+        // A turn may hold several exchanges; blank messages are never the quoted ones.
         let text = |kind: &str, last: bool| {
-            let mut found = events.iter().filter(|e| e["kind"] == kind);
-            let event = if last {
+            let mut found = events
+                .iter()
+                .filter(|e| e["kind"] == kind)
+                .filter_map(|e| e["text"].as_str())
+                .filter(|t| !t.trim().is_empty());
+            let picked = if last {
                 found.next_back()
             } else {
                 found.next()
             };
-            event.and_then(|e| e["text"].as_str()).unwrap_or("")
+            picked.unwrap_or("")
         };
         let shape = crate::rules_draft::Shape::Exchange {
             prompt: text("user_prompt", false),
@@ -160,7 +172,7 @@ pub(crate) async fn journal_turns(
                     held += 1;
                     continue;
                 };
-                let draft = json!({"card":card,"source_id":id,"source_digest":format!("{:x}",Sha256::digest(serde_json::to_vec(events).map_err(|_|"invalid private events")?)),"turn_key":turn_key,"policy_hash":b.policy_hash,"model":c.model,"prompt_version":1,"privacy_policy_version":1});
+                let draft = json!({"card":card,"source_id":id,"source_digest":format!("{:x}",Sha256::digest(serde_json::to_vec(events).map_err(|_|"invalid private events")?)),"turn_key":turn_key,"policy_hash":b.policy_hash,"model":model_label(c),"prompt_version":1,"privacy_policy_version":1});
                 let encoded = serde_json::to_vec(&draft).map_err(|_| "invalid draft")?;
                 store.update(&key, daemon::now()?, 3600, |old| {
                     Ok(old.map_or(encoded.clone(), |bytes| bytes.to_vec()))
@@ -391,9 +403,12 @@ async fn native_extract(
         prompt: &turn.prompt,
         reply: &turn.response,
     };
-    budget
-        .attempt(crate::rules_draft::extract(c, &shape, &source))
-        .await
+    let work = crate::rules_draft::extract(c, &shape, &source);
+    // Rules extraction is CPU-only: deterministic holds never starve later turns.
+    if c.summarizer == state::Summarizer::Rules {
+        return Some(work.await);
+    }
+    budget.attempt(work).await
 }
 /// The card for a Cursor turn, with the files it read or changed as evidence.
 fn native_card(
@@ -521,7 +536,7 @@ async fn native_run(
             if wk_summarize::sensitive(&serde_json::to_string(&card).map_err(|_| "invalid_card")?) {
                 continue;
             }
-            let draft = json!({"card":card,"source_id":id,"source_digest":turn.digest,"native_turn_index":turn.index,"source_boundary":"Cursor 3.23.23 local visible text","policy_hash":b.policy_hash,"model":c.model,"prompt_version":1,"privacy_policy_version":1});
+            let draft = json!({"card":card,"source_id":id,"source_digest":turn.digest,"native_turn_index":turn.index,"source_boundary":"Cursor 3.23.23 local visible text","policy_hash":b.policy_hash,"model":model_label(c),"prompt_version":1,"privacy_policy_version":1});
             // Inference is slow. Reconcile under current permission before retaining its result.
             if crate::cursor_capture::reconcile_one(dir, &id)
                 .await
@@ -1008,6 +1023,110 @@ mod rules_tests {
             .is_empty());
     }
 
+    /// Run `journal_turns` over `events` in rules mode against a counting model.
+    async fn rules_journal(events: Value) -> ((usize, usize), Vec<Value>, usize) {
+        let model = Model::start().await;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("workspace");
+        std::fs::create_dir_all(root.join("backend")).unwrap();
+        let dir =
+            state::private_dir(&temp.path().canonicalize().unwrap().join("state"), true).unwrap();
+        let b =
+            wk_scope::enrollment::Binding::approve(&root, "demo", vec!["backend".into()]).unwrap();
+        let mut c = rules_config(state::Config {
+            root: b.root.clone(),
+            binding_file: dir.join("binding.json"),
+            ..local("")
+        });
+        c.inference = model.url.clone();
+        state::save(&c.binding_file, &b).unwrap();
+        state::save(&dir.join("agent.json"), &c).unwrap();
+        let mut store =
+            wk_local::LocalStore::open(&dir.join("journal.db"), [7; 32], 1000000).unwrap();
+        let base = state::base_binding(&c).unwrap();
+        let result = journal_turns(
+            &dir,
+            &c,
+            &base,
+            &json!({"policy_revision":1}),
+            &mut store,
+            "s",
+            &json!({ "events": events }),
+        )
+        .await
+        .unwrap();
+        let now = daemon::now().unwrap();
+        let drafts = store
+            .pending_ids("draft:", "", now, 100)
+            .unwrap()
+            .iter()
+            .map(|id| {
+                serde_json::from_slice(&store.read_record(id, now).unwrap().unwrap()).unwrap()
+            })
+            .collect();
+        (result, drafts, model.hits())
+    }
+
+    #[tokio::test]
+    async fn rules_exchange_skips_empty_prompts_and_empty_replies() {
+        let (result, drafts, hits) = rules_journal(json!([
+            {"kind":"user_prompt","agent_id":"main","turn_id":"a","text":"  \n"},
+            {"kind":"user_prompt","agent_id":"main","turn_id":"a","text":"Real prompt"},
+            {"kind":"assistant_response","agent_id":"main","turn_id":"a","text":"Earlier reply"},
+            {"kind":"assistant_response","agent_id":"main","turn_id":"a","text":" "}]))
+        .await;
+        assert_eq!(result, (1, 0));
+        assert_eq!(hits, 0);
+        assert_eq!(drafts[0]["card"]["title"], "[auto-drafted] Real prompt");
+        assert_eq!(drafts[0]["card"]["rationale"], "Earlier reply");
+    }
+
+    #[tokio::test]
+    async fn rules_assistant_only_parts_are_held() {
+        let (result, drafts, hits) = rules_journal(json!([
+            {"kind":"assistant_response","agent_id":"main","turn_id":"a","text":"Reply with no prompt"}]))
+        .await;
+        assert_eq!(result, (0, 1));
+        assert!(drafts.is_empty());
+        assert_eq!(hits, 0);
+    }
+
+    #[tokio::test]
+    async fn rule_drafts_record_rules_as_their_model() {
+        let (_, drafts, _) = rules_journal(json!([
+            {"kind":"user_prompt","agent_id":"main","turn_id":"a","text":"Name the limiter"},
+            {"kind":"assistant_response","agent_id":"main","turn_id":"a","text":"Called it Limiter"}]))
+        .await;
+        assert_eq!(drafts[0]["model"], "rules");
+        let mut c = local("http://127.0.0.1:1/x");
+        assert_eq!(model_label(&c), "synthetic-local");
+        c.summarizer = state::Summarizer::Rules;
+        assert_eq!(model_label(&c), "rules");
+    }
+
+    #[tokio::test]
+    async fn held_rule_turns_do_not_use_up_the_inference_budget() {
+        let c = rules_config(local(""));
+        let mut budget = InferenceBudget::new(10, std::time::Duration::from_secs(5));
+        let mut held = cursor_turn();
+        held.prompt = "my password is x".into();
+        for _ in 0..12 {
+            assert!(native_extract(&c, &mut budget, &held)
+                .await
+                .expect("rules mode ignores the budget")
+                .is_err());
+        }
+        let good = native_extract(&c, &mut budget, &cursor_turn())
+            .await
+            .expect("still within budget");
+        assert!(good.is_ok());
+        // With a model the same turns still count.
+        let model = local("http://127.0.0.1:1/x");
+        let mut budget = InferenceBudget::new(1, std::time::Duration::from_secs(5));
+        assert!(native_extract(&model, &mut budget, &held).await.is_some());
+        assert!(native_extract(&model, &mut budget, &held).await.is_none());
+    }
+
     fn cursor_turn() -> CursorTurn {
         CursorTurn {
             index: 0,
@@ -1024,7 +1143,8 @@ mod rules_tests {
     #[tokio::test]
     async fn rules_cursor_turns_are_partial_and_keep_file_evidence() {
         let model = Model::start().await;
-        let c = rules_config(local(&model.url));
+        let mut c = rules_config(local(""));
+        c.inference = model.url.clone();
         let mut budget = InferenceBudget::new(10, std::time::Duration::from_secs(5));
         let turn = cursor_turn();
         let extract = native_extract(&c, &mut budget, &turn)
