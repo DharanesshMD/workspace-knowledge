@@ -47,6 +47,11 @@ pub struct History {
     pub unreadable_records: usize,
     /// Conversations found but with no readable visible text (likely an unknown layout).
     pub empty_conversations: usize,
+    /// Sessions deliberately not read because they exceed the reader's size limits.
+    pub skipped: usize,
+    /// Prompt text parts dropped because the client injected them (IDE context, reminders,
+    /// command output, environment context…) rather than the developer typing them.
+    pub dropped_injected: usize,
 }
 
 /// Default Cursor user-data directory for the current OS.
@@ -606,62 +611,7 @@ pub fn within(history: &History, root: &Path) -> Vec<Conversation> {
         .collect()
 }
 
-/// Mask likely credentials before display or export. Conservative and not exhaustive.
-pub fn redact(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut in_key_block = false;
-    for line in text.split_inclusive('\n') {
-        if line.contains("-----BEGIN") {
-            in_key_block = true;
-        }
-        if in_key_block {
-            if line.contains("-----END") {
-                in_key_block = false;
-            }
-            out.push_str("[REDACTED KEY MATERIAL]\n");
-            continue;
-        }
-        let mut rebuilt = String::new();
-        for (i, word) in line.split(' ').enumerate() {
-            if i > 0 {
-                rebuilt.push(' ');
-            }
-            rebuilt.push_str(if secret_like(word) {
-                "[REDACTED]"
-            } else {
-                word
-            });
-        }
-        out.push_str(&rebuilt);
-    }
-    out
-}
-
-fn secret_like(word: &str) -> bool {
-    let w = word.trim_matches(|c: char| "\"'`,;:()[]{}<>\n\r".contains(c));
-    let w = w.rsplit_once('=').map_or(w, |(_, v)| v);
-    let prefixed = [
-        "sk-",
-        "sk_",
-        "ghp_",
-        "gho_",
-        "github_pat_",
-        "xoxb-",
-        "xoxp-",
-        "AKIA",
-        "eyJ",
-        "AIza",
-    ]
-    .iter()
-    .any(|p| w.starts_with(p) && w.len() >= 16);
-    let opaque = w.len() >= 32
-        && !w.contains('/')
-        && w.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_+=.".contains(c))
-        && w.chars().any(|c| c.is_ascii_digit())
-        && w.chars().any(|c| c.is_ascii_alphabetic());
-    prefixed || opaque
-}
+pub use crate::redact::redact;
 
 /// Structure-only report for adapting to new Cursor versions: file/table names, key-name
 /// prefixes with counts, and JSON field names with types. Never includes values or text.
