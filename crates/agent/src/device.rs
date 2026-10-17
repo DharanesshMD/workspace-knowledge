@@ -604,6 +604,43 @@ mod tests {
         state::save(&local.join("agent.json"), &c).unwrap();
         (dir, c, b)
     }
+    #[test]
+    fn local_receipt_hash_is_unchanged_by_the_summarizer_field() {
+        let (_dir, c, _b) = fixture();
+        // The configuration exactly as it was serialized before the summarizer setting existed.
+        #[derive(Serialize)]
+        struct Before<'a> {
+            root: &'a std::path::Path,
+            binding_file: &'a std::path::Path,
+            service: &'a str,
+            server: &'a str,
+            model: &'a str,
+            inference: &'a str,
+            port: u16,
+            account: &'a str,
+            device_id: &'a str,
+            device: &'a Option<Connection>,
+            repository: Option<()>,
+        }
+        let before = Before {
+            root: &c.root,
+            binding_file: &c.binding_file,
+            service: &c.service,
+            server: &c.server,
+            model: &c.model,
+            inference: &c.inference,
+            port: c.port,
+            account: &c.account,
+            device_id: &c.device_id,
+            device: &c.device,
+            repository: None,
+        };
+        let by_hand = format!("{:x}", Sha256::digest(serde_json::to_vec(&before).unwrap()));
+        assert_eq!(config_hash(&c).unwrap(), by_hand);
+        let mut rules = c.clone();
+        rules.summarizer = state::Summarizer::Rules;
+        assert_ne!(config_hash(&rules).unwrap(), by_hand);
+    }
     #[tokio::test]
     async fn connect_rejects_inconsistent_summarizer_flags_before_signing_in() {
         let (dir, c, _b) = fixture();

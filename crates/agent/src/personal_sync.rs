@@ -14,6 +14,9 @@ struct Choice {
     device_id: String,
     model: String,
     inference: String,
+    /// Consent made before the setting existed was given under a local model.
+    #[serde(default)]
+    summarizer: state::Summarizer,
     policy_revision: u64,
     #[serde(default)]
     account: String,
@@ -35,6 +38,7 @@ fn matches(choice: &Choice, c: &state::Config, b: &wk_scope::enrollment::Binding
         && choice.device_id == c.device_id
         && choice.model == c.model
         && choice.inference == c.inference
+        && choice.summarizer == c.summarizer
         && choice.account == c.account
 }
 pub fn declared_consent(
@@ -80,6 +84,7 @@ pub async fn configure(dir: &Path, action: &str, yes: bool) -> Result<Value, Str
                     account: c.account,
                     model: c.model,
                     inference: c.inference,
+                    summarizer: c.summarizer,
                     policy_revision: policy["policy_revision"]
                         .as_u64()
                         .ok_or("invalid membership policy")?,
@@ -236,6 +241,26 @@ mod tests {
         json!({"schema_version":1,"idempotency_key":"sync-test","policy_revision":1,"title":"Limiter","intent":"Prevent overload","rationale":"Shared middleware","decisions":[],"constraints":[],"open_questions":[],"service_ids":["backend"],"evidence":[],"lifecycle":"proposed","capture_completeness":"complete","base_revision":null})
     }
     #[test]
+    fn consent_is_bound_to_the_summarizer_and_old_consent_files_stay_valid_for_local() {
+        let (_temp, mut c, b) = fixture("http://127.0.0.1:4318");
+        let old = json!({"enabled":true,"policy_hash":b.policy_hash,"server":c.server,"product":b.product,"service":c.service,"device_id":c.device_id,"model":c.model,"inference":c.inference,"policy_revision":1,"account":c.account});
+        let old: Choice = serde_json::from_value(old).unwrap();
+        assert!(matches(&old, &c, &b), "old consent still matches local");
+        c.summarizer = state::Summarizer::Rules;
+        assert!(!matches(&old, &c, &b), "local consent is not rules consent");
+        let rules_choice = Choice {
+            summarizer: state::Summarizer::Rules,
+            model: c.model.clone(),
+            ..old
+        };
+        assert!(matches(&rules_choice, &c, &b));
+        c.summarizer = state::Summarizer::Local;
+        assert!(
+            !matches(&rules_choice, &c, &b),
+            "rules consent is not local consent"
+        );
+    }
+    #[test]
     fn consent_is_invalidated_by_scope_destination_model_or_remote_policy_changes() {
         let (temp, mut c, b) = fixture("http://127.0.0.1:4318");
         let choice = Choice {
@@ -247,6 +272,7 @@ mod tests {
             device_id: c.device_id.clone(),
             model: c.model.clone(),
             inference: c.inference.clone(),
+            summarizer: c.summarizer,
             policy_revision: 1,
             account: c.account.clone(),
         };
@@ -302,6 +328,7 @@ mod tests {
                 device_id: changed.device_id.clone(),
                 model: changed.model.clone(),
                 inference: changed.inference.clone(),
+                summarizer: changed.summarizer,
                 policy_revision: 1,
                 account: changed.account.clone(),
             },

@@ -49,12 +49,13 @@ pub fn inference_allowed(endpoint: &str, restrictions: &Value) -> Result<(), Str
     Ok(())
 }
 fn check_inference(c: &Config, policy: &Value) -> Result<(), String> {
-    // Rules mode sends nothing to a model, so there is no destination to approve.
-    if c.summarizer == crate::state::Summarizer::Rules {
-        return Ok(());
-    }
     if c.device.is_some() && policy.get("restrictions").is_none() {
         return Err("missing inference policy".into());
+    }
+    // Restrictions govern inference and embedding destinations. Rule drafts send nothing to a
+    // model, so they do not apply, but a hosted policy must still be well formed (checked above).
+    if c.summarizer == crate::state::Summarizer::Rules {
+        return Ok(());
     }
     let restrictions = policy
         .get("restrictions")
@@ -175,11 +176,18 @@ mod policy_tests {
         let mut rules = config("http://127.0.0.1:1", Rules, "");
         assert!(check_inference(&rules, &strict).is_ok());
         assert!(check_inference(&rules, &serde_json::json!({})).is_ok());
-        // Nothing is sent to a model, so even a hosted policy without restrictions is fine.
+        // Rule drafts ignore the restrictions, but a hosted policy must still carry them.
         rules.device = Some(crate::device::Connection {
             state_dir: "/s".into(),
         });
-        assert!(check_inference(&rules, &serde_json::json!({})).is_ok());
+        assert_eq!(
+            check_inference(&rules, &serde_json::json!({})).unwrap_err(),
+            "missing inference policy"
+        );
+        assert!(check_inference(&rules, &serde_json::json!({"restrictions":{}})).is_ok());
+        assert!(
+            check_inference(&rules, &serde_json::json!({"restrictions":strict.clone()})).is_ok()
+        );
         let local = config("http://127.0.0.1:1", Local, "");
         assert!(check_inference(&local, &serde_json::json!({})).is_err());
         let mut hosted_local = config(
