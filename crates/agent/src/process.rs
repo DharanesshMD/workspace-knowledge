@@ -66,7 +66,7 @@ pub(crate) fn processing_current(
     }
     Ok(())
 }
-async fn journal_turns(
+pub(crate) async fn journal_turns(
     dir: &Path,
     c: &state::Config,
     b: &wk_scope::enrollment::Binding,

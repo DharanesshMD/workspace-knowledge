@@ -2,10 +2,22 @@
 //! service folder and this project's Claude Code memory folder.
 
 use crate::memory_split::SourceKind;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 use wk_scope::enrollment::Binding;
 
-pub const INSTRUCTION_FILES: [&str; 3] = ["CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md"];
+pub const INSTRUCTION_FILES: [&str; 4] = [
+    "CLAUDE.md",
+    ".claude/CLAUDE.md",
+    "AGENTS.md",
+    ".github/copilot-instructions.md",
+];
+/// VS Code Copilot path-specific instructions: `*.instructions.md` files
+/// directly in this folder (not its subfolders).
+const SCOPED_DIR: &str = ".github/instructions";
+const SCOPED_SUFFIX: &str = ".instructions.md";
 pub const MAX_FILE_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +72,29 @@ fn note_name(name: &str) -> bool {
 fn control_chars(name: &str) -> bool {
     name.chars().any(char::is_control)
 }
+/// Copilot `*.instructions.md` names directly in `root/folder/.github/instructions`.
+/// A symlinked folder on the way could point anywhere, so it is never listed.
+fn scoped_names(root: &Path, folder: &str) -> BTreeSet<String> {
+    let mut dir = root.to_path_buf();
+    for part in Path::new(folder).join(SCOPED_DIR).components() {
+        dir.push(part);
+        if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
+            return BTreeSet::new();
+        }
+    }
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return BTreeSet::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| {
+            name.len() > SCOPED_SUFFIX.len()
+                && name.ends_with(SCOPED_SUFFIX)
+                && !control_chars(name)
+        })
+        .collect()
+}
 /// Instruction files in the agent's service folder. Workspace-root files are
 /// listed as rejected so `scan` can explain why they are not imported.
 pub fn repository(b: &Binding, service: &str) -> Vec<Candidate> {
@@ -67,28 +102,44 @@ pub fn repository(b: &Binding, service: &str) -> Vec<Candidate> {
         return vec![];
     }
     let mut out = Vec::new();
-    for name in INSTRUCTION_FILES {
-        let root_file = b.root.join(name);
-        if std::fs::symlink_metadata(&root_file).is_ok() {
+    let mut add = |name: &str, kind: SourceKind, at_root: bool, in_service: bool| {
+        if at_root {
             out.push(Candidate {
                 label: format!("repo:{name}"),
-                path: root_file,
-                kind: SourceKind::Instructions,
+                path: b.root.join(name),
+                kind,
                 rejected: Some("outside_approved_service"),
             });
         }
-        let path = b.root.join(service).join(name);
-        if std::fs::symlink_metadata(&path).is_err() {
-            continue;
+        if in_service {
+            let path = b.root.join(service).join(name);
+            let rejected =
+                check(&path).or_else(|| (!b.eligible(&path)).then_some("outside_approved_service"));
+            out.push(Candidate {
+                label: format!("repo:{service}/{name}"),
+                path,
+                kind,
+                rejected,
+            });
         }
-        let rejected =
-            check(&path).or_else(|| (!b.eligible(&path)).then_some("outside_approved_service"));
-        out.push(Candidate {
-            label: format!("repo:{service}/{name}"),
-            path,
-            kind: SourceKind::Instructions,
-            rejected,
-        });
+    };
+    let present = |path: PathBuf| std::fs::symlink_metadata(path).is_ok();
+    for name in INSTRUCTION_FILES {
+        add(
+            name,
+            SourceKind::Instructions,
+            present(b.root.join(name)),
+            present(b.root.join(service).join(name)),
+        );
+    }
+    let (at_root, in_service) = (scoped_names(&b.root, ""), scoped_names(&b.root, service));
+    for name in at_root.union(&in_service) {
+        add(
+            &format!("{SCOPED_DIR}/{name}"),
+            SourceKind::ScopedInstructions,
+            at_root.contains(name),
+            in_service.contains(name),
+        );
     }
     out
 }
@@ -235,6 +286,155 @@ mod tests {
                 ("repo:backend/CLAUDE.md", None),
                 ("repo:backend/.claude/CLAUDE.md", None)
             ]
+        );
+    }
+    #[test]
+    fn repository_lists_copilot_instruction_files_sorted_and_non_recursive() {
+        let (_t, home, b) = fixture();
+        let scoped = b.root.join("backend/.github/instructions");
+        std::fs::create_dir_all(scoped.join("nested")).unwrap();
+        std::fs::write(b.root.join("backend/.github/copilot-instructions.md"), "s").unwrap();
+        std::fs::write(scoped.join("rust.instructions.md"), "s").unwrap();
+        std::fs::write(scoped.join("api.instructions.md"), "s").unwrap();
+        std::fs::write(scoped.join("notes.md"), "s").unwrap();
+        std::fs::write(scoped.join(".instructions.md"), "s").unwrap();
+        std::fs::write(scoped.join("nested/deep.instructions.md"), "s").unwrap();
+        std::fs::create_dir_all(b.root.join(".github/instructions")).unwrap();
+        std::fs::write(b.root.join(".github/copilot-instructions.md"), "r").unwrap();
+        std::fs::write(
+            b.root.join(".github/instructions/root.instructions.md"),
+            "r",
+        )
+        .unwrap();
+        let summary: Vec<_> = repository(&b, "backend")
+            .into_iter()
+            .map(|c| (c.label, c.kind, c.rejected))
+            .collect();
+        let (i, s) = (SourceKind::Instructions, SourceKind::ScopedInstructions);
+        let out = Some("outside_approved_service");
+        assert_eq!(
+            summary,
+            vec![
+                ("repo:.github/copilot-instructions.md".into(), i, out),
+                (
+                    "repo:backend/.github/copilot-instructions.md".into(),
+                    i,
+                    None
+                ),
+                (
+                    "repo:backend/.github/instructions/api.instructions.md".into(),
+                    s,
+                    None
+                ),
+                (
+                    "repo:.github/instructions/root.instructions.md".into(),
+                    s,
+                    out
+                ),
+                (
+                    "repo:backend/.github/instructions/rust.instructions.md".into(),
+                    s,
+                    None
+                ),
+            ]
+        );
+        let found =
+            approve_file(&home, &b, "backend", &scoped.join("api.instructions.md")).unwrap();
+        assert_eq!(
+            (found.label.as_str(), found.kind),
+            ("repo:backend/.github/instructions/api.instructions.md", s)
+        );
+        assert_eq!(
+            approve_file(
+                &home,
+                &b,
+                "backend",
+                &scoped.join("nested/deep.instructions.md")
+            ),
+            Err("not_a_memory_source")
+        );
+        assert_eq!(
+            approve_file(
+                &home,
+                &b,
+                "backend",
+                &b.root.join(".github/instructions/root.instructions.md")
+            ),
+            Err("not_a_memory_source")
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_copilot_instruction_files_and_folders_are_refused() {
+        let (_t, home, b) = fixture();
+        let elsewhere = b.root.parent().unwrap().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("x.instructions.md"), "secret").unwrap();
+        let github = b.root.join("backend/.github");
+        std::fs::create_dir_all(&github).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, github.join("instructions")).unwrap();
+        assert!(repository(&b, "backend").is_empty());
+        std::fs::remove_file(github.join("instructions")).unwrap();
+        std::fs::create_dir(github.join("instructions")).unwrap();
+        let link = github.join("instructions/link.instructions.md");
+        std::os::unix::fs::symlink(elsewhere.join("x.instructions.md"), &link).unwrap();
+        std::fs::write(github.join("instructions/bad\nname.instructions.md"), "s").unwrap();
+        let summary: Vec<_> = repository(&b, "backend")
+            .into_iter()
+            .map(|c| (c.label, c.rejected))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![(
+                "repo:backend/.github/instructions/link.instructions.md".into(),
+                Some("symlink")
+            )]
+        );
+        assert_eq!(approve_file(&home, &b, "backend", &link), Err("symlink"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_github_folder_is_outside_the_approved_service() {
+        let (_t, home, b) = fixture();
+        let elsewhere = b.root.parent().unwrap().join("elsewhere");
+        std::fs::create_dir_all(elsewhere.join("instructions")).unwrap();
+        std::fs::write(elsewhere.join("copilot-instructions.md"), "secret").unwrap();
+        std::fs::write(elsewhere.join("instructions/x.instructions.md"), "secret").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, b.root.join("backend/.github")).unwrap();
+        let summary: Vec<_> = repository(&b, "backend")
+            .into_iter()
+            .map(|c| (c.label, c.rejected))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![(
+                "repo:backend/.github/copilot-instructions.md".into(),
+                Some("outside_approved_service")
+            )]
+        );
+        for file in [
+            "backend/.github/copilot-instructions.md",
+            "backend/.github/instructions/x.instructions.md",
+        ] {
+            assert_eq!(
+                approve_file(&home, &b, "backend", &b.root.join(file)),
+                Err("not_a_memory_source")
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn files_in_a_symlinked_instructions_folder_cannot_be_approved() {
+        let (_t, home, b) = fixture();
+        let elsewhere = b.root.parent().unwrap().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("x.instructions.md"), "secret").unwrap();
+        std::fs::create_dir_all(b.root.join("backend/.github")).unwrap();
+        let dir = b.root.join("backend/.github/instructions");
+        std::os::unix::fs::symlink(&elsewhere, &dir).unwrap();
+        assert_eq!(
+            approve_file(&home, &b, "backend", &dir.join("x.instructions.md")),
+            Err("not_a_memory_source")
         );
     }
     #[test]

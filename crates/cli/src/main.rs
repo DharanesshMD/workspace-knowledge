@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -67,6 +67,65 @@ enum Command {
         #[command(subcommand)]
         action: CursorHistory,
     },
+    /// Review and export past agent sessions for a folder (read-only).
+    AgentHistory {
+        /// The agent whose local history to read.
+        #[arg(long, value_enum)]
+        client: Client,
+        /// Override the client's storage directory (tests, non-default installs). For cursor
+        /// this sets only the Cursor user directory; agent transcripts still come from the
+        /// `.cursor` folder in your home directory.
+        #[arg(long, global = true)]
+        source_dir: Option<PathBuf>,
+        #[command(subcommand)]
+        action: HistoryAction,
+    },
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum Client {
+    ClaudeCode,
+    Codex,
+    Copilot,
+    Cursor,
+}
+#[derive(Subcommand)]
+enum HistoryAction {
+    /// List this folder's sessions: IDs, titles and counts only, never message text.
+    List {
+        /// The folder whose sessions to list (sessions in folders inside it are included).
+        #[arg(long)]
+        workspace: PathBuf,
+    },
+    /// Print this folder's sessions as Markdown, with likely secrets masked.
+    Show {
+        /// The folder whose sessions to show (sessions in folders inside it are included).
+        #[arg(long)]
+        workspace: PathBuf,
+        /// Only these sessions (repeatable). Omit to show every session in the folder.
+        #[arg(long = "session")]
+        sessions: Vec<String>,
+        /// Truncate each message to this many characters (0 = no limit).
+        #[arg(long, default_value_t = 1500)]
+        max_chars: usize,
+    },
+    /// Write confirmed sessions as `wk-agent import` files (secrets masked).
+    Export {
+        /// The folder the sessions belong to.
+        #[arg(long)]
+        workspace: PathBuf,
+        /// Product ID recorded in each export file.
+        #[arg(long)]
+        product: String,
+        /// Output directory: absolute path outside the workspace; created private (mode 0700).
+        #[arg(long)]
+        out: PathBuf,
+        /// Session ID to export, as printed by `list` (repeatable).
+        #[arg(long = "session", required = true)]
+        sessions: Vec<String>,
+        /// Confirm you reviewed `show` output for these sessions.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 #[derive(Subcommand)]
 enum CursorHistory {
@@ -104,14 +163,19 @@ enum CursorHistory {
     },
     /// Write confirmed conversations as `wk-agent import` files (secrets masked).
     Export {
+        /// The folder the sessions belong to.
         #[arg(long)]
         workspace: PathBuf,
+        /// Product ID recorded in each export file.
         #[arg(long)]
         product: String,
+        /// Output directory: absolute path outside the workspace; created private (mode 0700).
         #[arg(long)]
         out: PathBuf,
+        /// Session ID to export, as printed by `list` (repeatable).
         #[arg(long = "session", required = true)]
         sessions: Vec<String>,
+        /// Confirm you reviewed `show` output for these sessions.
         #[arg(long)]
         yes: bool,
     },
@@ -159,6 +223,23 @@ fn binding_file(state: &Path, root: &Path) -> Result<PathBuf, String> {
         Sha256::digest(root.as_os_str().to_string_lossy().as_bytes())
     )))
 }
+/// `path` with its longest existing prefix canonicalized, resolved before making any directories.
+/// A dangling symlink counts as existing, so it fails to resolve instead of being created through.
+fn resolve_prefix(path: &Path, what: &str) -> Result<PathBuf, String> {
+    let mut ancestor = path;
+    let mut suffix = Vec::new();
+    while fs::symlink_metadata(ancestor).is_err() {
+        suffix.push(ancestor.file_name().ok_or(format!("invalid {what}"))?);
+        ancestor = ancestor.parent().ok_or(format!("invalid {what}"))?;
+    }
+    let mut resolved = ancestor
+        .canonicalize()
+        .map_err(|_| format!("{what} unavailable"))?;
+    for part in suffix.iter().rev() {
+        resolved.push(part);
+    }
+    Ok(resolved)
+}
 fn state_dir(state: Option<&Path>, root: &Path, create: bool) -> Result<PathBuf, String> {
     let state = state.ok_or("--state-dir is required for local consent")?;
     if !state.is_absolute()
@@ -169,19 +250,7 @@ fn state_dir(state: Option<&Path>, root: &Path, create: bool) -> Result<PathBuf,
         return Err("state directory must be an absolute path without parent traversal".into());
     }
     let root = root.canonicalize().map_err(|_| "workspace unavailable")?;
-    // Resolve the existing prefix before making any directories.
-    let mut ancestor = state;
-    let mut suffix = Vec::new();
-    while !ancestor.exists() {
-        suffix.push(ancestor.file_name().ok_or("invalid state directory")?);
-        ancestor = ancestor.parent().ok_or("invalid state directory")?;
-    }
-    let mut resolved = ancestor
-        .canonicalize()
-        .map_err(|_| "state directory unavailable")?;
-    for part in suffix.iter().rev() {
-        resolved.push(part);
-    }
+    let resolved = resolve_prefix(state, "state directory")?;
     if resolved.starts_with(&root) {
         return Err("state directory must be outside product folder".into());
     }
@@ -240,6 +309,11 @@ fn run(cli: Cli) -> Result<Value, String> {
             dot_cursor_dir,
             action,
         } => cursor_history(cursor_dir, dot_cursor_dir, action),
+        Command::AgentHistory {
+            client,
+            source_dir,
+            action,
+        } => agent_history(client, source_dir, action),
         Command::Agent { args } => forward("wk-agent", cli.state_dir.as_deref(), args),
         Command::Env { args } => forward("wk-env", None, args),
         Command::Search {
@@ -400,7 +474,7 @@ fn cursor_history(
     if !dir.is_dir() {
         return Err("Cursor directory not found; pass --cursor-dir".into());
     }
-    let dot = dot.or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cursor")));
+    let dot = dot.or_else(default_dot_cursor);
     let history = ch::read_with(&dir, dot.as_deref())?;
     match action {
         CursorHistory::Diagnose => ch::diagnose_with(&dir, dot.as_deref()),
@@ -409,10 +483,9 @@ fn cursor_history(
             let mut unattributed = 0;
             for c in &history.conversations {
                 match &c.workspace {
-                    Some(w) => groups
-                        .entry(w.display().to_string())
-                        .or_default()
-                        .push(json!({"id":c.id,"title":c.title,"messages":c.messages.len()})),
+                    Some(w) => groups.entry(w.display().to_string()).or_default().push(
+                        json!({"id":c.id,"title":display_title(c),"messages":c.messages.len()}),
+                    ),
                     None => unattributed += 1,
                 }
             }
@@ -439,27 +512,7 @@ fn cursor_history(
             let scope = workspace
                 .as_ref()
                 .map_or("all projects".to_string(), |w| w.display().to_string());
-            println!("# Cursor conversations in {scope}\n\n{} conversation(s). Likely secrets are masked; review before exporting.\n", selected.len());
-            for c in selected {
-                let place = c
-                    .workspace
-                    .as_ref()
-                    .map_or("unattributed".to_string(), |w| w.display().to_string());
-                println!(
-                    "## {}\n\nProject: {place}\n\n`{}` · {} message(s) · {}\n",
-                    c.title,
-                    c.id,
-                    c.messages.len(),
-                    c.source
-                );
-                for m in &c.messages {
-                    let mut text = ch::redact(&m.text);
-                    if max_chars > 0 && text.chars().count() > max_chars {
-                        text = text.chars().take(max_chars).collect::<String>() + " …[truncated]";
-                    }
-                    println!("**{}:** {}\n", m.role, text);
-                }
-            }
+            show_conversations("Cursor", &scope, &selected, max_chars);
             Ok(Value::Null)
         }
         CursorHistory::Cards {
@@ -565,69 +618,330 @@ fn cursor_history(
             out,
             sessions,
             yes,
+        } => export_conversations(
+            &history,
+            "wk cursor-history show --workspace DIR",
+            &workspace,
+            &product,
+            &out,
+            &sessions,
+            yes,
+        ),
+    }
+}
+/// Cursor's agent data directory, `~/.cursor`, which holds agent transcripts.
+fn default_dot_cursor() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|h| !h.is_empty()))
+        .map(|h| PathBuf::from(h).join(".cursor"))
+}
+fn agent_history(
+    client: Client,
+    source: Option<PathBuf>,
+    action: HistoryAction,
+) -> Result<Value, String> {
+    use wk_adapters::{claude_history, codex_history, copilot_history, cursor_history as ch};
+    let dir = |default: Option<PathBuf>| {
+        source
+            .clone()
+            .or(default)
+            .filter(|d| d.is_dir())
+            .ok_or_else(|| "agent storage directory not found; pass --source-dir".to_string())
+    };
+    let (label, history) = match client {
+        Client::ClaudeCode => (
+            "Claude Code",
+            claude_history::read(&dir(claude_history::default_dir())?)?,
+        ),
+        Client::Codex => (
+            "Codex",
+            codex_history::read(&dir(codex_history::default_dir())?)?,
+        ),
+        Client::Copilot => (
+            "Copilot",
+            copilot_history::read(&dir(copilot_history::default_dir())?)?,
+        ),
+        Client::Cursor => (
+            "Cursor",
+            ch::read_with(&dir(ch::default_dir())?, default_dot_cursor().as_deref())?,
+        ),
+    };
+    match action {
+        HistoryAction::List { workspace } => list_conversations(&history, &workspace),
+        HistoryAction::Show {
+            workspace,
+            sessions,
+            max_chars,
         } => {
-            if !yes {
-                return Err("review `cursor-history show` first, then pass --yes to export the listed sessions".into());
-            }
-            if !wk_contracts::valid_id(&product) {
-                return Err("invalid product ID".into());
-            }
             let root = workspace
                 .canonicalize()
                 .map_err(|_| "workspace unavailable")?;
-            let selected = ch::within(&history, &root);
-            let mut chosen = Vec::new();
-            for id in &sessions {
-                chosen.push(
-                    selected
-                        .iter()
-                        .find(|c| &c.id == id)
-                        .ok_or("a requested session is not in this workspace")?,
-                );
+            let inside = ch::within(&history, &root);
+            let selected = if sessions.is_empty() {
+                inside
+            } else {
+                pick(&inside, &sessions)?.into_iter().cloned().collect()
+            };
+            show_conversations(label, &root.display().to_string(), &selected, max_chars);
+            Ok(Value::Null)
+        }
+        HistoryAction::Export {
+            workspace,
+            product,
+            out,
+            sessions,
+            yes,
+        } => export_conversations(
+            &history,
+            &format!(
+                "wk agent-history --client {} show --workspace DIR",
+                client
+                    .to_possible_value()
+                    .map_or_else(String::new, |v| v.get_name().to_owned()),
+            ),
+            &workspace,
+            &product,
+            &out,
+            &sessions,
+            yes,
+        ),
+    }
+}
+/// One display line for a session title: first line, likely secrets masked, then clipped to 80
+/// characters. Masking comes first so a secret that straddles column 80 is seen whole; readers
+/// keep titles longer than that for this reason.
+fn display_title(c: &wk_adapters::cursor_history::Conversation) -> String {
+    let first = c.title.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    wk_adapters::cursor_history::redact(first.trim())
+        .chars()
+        .take(80)
+        .collect()
+}
+/// The sessions `ids` among `inside`, in request order; any unknown ID is an error.
+fn pick<'a>(
+    inside: &'a [wk_adapters::cursor_history::Conversation],
+    ids: &[String],
+) -> Result<Vec<&'a wk_adapters::cursor_history::Conversation>, String> {
+    ids.iter()
+        .map(|id| {
+            inside
+                .iter()
+                .find(|c| &c.id == id)
+                .ok_or_else(|| "a requested session is not in this workspace".to_string())
+        })
+        .collect()
+}
+/// Sessions attributed to `workspace` (IDs, titles, counts; never message text), plus how many
+/// sessions were left out and why.
+fn list_conversations(
+    history: &wk_adapters::cursor_history::History,
+    workspace: &Path,
+) -> Result<Value, String> {
+    let root = workspace
+        .canonicalize()
+        .map_err(|_| "workspace unavailable")?;
+    let inside = wk_adapters::cursor_history::within(history, &root);
+    let without_folder = history
+        .conversations
+        .iter()
+        .filter(|c| c.workspace.is_none())
+        .count();
+    let sessions: Vec<Value> = inside
+        .iter()
+        .map(|c| {
+            json!({"id":c.id,"title":display_title(c),"created_at_ms":c.created_at_ms,
+                   "messages":c.messages.len(),"complete":c.complete})
+        })
+        .collect();
+    Ok(json!({"workspace":root,"sessions":sessions,
+        "outside_workspace":history.conversations.len() - inside.len() - without_folder,
+        "without_folder":without_folder,"unreadable_records":history.unreadable_records,
+        "empty_conversations":history.empty_conversations,"skipped":history.skipped,
+        "dropped_injected":history.dropped_injected}))
+}
+/// Print `selected` as Markdown with likely secrets masked.
+fn show_conversations(
+    label: &str,
+    scope: &str,
+    selected: &[wk_adapters::cursor_history::Conversation],
+    max_chars: usize,
+) {
+    use wk_adapters::cursor_history::redact;
+    println!("# {label} conversations in {scope}\n\n{} conversation(s). Likely secrets are masked; review before exporting.\n", selected.len());
+    for c in selected {
+        let place = c
+            .workspace
+            .as_ref()
+            .map_or("unattributed".to_string(), |w| w.display().to_string());
+        println!(
+            "## {}\n\nProject: {place}\n\n`{}` · {} message(s) · {}\n",
+            display_title(c),
+            c.id,
+            c.messages.len(),
+            c.source
+        );
+        for m in &c.messages {
+            let mut text = redact(&m.text);
+            if max_chars > 0 && text.chars().count() > max_chars {
+                text = text.chars().take(max_chars).collect::<String>() + " …[truncated]";
             }
-            if !out.is_absolute() {
-                return Err("--out must be an absolute path".into());
-            }
-            let mut builder = fs::DirBuilder::new();
-            builder.recursive(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            builder
-                .create(&out)
-                .map_err(|_| "cannot create output directory")?;
-            let out = out
-                .canonicalize()
-                .map_err(|_| "output directory unavailable")?;
-            if out.starts_with(&root) {
-                return Err("output directory must be outside the workspace".into());
-            }
-            let mut written = Vec::new();
-            for c in chosen {
-                let body = json!({"schema_version":1,"workspace":root,"product":product,"session_id":c.id,
-                    "messages":c.messages.iter().map(|m| json!({"id":m.id,"role":m.role,"text":ch::redact(&m.text)})).collect::<Vec<_>>()});
-                let path = out.join(format!("{}.json", c.id.replace(':', "_")));
-                let mut options = fs::OpenOptions::new();
-                options.write(true).create_new(true);
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::OpenOptionsExt;
-                    options.mode(0o600);
-                }
-                let mut file = options
-                    .open(&path)
-                    .map_err(|_| "cannot create export file (already exists?)")?;
-                file.write_all(&serde_json::to_vec_pretty(&body).map_err(|_| "invalid export")?)
-                    .map_err(|_| "cannot write export")?;
-                written.push(path);
-            }
-            Ok(
-                json!({"exported":written,"published":false,"next":"wk-agent import --file FILE --session SESSION_ID --approve-transcript"}),
-            )
+            println!("**{}:** {}\n", m.role, text);
         }
     }
+}
+/// A file name for session `id` that can never leave the output directory, whatever the reader
+/// accepted: characters outside `[A-Za-z0-9._-]` become `_`, and when anything besides the
+/// client separator changed or the name is clipped, a hash of the full ID keeps names distinct.
+fn export_file_name(id: &str) -> Result<String, String> {
+    const MAX: usize = 120;
+    let mut name: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._-".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if name != id.replacen(':', "_", 1) || name.len() > MAX {
+        let hash = format!("{:x}", Sha256::digest(id.as_bytes()));
+        // ASCII only, so a byte index is a character boundary.
+        name.truncate(MAX - 13);
+        name = format!("{name}-{}", &hash[..12]);
+    }
+    if name.is_empty() || name.starts_with('.') {
+        return Err("a requested session ID cannot be used as a file name".into());
+    }
+    Ok(format!("{name}.json"))
+}
+/// Write the confirmed `sessions` of `workspace` as `wk-agent import` files (secrets masked)
+/// into a private directory outside the workspace. Every check runs before anything is created,
+/// so a refused export writes nothing; existing files are never overwritten.
+fn export_conversations(
+    history: &wk_adapters::cursor_history::History,
+    review: &str,
+    workspace: &Path,
+    product: &str,
+    out: &Path,
+    sessions: &[String],
+    yes: bool,
+) -> Result<Value, String> {
+    use wk_adapters::cursor_history::{redact, within};
+    if !yes {
+        return Err(format!(
+            "review `{review}` first, then pass --yes to export the listed sessions"
+        ));
+    }
+    if !wk_contracts::valid_id(product) {
+        return Err("invalid product ID".into());
+    }
+    let root = workspace
+        .canonicalize()
+        .map_err(|_| "workspace unavailable")?;
+    let inside = within(history, &root);
+    let chosen = pick(&inside, sessions)?;
+    let mut seen = std::collections::HashSet::new();
+    if !sessions.iter().all(|id| seen.insert(id)) {
+        return Err("a session is listed more than once".into());
+    }
+    let names = chosen
+        .iter()
+        .map(|c| export_file_name(&c.id))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Case-insensitive file systems would put two names differing only in case in one file.
+    let mut folded = std::collections::HashSet::new();
+    if !names.iter().all(|n| folded.insert(n.to_ascii_lowercase())) {
+        return Err("two sessions would share an export file name".into());
+    }
+    if !out.is_absolute()
+        || out
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("--out must be an absolute path without parent traversal".into());
+    }
+    // Check before creating anything, and again once the directory exists.
+    if resolve_prefix(out, "output directory")?.starts_with(&root) {
+        return Err("output directory must be outside the workspace".into());
+    }
+    if fs::symlink_metadata(out).is_err() {
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(out)
+            .map_err(|_| "cannot create output directory")?;
+    }
+    let out = out
+        .canonicalize()
+        .map_err(|_| "output directory unavailable")?;
+    if out.starts_with(&root) {
+        return Err("output directory must be outside the workspace".into());
+    }
+    // Checked whether or not this run created the directory; a fresh 0700 one passes.
+    let meta = fs::metadata(&out).map_err(|_| "output directory unavailable")?;
+    if !meta.is_dir() {
+        return Err("--out is not a directory".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o077 != 0 {
+            return Err("existing output directory must be private (mode 0700); permissions were not changed".into());
+        }
+    }
+    if names
+        .iter()
+        .any(|n| fs::symlink_metadata(out.join(n)).is_ok())
+    {
+        return Err(
+            "an export file already exists in the output directory; nothing was written".into(),
+        );
+    }
+    let mut written = Vec::new();
+    for (c, name) in chosen.into_iter().zip(names) {
+        let body = json!({"schema_version":1,"workspace":root,"product":product,"session_id":c.id,
+            "messages":c.messages.iter().map(|m| json!({"id":m.id,"role":m.role,"text":redact(&m.text)})).collect::<Vec<_>>()});
+        let path = out.join(name);
+        if let Err(e) = write_new_private(&path, &body) {
+            // Leave no partial export behind: remove only the files this run created.
+            for done in &written {
+                let _ = fs::remove_file(done);
+            }
+            return Err(e);
+        }
+        written.push(path);
+    }
+    Ok(
+        json!({"exported":written,"published":false,"next":"wk-agent import --file FILE --session SESSION_ID --approve-transcript"}),
+    )
+}
+/// Write `body` as pretty JSON to a new owner-only file; an existing file is never replaced,
+/// and a file this call created is removed again if writing it fails.
+fn write_new_private(path: &Path, body: &Value) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(body).map_err(|_| "invalid export")?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|_| "cannot create export file (already exists?)")?;
+    if file.write_all(&bytes).is_err() {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err("cannot write export".into());
+    }
+    Ok(())
 }
 /// Replace absolute workspace/home prefixes so summaries carry relative paths only.
 fn relativize(text: &str, root: &Path, home: &str) -> String {
@@ -683,6 +997,49 @@ fn main() {
                 json!({"error":{"code":"validation","message":message,"retryable":false}})
             );
             std::process::exit(2);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::export_file_name;
+
+    #[test]
+    fn export_file_names_stay_inside_the_output_directory() {
+        assert_eq!(
+            export_file_name("cursor-composer:c-new").unwrap(),
+            "cursor-composer_c-new.json"
+        );
+        for id in [
+            "codex:../../x",
+            "codex:..\\..\\x",
+            "codex:/etc/passwd",
+            "codex:a/b",
+            "codex:\u{e9}t\u{e9}",
+            "codex:a\0b",
+            "codex:C:\\x",
+        ] {
+            let name = export_file_name(id).unwrap();
+            assert!(name.starts_with("codex_"), "{id}: {name}");
+            assert!(
+                name.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)),
+                "{id}: {name}"
+            );
+        }
+        assert_ne!(
+            export_file_name("codex:a/b").unwrap(),
+            export_file_name("codex:a\\b").unwrap()
+        );
+        let long = export_file_name(&format!("codex:{}", "x".repeat(500))).unwrap();
+        assert_eq!(long.len(), 120 + ".json".len());
+        assert_ne!(
+            long,
+            export_file_name(&format!("codex:{}", "x".repeat(501))).unwrap()
+        );
+        for bad in ["", ".hidden", "..", "."] {
+            assert!(export_file_name(bad).is_err(), "{bad:?} accepted");
         }
     }
 }

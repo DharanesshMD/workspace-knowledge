@@ -24,7 +24,9 @@ An explicit export is `{ "schema_version":1, "workspace":"/work/product", "produ
 
 ## Import existing agent memory
 
-Start with what your coding agents already know. `wk-agent --state-dir /absolute/private/state memory scan` lists the `CLAUDE.md`, `.claude/CLAUDE.md` and `AGENTS.md` files in your approved service folder and this project's Claude Code notes (`~/.claude/projects/<project>/memory/*.md`), with a status for each. It is offline and prints no file content. Workspace-root files are reported as outside the approved service.
+Start with what your coding agents already know. `wk-agent --state-dir /absolute/private/state memory scan` lists the `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md` and GitHub Copilot instruction files in your approved service folder and this project's Claude Code notes (`~/.claude/projects/<project>/memory/*.md`), with a status for each. It is offline and prints no file content. Workspace-root files are reported as outside the approved service.
+
+GitHub Copilot instruction files are `.github/copilot-instructions.md` (kind `instructions`) and `.github/instructions/*.instructions.md` (kind `scoped_instructions`; only files directly in that folder, not its subfolders) inside the service folder, labelled `repo:<service>/.github/...`. They follow the same scope, size, UTF-8 and symlink rules as `CLAUDE.md`; a symlinked folder on the way to `.github/instructions` is not listed. In a `*.instructions.md` file the leading `---` frontmatter (`applyTo`, `description`, …) is removed from the imported text, and `description` is passed to the local model as a hint for every section. Without a closing `---` line the file has no frontmatter and is imported as written.
 
 Import with `memory import --yes`, adding `--file ABSOLUTE_PATH` for each Claude Code note you choose. The global `~/.claude/CLAUDE.md`, Codex's cross-project memories and other projects' notes are refused. Each note or section (split at the highest heading level used more than once) becomes one encrypted private record; `wk-agent process` drafts it with your local model and the usual privacy screening, then `wk-agent drafts` shows each draft with its source. Nothing is shared until you submit a reviewed draft. With owner synchronization enabled, memory drafts upload as owner-only summaries like other drafts.
 
@@ -36,6 +38,130 @@ Notes and limits:
 - Service-folder files that are too large (over 64 KiB), symlinked or not UTF-8 are skipped and counted as `rejected`; an explicit `--file` that fails stops the import before anything is written. A run over 200 sections also stops before writing.
 - Claude Code note discovery is qualified only on macOS and Linux. Notes are found only when `HOME` is set and only when no folder below your home folder on the way to the notes (including `~/.claude`) is a symlink. Without them, `scan` lists no notes and may show earlier note labels under `removed`.
 - `wk-agent process` reports `memory_drafting: failed` if the owner-only `memory-import.json` in the state folder cannot be read; other drafting and owner synchronization continue. Restore that file's permissions or contents; deleting it makes the next import start over.
+- Frontmatter hint values now lose one matching pair of surrounding single quotes as well as double quotes (`description: 'Retry policy'` becomes the hint `description: Retry policy`). A Claude Code note whose `name` or `description` was single-quoted therefore counts as changed once on the next import: its unsubmitted draft is replaced, or a submitted one gets an `updates` link.
+
+## Import past agent sessions
+
+`wk agent-history --client claude-code|codex|copilot|cursor` brings sessions you already had with a coding agent in the approved folder into your private drafts, one reviewed session at a time. It only reads: it never modifies the agent's files, never runs in the background and has no bulk import. You list the folder's sessions, review the ones you want, export them by ID and import each export explicitly. The storage formats it reads are undocumented by their vendors and change between versions; the readers are tested against synthetic fixtures modelled on layouts observed on 2026-10-15, not certified against every version. A format change shows up as `unreadable_records` or `empty_conversations` counts rather than guessed text.
+
+```sh
+wk agent-history --client claude-code list --workspace /work/product
+wk agent-history --client claude-code show --workspace /work/product --session claude-code:SESSION --max-chars 0
+wk agent-history --client claude-code export --workspace /work/product --product PRODUCT \
+  --out /private/exports --session claude-code:SESSION --yes
+wk-agent --state-dir /private/collector import --file /private/exports/claude-code_SESSION.json \
+  --session claude-code:SESSION --approve-transcript
+wk-agent --state-dir /private/collector process
+wk-agent --state-dir /private/collector drafts
+```
+
+`list` and `show` accept any `--workspace` folder; only `wk-agent import` enforces the enrolled binding, refusing an export whose `workspace` or `product` differs from the collector's. So use the folder you approved with `wk workspace approve` for exports you mean to import. `--source-dir DIR` (accepted anywhere after `agent-history`) replaces the client's default storage location for non-standard installs. For Claude Code and Codex it is the `projects` or `sessions` folder itself, not `CLAUDE_CONFIG_DIR` or `CODEX_HOME`; for Copilot and Cursor it is the VS Code or Cursor `User` folder.
+
+1. **`list --workspace DIR`** prints JSON without any message bodies: `workspace`, and `sessions` with each session's `id`, `title` (the first line of the first prompt, or Copilot's custom title: likely secrets are masked first, then it is clipped to 80 characters; this one line is the only message text `list` shows), `created_at_ms`, `messages` and `complete` (every record was read and the session ends with a reply). Counts cover the client's whole history, which is read and held in memory before the `--workspace` filter applies, so a very large history needs correspondingly large memory: `outside_workspace` (sessions in other folders), `without_folder`, `unreadable_records`, `empty_conversations`, `skipped` (over the size limits below) and `dropped_injected` (prompt parts dropped as client-injected context).
+2. **`show --workspace DIR [--session ID]...`** prints the selected sessions (all of the folder's sessions without `--session`) as Markdown with likely secrets masked. Messages are cut at `--max-chars` characters (default 1500, `0` for no limit). `export` writes whole messages, so review with `--max-chars 0`.
+3. **`export --workspace DIR --product PRODUCT --out DIR --session ID... --yes`** writes one `wk-agent import` file per named session (text masked the same way). Every check runs before anything is created, so a refused export writes nothing:
+   - `--yes` confirms you reviewed `show` output; each `--session` must be an ID `list` shows for this folder, named once.
+   - `--out` must be an absolute path without `..`, outside the workspace (checked before and after the directory is created). A missing directory is created with mode 0700; an existing one must already be private (no group or other permissions), and its permissions are never changed.
+   - A file is named after its session ID with the first `:` replaced by `_` (`claude-code_SESSION.json`). An ID with other characters outside `[A-Za-z0-9._-]`, or longer than 120 characters, has those characters replaced by `_` and a 12-character hash suffix so names stay distinct. Two sessions whose names differ only in case are refused.
+   - Existing files are never overwritten: if any target file exists, nothing is written. Files are created owner-only (0600); if a write fails, the files this run created are removed.
+   - The output lists the `exported` paths, `published: false` and the next command.
+4. **`wk-agent import --file FILE --session ID --approve-transcript`** with the session ID from `list` (the file's `session_id`). An export may hold at most 5,000 messages and 8 MiB, with unique, non-empty message IDs. The import groups messages into **parts** of consecutive whole exchanges (a prompt and the replies that follow it) with at most 96 KiB of text and 256 messages each. An exchange with more than 256 messages is split into consecutive chunks; an exchange or chunk over 96 KiB becomes its own part, in which every message keeps a fair share of the limit and longer ones end in ` [truncated]`. Each part is recorded as its own private journal session, so `process` drafts **one summary per part**, from both prompts and replies. The output reports `captured_messages`, `parts`, `truncated_parts`, `process_runs_needed`, `coverage: partial_export` and `published: false`.
+5. **`wk-agent process`** drafts at most ten sessions per run (a running collector does this every 15 seconds). `process_runs_needed` is the number of parts divided by ten, rounded up; it is a minimum, since other pending sessions share those runs. Review with `drafts` and submit with `submit --id DRAFT_ID --reviewed`; nothing is shared before that.
+
+**Run `process` promptly.** Imported parts are private journal records that expire 24 hours after they are first written, so parts not yet drafted by then are lost, and the same export cannot be recorded again (the store never reopens an expired session ID). Re-export after the session has changed, or after editing it, to get new part sessions. Importing the same file again while its parts are still live adds nothing: the part sessions are named after a digest of the messages. If you export a session again after it continued, or its text changed, the digest changes and **every** part is recorded and drafted again, including parts drafted before. Submit only the drafts from the newest import and leave the earlier ones unsubmitted (unsubmitted drafts expire within an hour); a summary you already submitted is not updated or linked automatically.
+
+**Folder matching.** A session is listed when its recorded folder, canonicalized, is the `--workspace` folder or a folder inside it (`/work/app2` does not match `/work/app`). Only absolute recorded folders count, and sessions without a folder are never assigned to a workspace.
+
+**Limits.** Claude Code, Codex and Copilot session files over 32 MiB and sessions over 5,000 messages (after consecutive records of the same role are joined) are not read and are counted in `skipped`. Symlinked session files and folders are skipped silently (not counted); only a file swapped for a symlink between the check and the open is refused and counted as unreadable. Malformed lines and records of an unknown shape are counted, never guessed, and mark the session incomplete. Codex and Copilot use the session ID stored in the file only if it matches `[A-Za-z0-9._-]{1,128}` (and is not `.` or `..`); otherwise the file name without its extension under the same rule, otherwise `h-` and a hash of the file's path below the source folder. Claude Code uses the file name under the same rule. A session ID found in two files (two project folders, two Codex files) is listed once, from the most recently modified file, and each dropped copy counts as one `unreadable_records`.
+
+**Injected context (Claude Code and Codex).** Agents store context they add (IDE selections, reminders, environment details, command output) as if you had typed it. A prompt part made only of `<name …>…</name>` blocks, at least one with a tool-style name containing `_` or `-` (`<ide_opened_file>`, `<environment_context>`), is dropped and counted in `dropped_injected`. Parts made only of plain-named tags such as `<task>…</task>`, and any part with other text, are kept. Each reader also drops parts starting with known injected blocks, listed below.
+
+**Masking.** Titles, `show` and `export` mask likely credentials: private-key blocks, tokens with known prefixes (`sk-`, `ghp_`, `github_pat_`, `xoxb-`, `AKIA`, `eyJ`, `AIza`, …), long opaque strings that mix letters and digits, and the value assigned to a credential-like name (`password=…`, `API_KEY: …`, `"token": "…"`, `Authorization: Bearer …`) whatever its length. Masking also covers passwords and bare tokens in URLs (`https://user:PASS@host`, `https://ghp_…@host`), `sig`/`signature` query parameters, `curl -u user:PASS`, the argument of long credential flags (`--password X`, `--api-key X`), `Cookie:` and `Set-Cookie:` header values, and the indented lines below a credential key that ends its line (YAML `password:` or `token: |`). Masking is pattern-based and does **not** find:
+- a secret with no credential-like name or known prefix that is shorter than 32 characters or has only letters or only digits, including secrets stated in prose ("my password is X");
+- values after short flags (`-p X`, `-pX`);
+- multi-line values other than indented blocks under a credential key (heredocs, strings split across lines);
+- tokens in unusual positions (inside a URL path or fragment, embedded in other text without a separator);
+- personal data such as names, email addresses, IP addresses and file paths, which are kept.
+
+Read the `show` output and do not export a session that still contains a secret, personal data or text you would not share.
+
+**Windows.** Modes 0700 and 0600 are not applied: the output directory and export files inherit the parent folder's ACLs. Choose an `--out` folder that only you can read.
+
+### Claude Code
+
+- **Location:** `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects` (`%USERPROFILE%\.claude\projects` on Windows). The `*.jsonl` files directly inside each project folder are read; subfolders are not.
+- **Session:** ID `claude-code:<file name without .jsonl>`; folder: the first `cwd` on a prompt or reply record that is absolute and has no `.` or `..` component.
+- **Read:** prompt text (string content or `text` parts) and reply `text` parts; consecutive records of the same role form one message.
+- **Skipped:** thinking, tool calls and results, meta, compact-summary and transcript-only records, API-error and synthetic replies, interrupt markers, subagent sidechains, and injected prompt parts: those starting with `<command-`, `<local-command-`, `<task-notification`, `<system-reminder`, `<ide_`, `<user-prompt-submit-hook`, `<user-memory-input` or `<bash-`, those containing `<bash-stdout>` or `<bash-stderr>`, and tool-style tag blocks.
+
+### Codex
+
+- **Location:** `$CODEX_HOME/sessions`, else `~/.codex/sessions`; `*.jsonl` files up to `YYYY/MM/DD/`. `archived_sessions` is not read.
+- **Session:** ID `codex:<session_meta id>`; folder: the first `session_meta` record's `cwd`, only when absolute and without `.` or `..` components.
+- **Read:** `response_item` messages from the user and the assistant: `input_text` and `output_text` parts.
+- **Skipped:** developer and system messages, reasoning, tool calls and their output, events, turn context, compaction records, attached images, and injected user parts: those starting (in any case) with `<environment_context>`, `<user_instructions>`, `<permissions instructions>`, `# AGENTS.md instructions for `, `<skill>` (with or without attributes), `<user_shell_command>`, `<turn_aborted>` or `<subagent_notification>`, and tool-style tag blocks. A new injected wrapper with a plain name needs its own marker: the tag rule only sees names containing `_` or `-`. Unknown roles and content part types are counted.
+- **Known limits:** sub-agent threads are stored, and listed, as their own sessions; a forked session copies its parent's history, so the same exchanges can appear in two sessions.
+
+### VS Code GitHub Copilot Chat
+
+- **Location:** VS Code's `User` folder: macOS `~/Library/Application Support/Code/User`; Linux `$XDG_CONFIG_HOME/Code/User` when that variable is an absolute path, else `~/.config/Code/User`; Windows `%APPDATA%\Code\User`. For VS Code Insiders pass its `User` folder (for example `--source-dir "$HOME/Library/Application Support/Code - Insiders/User"`).
+- **Session files:** `workspaceStorage/<hash>/chatSessions/<id>.json`, and the `.jsonl` change logs newer versions write, which are replayed in memory. When both exist the log is read; the `.json` is used only if the log cannot be read at all, and the session is then marked incomplete. A session copied into several storage folders is listed once, from the most recently modified copy. Logs over 200,000 lines are skipped.
+- **Session:** ID `copilot:<sessionId>`; folder: the storage folder's `workspace.json` `folder`, only when it is a local `file://` folder. Remote, multi-root and empty-window chats have no folder.
+- **Read:** the prompt's `message.text` and markdown reply parts. Inline file references appear as the file's base name, never its path. Prompts are kept whole: Copilot keeps attached context outside the prompt text, so the tag rule does not apply.
+- **Never read:** the unsent draft in the chat input (`inputState`), attached variables and files (`variableData`, prompt `parts`), thinking, tool invocations, edits, code-block URIs, progress, confirmations, elicitations, commands, MCP notices, vulnerability details and error messages. Unknown reply part kinds are counted. A failed or cancelled request keeps only the reply text it produced.
+
+### Cursor
+
+`--client cursor` uses the Cursor reader described in [Cursor history import](#cursor-history-import-for-evaluation-sets), with the same `list`, `show` and `export` steps as above; the 32 MiB file and 5,000-message reader limits and the injected-context rule do not apply (the import's own 5,000-message and 8 MiB limits still do). `--source-dir` replaces only the Cursor `User` folder; agent transcripts are always read from `.cursor` in your home folder (`wk cursor-history --dot-cursor-dir` reads another location).
+
+## VS Code and GitHub Copilot MCP
+
+Copilot agent mode in VS Code can call the Workspace Knowledge MCP tools (`knowledge.search`, `knowledge.context`, `knowledge.overlaps` and the others listed in the [README](../../README.md#coding-agent-integration)). Add the server to the workspace's `.vscode/mcp.json` (or to your user MCP configuration). The file format is VS Code's, not this project's, and may change; check VS Code's MCP documentation for your version. VS Code uses a top-level `servers` object; each server has `"type": "stdio"` or `"type": "http"`.
+
+**Stdio bridge.** `wk-mcp` takes no arguments and reads three environment variables: `WK_SERVER_URL`, an `https://` origin or a literal loopback `http://127.0.0.1:PORT` / `http://[::1]:PORT`, without path, query or credentials; `WK_ACCESS_TOKEN`, an access token for the server (at least 32 characters; `WK_DEV_TOKEN` is the loopback development fallback); and `WK_PRODUCT`, the product ID. Keep the token out of the file with a VS Code input prompt:
+
+```json
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "wk-access-token",
+      "description": "Workspace Knowledge access token",
+      "password": true
+    }
+  ],
+  "servers": {
+    "workspace-knowledge": {
+      "type": "stdio",
+      "command": "wk-mcp",
+      "env": {
+        "WK_SERVER_URL": "https://knowledge.example",
+        "WK_PRODUCT": "PRODUCT",
+        "WK_ACCESS_TOKEN": "${input:wk-access-token}"
+      }
+    }
+  }
+}
+```
+
+Use the absolute path of `wk-mcp` as `command` if it is not on the `PATH` VS Code sees.
+
+**Remote endpoint.** Point an HTTP server at the product's route:
+
+```json
+{
+  "servers": {
+    "workspace-knowledge": {
+      "type": "http",
+      "url": "https://knowledge.example/mcp/PRODUCT"
+    }
+  }
+}
+```
+
+Each request authenticates with an OAuth access token from your identity provider, discovered through the server's protected-resource metadata; see [remote MCP](../architecture/remote-mcp.md) for the server configuration. Sign-in from VS Code has not been certified against a real identity provider; if it does not work with yours, use the stdio bridge.
+
+MCP gives Copilot retrieval only. Copilot has no capture hooks and gets **no automatic prompt-time overlap notices** yet; add a project rule (for example in `.github/copilot-instructions.md`) asking the agent to call `knowledge.context` and `knowledge.overlaps` before editing shared code.
 
 ## Claude Desktop Enterprise
 
@@ -45,9 +171,11 @@ Official protocol references checked during implementation: [Claude Code hooks](
 
 ## Cursor history import (for evaluation sets)
 
+`wk agent-history --client cursor list|show|export` now covers the review and export workflow for Cursor, with the same options as the other clients (see [Import past agent sessions](#import-past-agent-sessions)); `wk cursor-history` is kept as an alias for it and additionally offers `diagnose` and `cards`. The notes below describe the Cursor reader.
+
 `wk cursor-history` reads your own local Cursor chats from a read-only snapshot of Cursor's undocumented SQLite storage (global `cursorDiskKV` composer/bubble records and per-workspace `ItemTable` entries, including legacy chat tabs). It also reads newer Cursor agent transcripts from `~/.cursor/projects/<path-slug>/agent-transcripts/*.jsonl`; a project is attributed only when its slug resolves to an existing directory, otherwise the chat stays unattributed. Override that location with `--dot-cursor-dir`. It never modifies Cursor's files and works while Cursor is running. Only visible message text is read; thinking and tool payloads are ignored, and missing records are counted rather than guessed.
 
-1. `wk cursor-history list` shows titles and counts per workspace folder, plus unattributed chats (which are never assigned to a workspace).
+1. `wk cursor-history list` (or `wk agent-history --client cursor list --workspace DIR`) shows titles and counts per workspace folder, plus unattributed chats (which are never assigned to a workspace).
 2. `wk cursor-history show --workspace /work/product` prints that workspace's chats as Markdown with likely credentials masked. Review them.
 3. `wk cursor-history export --workspace /work/product --product PRODUCT --out /private/exports --session cursor-composer:ID --yes` writes only the sessions you confirmed, as owner-only files outside the workspace, in the format accepted by `wk-agent import --approve-transcript`.
 

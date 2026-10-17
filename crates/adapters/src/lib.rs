@@ -230,8 +230,13 @@ pub fn config(client: &str, executable: &Path, state: &Path) -> Result<Value, St
 }
 
 pub mod change_guard;
+pub mod claude_history;
+pub mod codex_history;
+pub mod copilot_history;
 pub mod cursor_history;
+mod history_common;
 pub mod install;
+mod redact;
 pub mod team_context;
 
 /// Observational hooks never veto development or request another model turn.

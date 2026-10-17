@@ -602,6 +602,42 @@ mod tests {
         assert!(!scan.to_string().contains(&*f.home.to_string_lossy()));
     }
     #[test]
+    fn scan_reports_the_kind_of_copilot_instruction_files() {
+        let f = fixture("http://127.0.0.1:9/v1/chat/completions");
+        let dir = f.b.root.join("backend/.github/instructions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            f.b.root.join("backend/.github/copilot-instructions.md"),
+            "Be brief.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("rust.instructions.md"),
+            "---\ndescription: Rust style\n---\nUse thiserror.\n",
+        )
+        .unwrap();
+        let scan = scan_with(&f.dir, &f.b, "backend", None).unwrap();
+        let kinds: Vec<_> = scan["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["label"].as_str().unwrap(), r["kind"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (
+                    "repo:backend/.github/copilot-instructions.md",
+                    "instructions"
+                ),
+                (
+                    "repo:backend/.github/instructions/rust.instructions.md",
+                    "scoped_instructions"
+                )
+            ]
+        );
+    }
+    #[test]
     fn import_writes_private_records_and_skips_unchanged_sections() {
         let mut f = fixture("http://127.0.0.1:9/v1/chat/completions");
         std::fs::write(
@@ -773,6 +809,39 @@ mod tests {
         assert_eq!(out["written"], json!(1));
         let scan = scan_with(&f.dir, &f.b, "backend", None).unwrap();
         assert_eq!(rows(&scan), vec![(BACKEND.into(), "unchanged".into())]);
+    }
+    #[test]
+    fn copilot_instruction_files_import_with_their_description_as_hint() {
+        let mut f = fixture("http://127.0.0.1:9/v1/chat/completions");
+        let dir = f.b.root.join("backend/.github/instructions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            f.b.root.join("backend/.github/copilot-instructions.md"),
+            "Prefer small modules.\n",
+        )
+        .unwrap();
+        let text =
+            "---\napplyTo: \"**/*.rs\"\ndescription: Rust style\n---\n## Errors\nUse thiserror.\n";
+        std::fs::write(dir.join("rust.instructions.md"), text).unwrap();
+        let now = daemon::now().unwrap();
+        let out = import(&mut f, &[], now).unwrap();
+        assert_eq!(
+            (out["written"].clone(), out["sources"].clone()),
+            (json!(2), json!(2))
+        );
+        let label = "repo:backend/.github/instructions/rust.instructions.md";
+        let key = section_key(
+            label,
+            &memory_split::split(SourceKind::ScopedInstructions, text)[0],
+        )
+        .unwrap();
+        let r = record(&f, &tracked(&f, &key), now);
+        assert_eq!(
+            (r.hints.as_deref(), r.body.as_str()),
+            (Some("description: Rust style"), "Use thiserror.")
+        );
+        assert!(r.source().contains("Note: description: Rust style"));
+        assert!(!r.source().contains("applyTo"));
     }
     #[test]
     fn changed_sections_retire_old_records_and_link_the_summary() {

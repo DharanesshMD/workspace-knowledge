@@ -25,6 +25,13 @@ First published prerelease. It supersedes v0.1.0-alpha.1, which was tagged on 20
 
 - Strict OIDC discovery/signature/claim regressions and positive/negative access-token-hash acceptance; no custom JWT protocol verifier.
 - `wk-agent memory scan|import`: private drafts from `CLAUDE.md`, `AGENTS.md` and explicitly approved Claude Code project notes, with re-import that skips unchanged sections and links updates to submitted summaries.
+- `wk agent-history --client claude-code|codex|copilot|cursor list|show|export`: read-only readers for Claude Code, Codex and VS Code Copilot Chat sessions (Copilot `.json` and `.jsonl` logs) next to Cursor, with list output limited to IDs, titles and counts, masked `show`, and export to private `wk-agent import` files; `wk cursor-history` remains as an alias. Client-injected prompt context is dropped and counted in `dropped_injected`.
+- `wk-agent import` records one private journal session per part (at most 96 KiB and 256 messages, whole exchanges) so `process` drafts one summary per part instead of one per reply; this also improves Cursor imports. Limits rise to 5,000 messages and 8 MiB per export; re-importing a continued session drafts every part again.
+- `wk-agent memory scan|import` also reads GitHub Copilot instruction files (`.github/copilot-instructions.md`, `.github/instructions/*.instructions.md`). Frontmatter hints are now unquoted, which also affects single-quoted and unbalanced double-quoted hints of existing notes, so such notes redraft once.
+- History titles, `show` and exports now mask credentials by name as well as long tokens: assignments of any length (`password=…`, `accessToken: …`, quoted JSON values), URL passwords and bare tokens, `curl -u` and long credential flag values, `Cookie` headers and `sig`/`signature` query parameters, and indented YAML blocks under credential keys. See the [setup guide](docs/adapters/setup.md#import-past-agent-sessions) for what is not masked.
+- `wk cursor-history export` and `wk agent-history export` now refuse, before writing anything, an existing `--out` directory that is accessible to group or others (Unix), `..` in `--out`, a `--session` named twice and file names that differ only in case; files written by a failed run are removed. Export file names for unusual session IDs get a hash suffix.
+- `wk cursor-history list` and `wk agent-history list` titles are now masked, limited to the first line and clipped to 80 characters (masking happens before clipping).
+- Setup guide for VS Code and GitHub Copilot MCP (`.vscode/mcp.json` for `wk-mcp` and the remote endpoint); Copilot gets no automatic prompt-time notices yet.
 
 ### Known limits
 
