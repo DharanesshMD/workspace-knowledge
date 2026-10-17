@@ -61,7 +61,8 @@ The useful result is a source-backed brief before a change. Its quality depends 
 | Capability | What developers can do |
 |---|---|
 | **My context** | Keep owner-only summaries and structured manual notes; edit, delete or submit an explicit copy for review |
-| **Agent memory import** | Turn existing `CLAUDE.md`, `AGENTS.md` and Claude Code project notes into private drafts for review ([setup](docs/adapters/setup.md#import-existing-agent-memory)) |
+| **Agent memory import** | Turn existing `CLAUDE.md`, `AGENTS.md`, GitHub Copilot instruction files and Claude Code project notes into private drafts for review ([setup](docs/adapters/setup.md#import-existing-agent-memory)) |
+| **Agent history import** | Review, mask and export past Claude Code, Codex, VS Code Copilot and Cursor sessions for an approved folder, then import them as one private draft per session part ([setup](docs/adapters/setup.md#import-past-agent-sessions)) |
 | **Team context** | Browse published summaries by developer, service, date and file, within current membership scope |
 | **Code-change context** | Retrieve confirmed contributor names, reviewed rationale, source freshness and impact/test references for enrolled files |
 | **Optional edit confirmation** | Use a separate Claude Code pre-tool hook to require browser review for covered file operations |
@@ -292,7 +293,7 @@ Enable private hybrid retrieval with **pgvector inside PostgreSQL** and a review
 
 Setup uses a separate optional migration, read-only runtime grants and a bounded operator index pass. HTTP, MCP and the portal report the retrieval mode and keyword fallback when the model or index is unavailable. When it is enabled, prompt-time team notices also include teammates' summaries that match the prompt's locally extracted keywords by meaning ([overlap notices](docs/architecture/overlap-notices.md)). Review [semantic setup, boundaries and evaluation](docs/architecture/semantic-search.md) before enabling it; model/network capacity and representative team quality require deployment-specific acceptance.
 
-Agents can retrieve authorized shared knowledge through `wk-mcp` over stdio or the server's authenticated stateless Streamable HTTP endpoint, `/mcp/{product}`. Remote requests authenticate independently and enforce route-bound product membership. MCP provides integration and retrieval; it does not capture conversations.
+Agents can retrieve authorized shared knowledge through `wk-mcp` over stdio or the server's authenticated stateless Streamable HTTP endpoint, `/mcp/{product}`. Remote requests authenticate independently and enforce route-bound product membership. MCP provides integration and retrieval; it does not capture conversations. For VS Code and GitHub Copilot, see the [`.vscode/mcp.json` examples](docs/adapters/setup.md#vs-code-and-github-copilot-mcp).
 
 | Tool | Purpose |
 |---|---|
@@ -328,6 +329,8 @@ Capture support depends on the exact **client, version, operating system and sur
 | Codex CLI 0.162.0-alpha.2, macOS | Experimental supported visible no-tool turns; tools, compaction, subagents and ambiguous context are held |
 | Antigravity desktop 2.19.1, macOS | Experimental hook delivery/private capture; **all native turns remain held and cannot be published** |
 | Claude Desktop Enterprise | Explicit consent-bound text pull on an isolated broker; entitlement and live deployment acceptance required |
+| Claude Code, Codex, VS Code Copilot Chat, Cursor: past-session import | Explicit `wk agent-history` list, review, export and `wk-agent import` of chosen sessions; read-only, never automatic, partial coverage; storage formats are undocumented and version-dependent ([setup](docs/adapters/setup.md#import-past-agent-sessions)) |
+| VS Code GitHub Copilot (MCP) | Agent mode can call the knowledge tools through `.vscode/mcp.json`; no capture hooks and no automatic prompt-time notices yet ([setup](docs/adapters/setup.md#vs-code-and-github-copilot-mcp)) |
 | Managed local chat / explicit export | Explicitly selected content; distinct coverage and review requirements described in setup |
 
 Other versions and surfaces are not implied supported. The updated Codex `0.162.0-alpha.17.2` was rejected by the pinned adapter. Held sessions do not become complete because a later message looks clean; follow the adapter's reset/new-session guidance.

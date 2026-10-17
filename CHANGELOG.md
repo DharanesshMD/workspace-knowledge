@@ -18,6 +18,11 @@ Changes are recorded here for the first source-only alpha candidate. No tag or r
 
 - Strict OIDC discovery/signature/claim regressions and positive/negative access-token-hash acceptance; no custom JWT protocol verifier.
 - `wk-agent memory scan|import`: private drafts from `CLAUDE.md`, `AGENTS.md` and explicitly approved Claude Code project notes, with re-import that skips unchanged sections and links updates to submitted summaries.
+- `wk agent-history --client claude-code|codex|copilot|cursor list|show|export`: read-only readers for Claude Code, Codex and VS Code Copilot Chat sessions (Copilot `.json` and `.jsonl` logs) next to Cursor, with list output limited to IDs, titles and counts, masked `show`, and export to private `wk-agent import` files; `wk cursor-history` remains as an alias. Client-injected prompt context is dropped and counted in `dropped_injected`.
+- `wk-agent import` records one private journal session per part (at most 96 KiB and 256 messages, whole exchanges) so `process` drafts one summary per part instead of one per reply; this also improves Cursor imports. Limits rise to 5,000 messages and 8 MiB per export; re-importing a continued session drafts every part again.
+- `wk-agent memory scan|import` also reads GitHub Copilot instruction files (`.github/copilot-instructions.md`, `.github/instructions/*.instructions.md`). Single-quoted frontmatter hints are now unquoted, so such notes redraft once.
+- History titles, `show` and exports now mask short credential assignments (`password=…`, `token: …`) as well as long tokens. Cursor export file names for unusual session IDs now get a hash suffix, and `cursor-history list` titles are masked.
+- Setup guide for VS Code and GitHub Copilot MCP (`.vscode/mcp.json` for `wk-mcp` and the remote endpoint); Copilot gets no automatic prompt-time notices yet.
 
 ### Known limits
 
