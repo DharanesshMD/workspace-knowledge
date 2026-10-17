@@ -56,7 +56,7 @@ def acceptance(origin,owner,mutation,command,provider,start):
             browser=identity.Browser();status,headers,_=browser.request(url);assert status==302;assert browser.request(headers['Location'])[0]==200
         proc=None
         try:
-            proc=subprocess.Popen([str(agent),'--state-dir',str(native),'device','connect','--binding',str(binding),'--service','backend','--server',origin,'--yes','--no-browser'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            proc=subprocess.Popen([str(agent),'--state-dir',str(native),'device','connect','--binding',str(binding),'--service','backend','--server',origin,'--summarizer','rules','--yes','--no-browser'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
             line=proc.stderr.readline();attempt=json.loads(line);assert 'authorization_url' in attempt
             authorize(attempt['authorization_url']);print('Synthetic native sign-in returned; waiting for OS credential storage if prompted.',flush=True)
             stdout,stderr=proc.communicate(timeout=300);assert proc.returncode==0,'Native connect failed: '+stderr[:300];connected=json.loads(stdout);assert connected['connected'] and connected['capture_coverage']=='unknown';native_id=connected['device_id']

@@ -359,8 +359,11 @@ pub struct ConnectArgs {
     pub service: String,
     #[arg(long)]
     pub server: String,
-    #[arg(long, default_value = "http://127.0.0.1:11434/v1/chat/completions")]
-    pub inference: String,
+    /// Loopback model endpoint; omit it to build drafts from rules instead.
+    #[arg(long)]
+    pub inference: Option<String>,
+    #[arg(long, value_enum)]
+    pub summarizer: Option<state::Summarizer>,
     #[arg(long, default_value = "local-model")]
     pub model: String,
     #[arg(long, default_value_t = 4319)]
@@ -440,8 +443,7 @@ pub fn credential_current(dir: &std::path::Path) -> Result<bool, String> {
 pub async fn connect(dir: &std::path::Path, args: ConnectArgs) -> Result<Value, String> {
     if !args.yes {
         return Err(
-            "review exact product, service, server and local inference settings, then pass --yes"
-                .into(),
+            "review exact product, service, server and summarizer settings, then pass --yes".into(),
         );
     }
     if dir.join("agent.json").exists() {
@@ -457,7 +459,12 @@ pub async fn connect(dir: &std::path::Path, args: ConnectArgs) -> Result<Value, 
         return Err("invalid local approval or state location".into());
     }
     network::server_url(&args.server)?;
-    wk_summarize::local_url(&args.inference)?;
+    let (summarizer, inference) = state::resolve_summarizer(args.summarizer, args.inference)?;
+    let model = if summarizer == state::Summarizer::Local {
+        args.model
+    } else {
+        String::new()
+    };
     let c = state::Config {
         root: b.root.clone(),
         binding_file: args
@@ -466,8 +473,9 @@ pub async fn connect(dir: &std::path::Path, args: ConnectArgs) -> Result<Value, 
             .map_err(|_| "approval unavailable")?,
         service: args.service,
         server: args.server,
-        model: args.model,
-        inference: args.inference,
+        model,
+        inference,
+        summarizer,
         port: args.port,
         account: "workspace".into(),
         device_id: uuid::Uuid::new_v4().to_string(),
@@ -584,6 +592,7 @@ mod tests {
             server: "https://team.example".into(),
             model: "local-model".into(),
             inference: "http://127.0.0.1:11434/v1/chat/completions".into(),
+            summarizer: crate::state::Summarizer::Local,
             port: 4319,
             account: "workspace".into(),
             device_id: uuid::Uuid::new_v4().to_string(),
@@ -595,6 +604,39 @@ mod tests {
         state::save(&c.binding_file, &b).unwrap();
         state::save(&local.join("agent.json"), &c).unwrap();
         (dir, c, b)
+    }
+    #[tokio::test]
+    async fn connect_rejects_inconsistent_summarizer_flags_before_signing_in() {
+        let (dir, c, _b) = fixture();
+        let fresh = dir.path().join("fresh");
+        std::fs::create_dir(&fresh).unwrap();
+        let args = |summarizer, inference: Option<&str>| ConnectArgs {
+            binding: c.binding_file.clone(),
+            service: "backend".into(),
+            server: "https://team.example".into(),
+            inference: inference.map(Into::into),
+            summarizer,
+            model: "local-model".into(),
+            port: 4319,
+            yes: true,
+            no_browser: true,
+            test_token: false,
+        };
+        let e = connect(&fresh, args(Some(state::Summarizer::Local), None))
+            .await
+            .unwrap_err();
+        assert!(e.contains("needs --inference"), "{e}");
+        let e = connect(
+            &fresh,
+            args(
+                Some(state::Summarizer::Rules),
+                Some("http://127.0.0.1:11434/v1/chat/completions"),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(e.contains("cannot be combined"), "{e}");
+        assert!(!fresh.join("agent.json").exists());
     }
     #[tokio::test]
     async fn delayed_controls_cannot_roll_back_a_newer_pause_revision() {

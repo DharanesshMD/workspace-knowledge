@@ -219,6 +219,7 @@ mod tests {
             server: server.into(),
             model: "synthetic".into(),
             inference: "http://127.0.0.1:11434/v1/chat/completions".into(),
+            summarizer: crate::state::Summarizer::Local,
             port: 0,
             account: "test".into(),
             device_id: "test-device".into(),

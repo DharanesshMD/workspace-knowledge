@@ -14,6 +14,8 @@ pub struct Config {
     pub server: String,
     pub model: String,
     pub inference: String,
+    #[serde(default)]
+    pub summarizer: Summarizer,
     pub port: u16,
     pub account: String,
     pub device_id: String,
@@ -21,6 +23,40 @@ pub struct Config {
     pub device: Option<crate::device::Connection>,
     #[serde(default)]
     pub repository: Option<crate::repository::RepositoryEnrollment>,
+}
+#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Debug, Default, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Summarizer {
+    /// Drafts come from a model on this machine.
+    #[default]
+    Local,
+    /// Drafts are built from the conversation's structure; no model.
+    Rules,
+}
+impl Summarizer {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Summarizer::Local => "local",
+            Summarizer::Rules => "rules",
+        }
+    }
+}
+/// Pick the mode and the inference URL to store. Local needs a URL; rules must not have one.
+pub fn resolve_summarizer(
+    flag: Option<Summarizer>,
+    inference: Option<String>,
+) -> Result<(Summarizer, String), String> {
+    match (flag, inference) {
+        (None, None) | (Some(Summarizer::Rules), None) => Ok((Summarizer::Rules, String::new())),
+        (None, Some(url)) | (Some(Summarizer::Local), Some(url)) => {
+            wk_summarize::local_url(&url)?;
+            Ok((Summarizer::Local, url))
+        }
+        (Some(Summarizer::Local), None) => Err("--summarizer local needs --inference".into()),
+        (Some(Summarizer::Rules), Some(_)) => {
+            Err("--summarizer rules cannot be combined with --inference".into())
+        }
+    }
 }
 pub fn private_dir(path: &Path, create: bool) -> Result<PathBuf, String> {
     if !path.is_absolute()
@@ -214,4 +250,54 @@ pub fn store(state: &Path) -> Result<wk_local::LocalStore, String> {
         .try_into()
         .map_err(|_| "invalid capture key")?;
     wk_local::LocalStore::open(&state.join("capture.db"), key, 100 * 1024 * 1024)
+}
+
+#[cfg(test)]
+mod summarizer_tests {
+    use super::*;
+    #[test]
+    fn old_configs_without_a_summarizer_are_local() {
+        let old = r#"{"root":"/w","binding_file":"/b.json","service":"backend","server":"http://127.0.0.1:4318","model":"m","inference":"http://127.0.0.1:11434/v1/chat/completions","port":4319,"account":"workspace","device_id":"d"}"#;
+        let c: Config = serde_json::from_str(old).unwrap();
+        assert_eq!(c.summarizer, Summarizer::Local);
+    }
+    #[test]
+    fn summarizer_choice_follows_the_flags() {
+        use Summarizer::*;
+        let url = "http://127.0.0.1:11434/v1/chat/completions";
+        assert_eq!(
+            resolve_summarizer(None, None).unwrap(),
+            (Rules, String::new())
+        );
+        assert_eq!(
+            resolve_summarizer(None, Some(url.into())).unwrap(),
+            (Local, url.to_string())
+        );
+        assert_eq!(resolve_summarizer(Some(Rules), None).unwrap().0, Rules);
+        assert_eq!(
+            resolve_summarizer(Some(Local), Some(url.into())).unwrap().0,
+            Local
+        );
+        assert!(
+            resolve_summarizer(Some(Local), None).is_err(),
+            "local needs an inference URL"
+        );
+        assert!(
+            resolve_summarizer(Some(Rules), Some("http://127.0.0.1:1/x".into())).is_err(),
+            "rules must not carry an inference URL"
+        );
+        assert!(
+            resolve_summarizer(None, Some("https://example.com/v1".into())).is_err(),
+            "inference must stay on this machine"
+        );
+    }
+    #[test]
+    fn summarizer_serializes_lowercase_and_names_itself() {
+        assert_eq!(
+            serde_json::to_string(&Summarizer::Rules).unwrap(),
+            "\"rules\""
+        );
+        assert_eq!(Summarizer::Local.as_str(), "local");
+        assert_eq!(Summarizer::Rules.as_str(), "rules");
+    }
 }

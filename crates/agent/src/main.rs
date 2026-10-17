@@ -42,8 +42,11 @@ enum Command {
         service: String,
         #[arg(long)]
         server: String,
-        #[arg(long, default_value = "http://127.0.0.1:11434/v1/chat/completions")]
-        inference: String,
+        /// Loopback model endpoint; omit it to build drafts from rules instead.
+        #[arg(long)]
+        inference: Option<String>,
+        #[arg(long, value_enum)]
+        summarizer: Option<state::Summarizer>,
         #[arg(long, default_value = "local-model")]
         model: String,
         #[arg(long, default_value_t = 4319)]
@@ -234,13 +237,14 @@ async fn run(cli: Cli) -> Result<Value, String> {
             service,
             server,
             inference,
+            summarizer,
             model,
             port,
             yes,
         } => {
             if !yes {
                 return Err(
-                    "pass --yes after reviewing product, service and inference scope".into(),
+                    "pass --yes after reviewing product, service and summarizer scope".into(),
                 );
             }
             if state.join("agent.json").exists() {
@@ -256,7 +260,12 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 return Err("invalid approval or state location".into());
             }
             network::server_url(&server)?;
-            wk_summarize::local_url(&inference)?;
+            let (summarizer, inference) = state::resolve_summarizer(summarizer, inference)?;
+            let model = if summarizer == state::Summarizer::Local {
+                model
+            } else {
+                String::new()
+            };
             let token = zeroize::Zeroizing::new(
                 std::env::var("WK_ACCESS_TOKEN")
                     .map_err(|_| "WK_ACCESS_TOKEN required for enrollment")?,
@@ -268,6 +277,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 server,
                 model,
                 inference,
+                summarizer,
                 port,
                 account: "workspace".into(),
                 device_id: uuid::Uuid::new_v4().to_string(),
@@ -459,7 +469,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
                 .await
                 .unwrap_or(json!({"available":false}));
             Ok(
-                json!({"native_clients":native_capture::status(&state).unwrap_or(json!({"unavailable":true})),"native_cursor":cursor_capture::status(&state).unwrap_or(json!({"unavailable":true})),"code_change_protection":protection::status(&state),"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
+                json!({"native_clients":native_capture::status(&state).unwrap_or(json!({"unavailable":true})),"native_cursor":cursor_capture::status(&state).unwrap_or(json!({"unavailable":true})),"code_change_protection":protection::status(&state),"summarizer":c.summarizer.as_str(),"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
             )
         }
         Command::Config { client } => wk_adapters::config(
@@ -556,6 +566,42 @@ mod native_process;
 mod cli_tests {
     use super::{Cli, Command};
     use clap::Parser;
+
+    #[test]
+    fn init_needs_no_inference_and_validates_the_summarizer_flag() {
+        let init = |extra: &[&str]| {
+            let mut args = vec![
+                "wk-agent",
+                "--state-dir",
+                "/s",
+                "init",
+                "--binding",
+                "/b",
+                "--service",
+                "backend",
+                "--server",
+                "http://127.0.0.1:4318",
+                "--yes",
+            ];
+            args.extend_from_slice(extra);
+            Cli::try_parse_from(args)
+        };
+        match init(&[]).unwrap().command {
+            Command::Init {
+                inference,
+                summarizer,
+                ..
+            } => assert!(inference.is_none() && summarizer.is_none()),
+            _ => panic!("expected init"),
+        }
+        match init(&["--summarizer", "rules"]).unwrap().command {
+            Command::Init { summarizer, .. } => {
+                assert_eq!(summarizer, Some(crate::state::Summarizer::Rules))
+            }
+            _ => panic!("expected init"),
+        }
+        assert!(init(&["--summarizer", "bogus"]).is_err());
+    }
 
     #[test]
     fn memory_command_accepts_repeated_explicit_files() {

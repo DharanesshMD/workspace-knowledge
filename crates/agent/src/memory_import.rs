@@ -540,6 +540,7 @@ mod tests {
             server: "http://127.0.0.1:4318".into(),
             model: "synthetic-local".into(),
             inference: inference.into(),
+            summarizer: crate::state::Summarizer::Local,
             port: 0,
             account: "test".into(),
             device_id: "test-device".into(),

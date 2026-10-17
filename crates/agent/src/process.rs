@@ -614,6 +614,7 @@ mod pause_regression {
             server: "http://127.0.0.1:4318".into(),
             model: "synthetic-local".into(),
             inference: format!("http://{address}/inference"),
+            summarizer: crate::state::Summarizer::Local,
             port: 4319,
             account: "workspace".into(),
             device_id: uuid::Uuid::new_v4().to_string(),

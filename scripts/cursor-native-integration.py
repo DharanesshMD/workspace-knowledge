@@ -33,7 +33,7 @@ def main():
         cli('wk','--state-dir',consent,'workspace','approve',workspace,'--product','demo','--service','backend','--yes')
         binding=consent/(hashlib.sha256(str(workspace).encode()).hexdigest()+'.json')
         port=free_port()
-        agent('init','--binding',binding,'--service','backend','--server',base,'--inference',args.inference,'--model',args.model,'--port',port,'--yes')
+        agent('init','--binding',binding,'--service','backend','--server',base,'--summarizer','local','--inference',args.inference,'--model',args.model,'--port',port,'--yes')
         agent('cursor-enroll','--yes')
         slug=re.sub('[^A-Za-z0-9]','-',str(workspace).lstrip('/'))
         source_root=Path.home()/'.cursor/projects'/slug

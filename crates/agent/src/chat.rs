@@ -68,8 +68,19 @@ pub fn record(
     }
     Ok(())
 }
+/// Managed chat talks to the local model, so it needs the `local` summarizer.
+fn require_local(c: &state::Config) -> Result<(), String> {
+    if c.summarizer != state::Summarizer::Local {
+        return Err(
+            "managed chat needs a local model; set up with --summarizer local --inference URL"
+                .into(),
+        );
+    }
+    Ok(())
+}
 pub async fn run(dir: &Path, file: &Path, session: Option<String>) -> Result<Value, String> {
     let c = state::load(dir)?;
+    require_local(&c)?;
     let b = state::binding(&c)?;
     let token = state::token(dir, "server-token")?;
     network::policy(&c, &b, &token).await?;
@@ -582,6 +593,7 @@ mod import_tests {
             server: "http://127.0.0.1:4318".into(),
             model: "synthetic-local".into(),
             inference: format!("http://{address}/inference"),
+            summarizer: crate::state::Summarizer::Local,
             port: 4319,
             account: "workspace".into(),
             device_id: uuid::Uuid::new_v4().to_string(),
@@ -614,6 +626,18 @@ mod import_tests {
             })
             .collect::<Vec<_>>();
         json!({"schema_version":1,"workspace":f.b.root,"product":"demo","session_id":"s1","messages":messages}).to_string()
+    }
+    #[tokio::test]
+    async fn managed_chat_needs_the_local_summarizer() {
+        let mut f = fixture().await;
+        assert!(require_local(&f.c).is_ok());
+        f.c.summarizer = state::Summarizer::Rules;
+        state::save(&f.dir.join("agent.json"), &f.c).unwrap();
+        let prompt = f.dir.join("prompt.txt");
+        std::fs::write(&prompt, "hello").unwrap();
+        let e = run(&f.dir, &prompt, None).await.unwrap_err();
+        assert!(e.contains("managed chat needs a local model"), "{e}");
+        f.server.abort();
     }
     fn import(f: &mut Fixture, export: &str) -> Result<Value, String> {
         import_into(&mut f.store, &f.b, &f.c.service, export, "s1")

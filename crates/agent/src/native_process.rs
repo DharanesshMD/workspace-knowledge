@@ -163,6 +163,7 @@ mod tests {
             server: "http://127.0.0.1:1".into(),
             model: "test".into(),
             inference: "http://127.0.0.1:1".into(),
+            summarizer: crate::state::Summarizer::Local,
             port: 1,
             account: "test".into(),
             device_id: "d".into(),

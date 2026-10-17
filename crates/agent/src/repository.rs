@@ -455,6 +455,7 @@ mod tests {
             server: "http://127.0.0.1:9999".into(),
             model: "test".into(),
             inference: "http://127.0.0.1:11434/v1/chat/completions".into(),
+            summarizer: crate::state::Summarizer::Local,
             port: 0,
             account: "test".into(),
             device_id: uuid::Uuid::new_v4().to_string(),

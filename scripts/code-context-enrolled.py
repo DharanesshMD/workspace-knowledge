@@ -78,7 +78,7 @@ def acceptance(origin, owner, mutation, command, provider, start):
                 raise AssertionError('Owned collector phase '+args[0]+' failed; configuration matches approval receipt: '+str(matches)+'; raw output withheld')
             return json.loads(result.stdout)
         try:
-            proc = subprocess.Popen([str(AGENT), '--state-dir', str(state), 'device', 'connect', '--binding', str(binding), '--service', 'backend', '--server', origin, '--port', str(collector_port), '--yes', '--no-browser'], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.Popen([str(AGENT), '--state-dir', str(state), 'device', 'connect', '--binding', str(binding), '--service', 'backend', '--server', origin, '--summarizer', 'rules', '--port', str(collector_port), '--yes', '--no-browser'], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             authorize(json.loads(proc.stderr.readline())['authorization_url'])
             print('Owned collector sign-in returned; waiting for synthetic Keychain storage if prompted.', flush=True)
             stdout, _ = proc.communicate(timeout=300)
