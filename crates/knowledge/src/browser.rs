@@ -81,7 +81,7 @@ impl Knowledge {
                 can_review: r.try_get("can_review").map_err(db)?,
                 policy_revision: r.try_get("policy_revision").map_err(db)?,
                 restrictions,
-                features: vec!["card_provenance".into()],
+                features: lifecycle::policy_features(),
             });
         }
         Ok(result)
