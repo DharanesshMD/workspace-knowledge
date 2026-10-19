@@ -157,3 +157,52 @@ async fn policy_advertises_card_provenance() {
         serde_json::json!(["card_provenance"])
     );
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn reviewer_publishes_assistant_written_partial_card_but_not_plain_partial() {
+    use serde_json::json;
+    let url = std::env::var("WK_TEST_DATABASE_URL").unwrap();
+    assert!(url.ends_with("/wk_test"));
+    let k = wk_knowledge::Knowledge::connect(&url).await.unwrap();
+    let actor = wk_knowledge::Actor {
+        org: uuid::Uuid::new_v4().to_string(),
+        user: "owner".into(),
+    };
+    k.grant(&actor, "demo", &["backend".into()], true)
+        .await
+        .unwrap();
+    let card = |key: &str, provenance: Option<&str>| {
+        let mut v = json!({"schema_version":1,"idempotency_key":key,"policy_revision":1,"title":"Cap retries","intent":"Avoid repeat charges","rationale":"The gateway charges twice on duplicate calls.","decisions":["cap at three"],"constraints":[],"open_questions":[],"service_ids":["backend"],"evidence":[],"lifecycle":"proposed","capture_completeness":"partial","base_revision":null});
+        if let Some(p) = provenance {
+            v["provenance"] = json!(p);
+        }
+        serde_json::from_value::<wk_contracts::CardSubmission>(v).unwrap()
+    };
+    let assistant = k
+        .submit(
+            &actor,
+            "demo",
+            card("publish-http-a", Some("assistant_written")),
+        )
+        .await
+        .unwrap();
+    let plain = k
+        .submit(&actor, "demo", card("publish-http-p", None))
+        .await
+        .unwrap();
+    let app = wk_server::router(k, vec![("synthetic-token".into(), actor)]);
+    let publish = |id: uuid::Uuid| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v1/cards/{id}/publish"))
+            .header("authorization", "Bearer synthetic-token")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"product":"demo"}).to_string()))
+            .unwrap()
+    };
+    let r = app.clone().oneshot(publish(assistant.id)).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let r = app.oneshot(publish(plain.id)).await.unwrap();
+    assert!(!r.status().is_success());
+}
