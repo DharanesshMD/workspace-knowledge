@@ -303,7 +303,7 @@ impl Knowledge {
     }
     pub async fn publish(&self, actor: &Actor, product: &str, id: uuid::Uuid) -> Result<(), Error> {
         let mut tx = self.code_tx(actor, product).await?;
-        let row = sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$4 WHERE c.id=$1 AND c.org=$2 AND c.product=$3 AND NOT c.withdrawn AND c.body->>'capture_completeness'='complete' AND m.can_review AND m.services @> c.services AND m.policy_revision=(c.body->>'policy_revision')::bigint FOR UPDATE OF c FOR SHARE OF m")
+        let row = sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$4 WHERE c.id=$1 AND c.org=$2 AND c.product=$3 AND NOT c.withdrawn AND (c.body->>'capture_completeness'='complete' OR (c.body->>'capture_completeness'='partial' AND c.body->>'provenance'='assistant_written')) AND m.can_review AND m.services @> c.services AND m.policy_revision=(c.body->>'policy_revision')::bigint FOR UPDATE OF c FOR SHARE OF m")
             .bind(id).bind(&actor.org).bind(product).bind(&actor.user)
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::Denied)?;
         let body: serde_json::Value = row.try_get("body").map_err(db)?;
