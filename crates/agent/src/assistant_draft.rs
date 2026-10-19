@@ -91,6 +91,7 @@ pub(crate) fn build(
         capture_completeness: Completeness::Partial,
         base_revision: None,
         observed_at_ms: None,
+        provenance: Some(wk_contracts::Provenance::AssistantWritten),
     };
     card.validate()?;
     // `sensitive_reason` returns a fixed label, never the matched text.

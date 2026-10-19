@@ -2,7 +2,7 @@
 
 These JSON Schema documents are generated from the Rust wire types. They are checked against fresh generation by workspace tests.
 
-- `card-submission-v1.json`: sanitized summary submission only. Caller-supplied lifecycle is restricted to proposed/in_progress. Authenticated product and author come from the server, not the submitted card.
+- `card-submission-v1.json`: sanitized summary submission only. Caller-supplied lifecycle is restricted to proposed/in_progress. Authenticated product and author come from the server, not the submitted card. Optional `provenance` (`assistant_written`) marks a card the developer's assistant wrote and the developer reviewed; it is additive and omitted when absent.
 - `private-event-v1.json`: normalized local collector event. This includes private visible messages and must never be sent to shared knowledge endpoints. Paths still require live local consent and scope validation.
 - `effective-policy-v1.json`: server membership projection returned by the policy endpoint. It cannot be used to grant permissions.
 

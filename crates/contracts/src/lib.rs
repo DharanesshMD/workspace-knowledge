@@ -22,6 +22,13 @@ pub enum Completeness {
     Partial,
     Truncated,
 }
+/// Who wrote a card, when that (and not capture coverage) is what makes it publishable.
+/// Self-declared by the submitter, like `capture_completeness`; the reviewer is the check.
+#[derive(JsonSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Provenance {
+    AssistantWritten,
+}
 #[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceKind {
@@ -62,6 +69,10 @@ pub struct CardSubmission {
     /// When the source work happened (Unix ms), if known. Defaults to submission time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_at_ms: Option<i64>,
+    /// Set only for a card the developer's assistant wrote and the developer reviewed before
+    /// submitting. Omitted from the wire when absent so older servers still accept ordinary cards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Provenance>,
 }
 impl CardSubmission {
     pub fn validate(&self) -> Result<(), String> {
@@ -103,6 +114,9 @@ impl CardSubmission {
             .any(|e| e.reference.trim().is_empty() || e.reference.len() > 2048)
         {
             return Err("invalid evidence reference".into());
+        }
+        if self.provenance.is_some() && self.capture_completeness == Completeness::Truncated {
+            return Err("provenance cannot be set on a truncated card".into());
         }
         Ok(())
     }
