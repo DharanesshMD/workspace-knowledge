@@ -200,11 +200,18 @@ impl KnowledgeMcp {
         {
             return Err("invalid development credentials or product".into());
         }
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(std::time::Duration::from_secs(5))
-            .build()?;
+            .timeout(std::time::Duration::from_secs(5));
+        // An operator-set private CA bundle replaces the public roots; an unusable one is an error.
+        if let Some(certificates) = wk_summarize::tls::from_env("WK_SERVER_CA_FILE")? {
+            builder = builder.tls_built_in_root_certs(false);
+            for certificate in certificates {
+                builder = builder.add_root_certificate(certificate);
+            }
+        }
+        let client = builder.build()?;
         Ok(Self {
             client,
             base: base.trim_end_matches('/').into(),

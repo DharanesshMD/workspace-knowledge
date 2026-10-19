@@ -37,7 +37,7 @@ async fn call(
         };
         return crate::device::signed(c, token, operation, body, 2).await;
     }
-    let r = network::client(2)?
+    let r = network::server_client(c, 2)?
         .request(method, format!("{}{path}", network::server_url(&c.server)?))
         .bearer_auth(token)
         .json(body)
@@ -196,7 +196,7 @@ pub async fn change_context(
         .await?
     } else {
         crate::device::require_device_for_remote(&config.server, false)?;
-        let response = network::client(5)?
+        let response = network::server_client(&config, 5)?
             .post(format!(
                 "{}{product_path}",
                 network::server_url(&config.server)?

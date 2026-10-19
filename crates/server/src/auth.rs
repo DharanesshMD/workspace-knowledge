@@ -8,24 +8,9 @@ use std::{
 const KEY_MAX_AGE: Duration = Duration::from_secs(300);
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 static PROVIDER_CA: OnceLock<Vec<reqwest::Certificate>> = OnceLock::new();
-const CA_BUNDLE_MAX: usize = 65536;
 /// Parse an operator-supplied PEM bundle; every block must be a valid certificate.
 pub fn parse_provider_ca(pem: &[u8]) -> Result<Vec<reqwest::Certificate>, String> {
-    if pem.len() > CA_BUNDLE_MAX {
-        return Err("OIDC CA bundle too large".into());
-    }
-    let certificates =
-        reqwest::Certificate::from_pem_bundle(pem).map_err(|_| "invalid OIDC CA bundle")?;
-    if certificates.is_empty() {
-        return Err("OIDC CA bundle contains no certificates".into());
-    }
-    // Parsing is lazy: building a client is what rejects malformed certificate data.
-    let mut probe = reqwest::Client::builder().tls_built_in_root_certs(false);
-    for certificate in &certificates {
-        probe = probe.add_root_certificate(certificate.clone());
-    }
-    probe.build().map_err(|_| "invalid OIDC CA bundle")?;
-    Ok(certificates)
+    wk_summarize::tls::parse_ca_bundle(pem).map_err(|e| format!("OIDC {e}"))
 }
 /// Pin the CA bundle used for issuer discovery, JWKS and token requests (replaces the public
 /// roots for those requests). Call once at startup, before any provider request.

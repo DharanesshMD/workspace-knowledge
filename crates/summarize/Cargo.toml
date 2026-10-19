@@ -11,4 +11,6 @@ wk-contracts={path="../contracts"}
 reqwest={version="0.12",default-features=false,features=["json","rustls-tls"]}
 tokio={version="1",features=["time"]}
 [dev-dependencies]
+tempfile.workspace=true
+rcgen={version="0.14",default-features=false,features=["pem","ring"]}
 tokio={version="1",features=["macros","rt-multi-thread"]}

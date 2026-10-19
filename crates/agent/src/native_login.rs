@@ -24,6 +24,7 @@ pub struct Attempt {
     state: String,
     nonce: String,
     verifier: PkceCodeVerifier,
+    provider: reqwest::Client,
 }
 pub struct Credential {
     pub token: zeroize::Zeroizing<String>,
@@ -43,8 +44,8 @@ pub fn provider_url(value: &str, development: bool) -> Result<reqwest::Url, Stri
     }
     Ok(u)
 }
-async fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
-    let mut r = network::client(10)?
+async fn get_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
+    let mut r = client
         .get(url)
         .send()
         .await
@@ -65,12 +66,12 @@ async fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 async fn oidc_http(
+    client: reqwest::Client,
     request: openidconnect::HttpRequest,
 ) -> Result<openidconnect::HttpResponse, std::io::Error> {
     let fail = || std::io::Error::other("identity exchange unavailable");
     let (parts, body) = request.into_parts();
-    let mut r = network::client(10)
-        .map_err(|_| fail())?
+    let mut r = client
         .request(parts.method, parts.uri.to_string())
         .headers(parts.headers)
         .body(body)
@@ -90,9 +91,12 @@ async fn oidc_http(
     }
     out.body(bytes).map_err(|_| fail())
 }
-pub async fn begin(server: &str) -> Result<Attempt, String> {
+/// Start a login. `ca` is the operator-approved private CA bundle for the server and its
+/// identity provider; without one the public roots apply.
+pub async fn begin(server: &str, ca: Option<&[reqwest::Certificate]>) -> Result<Attempt, String> {
     let origin = network::server_url(server)?;
-    let response = network::client(3)?
+    let provider = network::client_trusting(ca, 10)?;
+    let response = network::client_trusting(ca, 3)?
         .get(format!("{origin}/collector/config"))
         .send()
         .await
@@ -115,10 +119,13 @@ pub async fn begin(server: &str) -> Result<Attempt, String> {
     let development = origin.starts_with("http://");
     provider_url(&issuer, development)?;
     let mut metadata: CoreProviderMetadata = serde_json::from_slice(
-        &get_bytes(&format!(
-            "{}/.well-known/openid-configuration",
-            issuer.trim_end_matches('/')
-        ))
+        &get_bytes(
+            &provider,
+            &format!(
+                "{}/.well-known/openid-configuration",
+                issuer.trim_end_matches('/')
+            ),
+        )
         .await?,
     )
     .map_err(|_| "invalid identity metadata")?;
@@ -149,7 +156,7 @@ pub async fn begin(server: &str) -> Result<Attempt, String> {
     )?;
     provider_url(metadata.jwks_uri().as_str(), development)?;
     let keys: CoreJsonWebKeySet =
-        serde_json::from_slice(&get_bytes(metadata.jwks_uri().as_str()).await?)
+        serde_json::from_slice(&get_bytes(&provider, metadata.jwks_uri().as_str()).await?)
             .map_err(|_| "invalid identity keys")?;
     if keys.keys().is_empty() || keys.keys().len() > 128 {
         return Err("invalid identity keys".into());
@@ -188,6 +195,7 @@ pub async fn begin(server: &str) -> Result<Attempt, String> {
         state: state.secret().clone(),
         nonce: nonce.secret().clone(),
         verifier,
+        provider,
     })
 }
 pub fn callback(raw: &str, host: &str, state: &str, issuer: &str) -> Result<String, String> {
@@ -267,6 +275,7 @@ impl Attempt {
             .map_err(|_| "login callback unavailable")?
             .to_string();
         let code=tokio::time::timeout(Duration::from_secs(300),async {for _ in 0..32 {let(mut stream,_)=self.listener.accept().await.map_err(|_|"login callback unavailable")?;let mut bytes=Vec::new();let read=tokio::time::timeout(Duration::from_secs(3),async {let mut chunk=[0u8;1024];while !bytes.windows(4).any(|w|w==b"\r\n\r\n"){let n=stream.read(&mut chunk).await.map_err(|_|"invalid callback")?;if n==0||bytes.len()+n>8192{return Err("invalid callback")}bytes.extend_from_slice(&chunk[..n]);}Ok::<(),&str>(())}).await;let result=if matches!(read,Ok(Ok(()))){std::str::from_utf8(&bytes).map_err(|_|"invalid callback".into()).and_then(|raw|callback(raw,&address,&self.state,&self.issuer))}else{Err("invalid callback".into())};let response=if result.is_ok(){"HTTP/1.1 200 OK\r\nContent-Length: 41\r\nCache-Control: no-store\r\nConnection: close\r\n\r\nSign-in received. Return to the collector."}else{"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"};let _=stream.write_all(response.as_bytes()).await;if let Ok(code)=result{return Ok(code)}}Err("login callback rejected")}).await.map_err(|_|"collector sign-in expired")??;
+        let provider = self.provider;
         let client =
             CoreClient::from_provider_metadata(self.metadata, ClientId::new(self.client_id), None)
                 .set_redirect_uri(
@@ -277,7 +286,7 @@ impl Attempt {
             .exchange_code(AuthorizationCode::new(code))
             .map_err(|_| "identity exchange rejected")?
             .set_pkce_verifier(self.verifier)
-            .request_async(&oidc_http)
+            .request_async(&|request| oidc_http(provider.clone(), request))
             .await
             .map_err(|_| "identity exchange rejected")?;
         let id = tokens.id_token().ok_or("identity token missing")?;
@@ -360,66 +369,94 @@ mod live_tests {
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+    type Grant = Arc<Mutex<HashMap<String, String>>>;
+    fn oidc_router(issuer: &str, grant: &Grant, bad_nonce: bool) -> axum::Router {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../server/tests/fixtures/synthetic-rsa-a.json"
+        ))
+        .unwrap();
+        let metadata_issuer = issuer.to_string();
+        let config_issuer = issuer.to_string();
+        let keys = fixture.clone();
+        let token_fixture = fixture.clone();
+        let token_issuer = issuer.to_string();
+        let token_grant = grant.clone();
+        axum::Router::new().route("/collector/config",get(move||{let issuer=config_issuer.clone();async move{Json(json!({"enabled":true,"issuer":issuer,"client_id":"collector-test","audience":"wk-collector"}))}})).route("/.well-known/openid-configuration",get(move||{let issuer=metadata_issuer.clone();async move{Json(json!({"issuer":issuer,"authorization_endpoint":format!("{issuer}/authorize"),"token_endpoint":format!("{issuer}/token"),"jwks_uri":format!("{issuer}/keys"),"response_types_supported":["code"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["RS256"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}))}})).route("/keys",get(move||{let keys=keys.clone();async move{Json(json!({"keys":[{"kty":"RSA","kid":"test","alg":"RS256","use":"sig","n":keys["n"],"e":keys["e"]}]}))}})).route("/token",post(move|Form(body):Form<HashMap<String,String>>|{let fixture=token_fixture.clone();let issuer=token_issuer.clone();let grant=token_grant.clone();async move{let saved=grant.lock().unwrap().clone();assert_eq!(body["grant_type"],"authorization_code");assert_eq!(body["client_id"],"collector-test");assert_eq!(body["redirect_uri"],saved["redirect_uri"]);assert_eq!(PkceCodeChallenge::from_code_verifier_sha256(&PkceCodeVerifier::new(body["code_verifier"].clone())).as_str(),saved["code_challenge"]);let mut header=Header::new(Algorithm::RS256);header.kid=Some("test".into());let claims=json!({"iss":issuer,"aud":"collector-test","sub":"synthetic-developer","nonce":if bad_nonce{"wrong"}else{saved["nonce"].as_str()},"iat":daemon::now().unwrap(),"exp":daemon::now().unwrap()+300});let token=encode(&header,&claims,&EncodingKey::from_rsa_pem(fixture["private_pkcs8_pem"].as_str().unwrap().as_bytes()).unwrap()).unwrap();Json(json!({"access_token":"synthetic-upstream-credential","token_type":"Bearer","expires_in":300,"id_token":token}))}}))
+    }
+    /// Complete a started login the way the system browser would, returning its outcome.
+    async fn finish(attempt: Attempt, grant: &Grant) -> Result<Credential, String> {
+        let url = reqwest::Url::parse(&attempt.url).unwrap();
+        let values: HashMap<String, String> = url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        assert_eq!(values["code_challenge_method"], "S256");
+        *grant.lock().unwrap() = values.clone();
+        let completion = tokio::spawn(attempt.complete());
+        let wrong = format!("{}?code=code&state=wrong", values["redirect_uri"]);
+        assert_eq!(
+            network::client(3)
+                .unwrap()
+                .get(wrong)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::BAD_REQUEST
+        );
+        let mut callback_url = reqwest::Url::parse(&values["redirect_uri"]).unwrap();
+        callback_url
+            .query_pairs_mut()
+            .append_pair("code", "code")
+            .append_pair("state", &values["state"]);
+        assert_eq!(
+            network::client(3)
+                .unwrap()
+                .get(callback_url)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::OK
+        );
+        completion.await.unwrap()
+    }
     #[tokio::test]
     async fn real_loopback_pkce_exchange_rejects_wrong_state_and_nonce() {
         for bad_nonce in [false, true] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let issuer = format!("http://{}", listener.local_addr().unwrap());
-            let fixture: Value = serde_json::from_str(include_str!(
-                "../../server/tests/fixtures/synthetic-rsa-a.json"
-            ))
-            .unwrap();
-            let grant = Arc::new(Mutex::new(HashMap::<String, String>::new()));
-            let metadata_issuer = issuer.clone();
-            let config_issuer = issuer.clone();
-            let keys = fixture.clone();
-            let token_fixture = fixture.clone();
-            let token_issuer = issuer.clone();
-            let token_grant = grant.clone();
-            let router=axum::Router::new().route("/collector/config",get(move||{let issuer=config_issuer.clone();async move{Json(json!({"enabled":true,"issuer":issuer,"client_id":"collector-test","audience":"wk-collector"}))}})).route("/.well-known/openid-configuration",get(move||{let issuer=metadata_issuer.clone();async move{Json(json!({"issuer":issuer,"authorization_endpoint":format!("{issuer}/authorize"),"token_endpoint":format!("{issuer}/token"),"jwks_uri":format!("{issuer}/keys"),"response_types_supported":["code"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["RS256"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}))}})).route("/keys",get(move||{let keys=keys.clone();async move{Json(json!({"keys":[{"kty":"RSA","kid":"test","alg":"RS256","use":"sig","n":keys["n"],"e":keys["e"]}]}))}})).route("/token",post(move|Form(body):Form<HashMap<String,String>>|{let fixture=token_fixture.clone();let issuer=token_issuer.clone();let grant=token_grant.clone();async move{let saved=grant.lock().unwrap().clone();assert_eq!(body["grant_type"],"authorization_code");assert_eq!(body["client_id"],"collector-test");assert_eq!(body["redirect_uri"],saved["redirect_uri"]);assert_eq!(PkceCodeChallenge::from_code_verifier_sha256(&PkceCodeVerifier::new(body["code_verifier"].clone())).as_str(),saved["code_challenge"]);let mut header=Header::new(Algorithm::RS256);header.kid=Some("test".into());let claims=json!({"iss":issuer,"aud":"collector-test","sub":"synthetic-developer","nonce":if bad_nonce{"wrong"}else{saved["nonce"].as_str()},"iat":daemon::now().unwrap(),"exp":daemon::now().unwrap()+300});let token=encode(&header,&claims,&EncodingKey::from_rsa_pem(fixture["private_pkcs8_pem"].as_str().unwrap().as_bytes()).unwrap()).unwrap();Json(json!({"access_token":"synthetic-upstream-credential","token_type":"Bearer","expires_in":300,"id_token":token}))}}));
+            let grant = Grant::default();
+            let router = oidc_router(&issuer, &grant, bad_nonce);
             let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-            let attempt = begin(&issuer).await.unwrap();
-            let url = reqwest::Url::parse(&attempt.url).unwrap();
-            let values: HashMap<String, String> = url
-                .query_pairs()
-                .map(|(k, v)| (k.into_owned(), v.into_owned()))
-                .collect();
-            assert_eq!(values["code_challenge_method"], "S256");
-            *grant.lock().unwrap() = values.clone();
-            let completion = tokio::spawn(attempt.complete());
-            let wrong = format!("{}?code=code&state=wrong", values["redirect_uri"]);
-            assert_eq!(
-                network::client(3)
-                    .unwrap()
-                    .get(wrong)
-                    .send()
-                    .await
-                    .unwrap()
-                    .status(),
-                reqwest::StatusCode::BAD_REQUEST
-            );
-            let mut callback_url = reqwest::Url::parse(&values["redirect_uri"]).unwrap();
-            callback_url
-                .query_pairs_mut()
-                .append_pair("code", "code")
-                .append_pair("state", &values["state"]);
-            assert_eq!(
-                network::client(3)
-                    .unwrap()
-                    .get(callback_url)
-                    .send()
-                    .await
-                    .unwrap()
-                    .status(),
-                reqwest::StatusCode::OK
-            );
-            let result = completion.await.unwrap();
+            let attempt = begin(&issuer, None).await.unwrap();
+            let result = finish(attempt, &grant).await;
             assert_eq!(result.is_err(), bad_nonce);
             if let Ok(credential) = result {
                 assert_eq!(credential.token.as_str(), "synthetic-upstream-credential")
             }
             server.abort();
         }
+    }
+    #[tokio::test]
+    async fn login_behind_a_private_ca_needs_the_pinned_bundle_for_discovery_and_exchange() {
+        use crate::tls_fixture::{pki, serve};
+        let grant = Grant::default();
+        let routed = grant.clone();
+        let (origin, server) = serve(move |origin| oidc_router(origin, &routed, false)).await;
+        let ca = |pem: &[u8]| wk_summarize::tls::parse_ca_bundle(pem).unwrap();
+        for refused in [None, Some(ca(&pki().other_ca))] {
+            let error = begin(&origin, refused.as_deref()).await.err();
+            assert_eq!(
+                error.as_deref(),
+                Some("collector configuration unavailable")
+            );
+        }
+        let pinned = ca(&pki().ca);
+        let attempt = begin(&origin, Some(&pinned)).await.unwrap();
+        let credential = finish(attempt, &grant).await.unwrap();
+        assert_eq!(credential.token.as_str(), "synthetic-upstream-credential");
+        server.abort();
     }
     #[tokio::test]
     async fn native_login_rejects_incomplete_interactive_discovery() {
@@ -462,7 +499,7 @@ mod live_tests {
                     }),
                 );
             let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-            let result = begin(&issuer).await;
+            let result = begin(&issuer, None).await;
             task.abort();
             assert_eq!(
                 result.err().as_deref(),

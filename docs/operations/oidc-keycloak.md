@@ -25,7 +25,22 @@ Out of the box the server trusts only the public CA roots built into its binary.
 - It applies only to requests to the identity provider (discovery, signing keys and token exchange) and **replaces** the public roots for those requests, so it also pins the provider to your CA.
 - The file must contain only valid certificates (maximum 64 KiB). A malformed, empty or wrong-CA bundle stops startup with a clear error.
 - It does not affect the TLS certificate your reverse proxy presents to browsers.
-- The native collector (`wk-agent`) does not yet honor a private CA. Developers using a collector need the server and provider certificates to chain to public roots until that is added.
+
+### Native collector
+
+The collector (`wk-agent`) also trusts only public roots by default. For a server and identity provider behind a private CA, pass the same bundle once when connecting:
+
+```sh
+wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" device connect \
+  --binding /absolute/path/from/binding_file.json --service backend \
+  --server https://knowledge.internal --ca-file /path/to/private-ca.pem --yes
+```
+
+- `--ca-file` is validated like `WK_OIDC_CA_FILE` (certificates only, maximum 64 KiB, malformed or empty rejected) and requires an HTTPS server. Nothing is read from an environment variable.
+- The bundle is copied to `server-ca.pem` in the collector's private state directory. Every later request to the hosted server and its identity provider (discovery, keys, token exchange, signed device requests, `device login`) pins that copy and **replaces** the public roots for them. Local model and loopback traffic are unaffected.
+- Without `--ca-file` the public roots apply and no bundle is stored. A stored bundle that is later unreadable, replaced by a symlink or invalid makes requests fail with `stored CA bundle invalid`; the collector never falls back to public roots. `wk-agent device status` reports `server_trust` as `private_ca` or `public_roots`.
+- The state directory is private (0700), so the bundle is protected like the rest of the collector's configuration. To change the bundle (for example after a CA rotation), connect again with a new private state directory.
+- The optional `wk search` command and the `wk-mcp` bridge, which use environment tokens, read an explicitly set `WK_SERVER_CA_FILE` with the same rules; unset or empty means public roots.
 
 With Docker Compose, mount the bundle read-only and set the variable to its in-container path, for example with a compose override file.
 
@@ -44,12 +59,12 @@ Rotate safely: publish the new key at a lower priority (passive) first, wait at 
 The script creates and removes its own throwaway CA, Keycloak, PostgreSQL and HTTPS proxy containers. It needs Docker, OpenSSL and a built server:
 
 ```sh
-cargo build -p wk-server
+cargo build -p wk-server -p wk-agent -p wk-cli
 python3 scripts/keycloak-acceptance.py --output /tmp/keycloak-result.json
 ```
 
-It checks: browser login with PKCE, state and nonce and the registered HTTPS callback; secure session cookies; replay and forged-state rejection; logout and CSRF; wrong, extra, missing and default-scope audiences; corrupted, unsigned and expired tokens; the native collector's authorization-code flow with an ephemeral loopback port and signed device requests; startup failures for an untrusted or malformed CA, plain-HTTP key URL, issuer mismatch and an unreachable provider; and key rotation. The output holds only pass/fail results, never tokens or credentials.
+It checks: browser login with PKCE, state and nonce and the registered HTTPS callback; secure session cookies; replay and forged-state rejection; logout and CSRF; wrong, extra, missing and default-scope audiences; corrupted, unsigned and expired tokens; the native collector's authorization-code flow with an ephemeral loopback port and signed device requests; and, on macOS, the real `wk-agent device connect --ca-file`, `device poll` and `device login` against the private-CA Keycloak and Caddy stack, including refusal without the bundle, with an unrelated or malformed bundle, and after the stored bundle is replaced or corrupted (this step uses synthetic macOS keychain entries and is reported as skipped elsewhere); startup failures for an untrusted or malformed CA, plain-HTTP key URL, issuer mismatch and an unreachable provider; and key rotation. The output holds only pass/fail results, never tokens or credentials.
 
 ## Not covered
 
-Other providers; a provider with a public-CA certificate; provider-side logout or session revocation (the server's session ends on its own logout or expiry, and bearer tokens stay valid until they expire); real browser rendering of the Keycloak login page (the script submits the form directly); multiple users, groups or organizations; provider outage and recovery drills; and the native collector against a private CA.
+Other providers; a provider with a public-CA certificate; provider-side logout or session revocation (the server's session ends on its own logout or expiry, and bearer tokens stay valid until they expire); real browser rendering of the Keycloak login page (the script submits the form directly); multiple users, groups or organizations; provider outage and recovery drills; and the native collector on Linux or Windows against a private CA (the end-to-end check runs on macOS only; the TLS behavior is also covered by cross-platform unit tests).

@@ -437,12 +437,18 @@ fn search(product: &str, query: &str, limit: u32) -> Result<Value, String> {
     let token = std::env::var("WK_ACCESS_TOKEN")
         .or_else(|_| std::env::var("WK_DEV_TOKEN"))
         .map_err(|_| "knowledge access token required")?;
-    let client = reqwest::blocking::Client::builder()
+    let mut builder = reqwest::blocking::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|_| "network unavailable")?;
+        .timeout(std::time::Duration::from_secs(10));
+    // An operator-set private CA bundle replaces the public roots; an unusable one is an error.
+    if let Some(certificates) = wk_summarize::tls::from_env("WK_SERVER_CA_FILE")? {
+        builder = builder.tls_built_in_root_certs(false);
+        for certificate in certificates {
+            builder = builder.add_root_certificate(certificate);
+        }
+    }
+    let client = builder.build().map_err(|_| "network unavailable")?;
     let response = client
         .post(format!("{}/v1/search", base.trim_end_matches('/')))
         .bearer_auth(token)

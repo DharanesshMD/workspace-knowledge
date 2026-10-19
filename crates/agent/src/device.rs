@@ -200,7 +200,7 @@ pub async fn send_with_key(
         token,
         &bytes,
     )?;
-    let response = network::client(seconds)?
+    let response = network::server_client(c, seconds)?
         .post(format!("{origin}{path}"))
         .bearer_auth(token)
         .headers(headers)
@@ -371,6 +371,10 @@ pub struct ConnectArgs {
     pub model: String,
     #[arg(long, default_value_t = 4319)]
     pub port: u16,
+    /// PEM bundle of the private CA behind the server and its identity provider. It replaces
+    /// the public roots for those requests only and is copied into private state.
+    #[arg(long)]
+    pub ca_file: Option<PathBuf>,
     #[arg(long)]
     pub yes: bool,
     #[arg(long)]
@@ -400,6 +404,7 @@ async fn authenticate(
     server: &str,
     no_browser: bool,
     test_token: bool,
+    ca: Option<&[reqwest::Certificate]>,
 ) -> Result<crate::native_login::Credential, String> {
     if test_token {
         let origin = network::server_url(server)?;
@@ -414,7 +419,7 @@ async fn authenticate(
             expires_at: daemon::now()? + 300,
         });
     }
-    let attempt = crate::native_login::begin(server).await?;
+    let attempt = crate::native_login::begin(server, ca).await?;
     eprintln!(
         "{}",
         json!({"authorization_url":attempt.url,"expires_in_seconds":300})
@@ -443,7 +448,31 @@ pub fn credential_current(dir: &std::path::Path) -> Result<bool, String> {
         .map_err(|_| "invalid device authentication state")?;
     Ok(auth.expires_at > daemon::now()? + 5)
 }
+/// Place the approved bundle in private state before any request, so registration uses it.
+/// Without `--ca-file` any leftover bundle is removed: trust is never inherited.
+fn install_ca(dir: &std::path::Path, pem: Option<&[u8]>) -> Result<(), String> {
+    let path = dir.join(network::SERVER_CA_FILE);
+    let Some(pem) = pem else {
+        return match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err("state unavailable".into()),
+            _ => Ok(()),
+        };
+    };
+    let mut f = tempfile::NamedTempFile::new_in(dir).map_err(|_| "state unavailable")?;
+    std::io::Write::write_all(&mut f, pem).map_err(|_| "state write failed")?;
+    f.as_file().sync_all().map_err(|_| "state sync failed")?;
+    f.persist(path).map_err(|_| "state commit failed")?;
+    Ok(())
+}
 pub async fn connect(dir: &std::path::Path, args: ConnectArgs) -> Result<Value, String> {
+    let result = connect_with_ca(dir, args).await;
+    // A failed attempt must not leave a bundle behind for a later one to inherit.
+    if result.is_err() && !dir.join("agent.json").exists() {
+        let _ = std::fs::remove_file(dir.join(network::SERVER_CA_FILE));
+    }
+    result
+}
+async fn connect_with_ca(dir: &std::path::Path, args: ConnectArgs) -> Result<Value, String> {
     if !args.yes {
         return Err(
             "review exact product, service, server and summarizer settings, then pass --yes".into(),
@@ -462,6 +491,19 @@ pub async fn connect(dir: &std::path::Path, args: ConnectArgs) -> Result<Value, 
         return Err("invalid local approval or state location".into());
     }
     network::server_url(&args.server)?;
+    let ca_pem = args
+        .ca_file
+        .as_deref()
+        .map(wk_summarize::tls::read_ca_file)
+        .transpose()?;
+    if ca_pem.is_some() && !args.server.starts_with("https://") {
+        return Err("--ca-file requires an HTTPS server".into());
+    }
+    let ca = ca_pem
+        .as_deref()
+        .map(wk_summarize::tls::parse_ca_bundle)
+        .transpose()?;
+    install_ca(dir, ca_pem.as_deref())?;
     let (summarizer, inference, model) =
         state::resolve_summarizer(args.summarizer, args.inference, args.model)?;
     let c = state::Config {
@@ -483,7 +525,8 @@ pub async fn connect(dir: &std::path::Path, args: ConnectArgs) -> Result<Value, 
             state_dir: dir.to_path_buf(),
         }),
     };
-    let credential = authenticate(&c.server, args.no_browser, args.test_token).await?;
+    let credential =
+        authenticate(&c.server, args.no_browser, args.test_token, ca.as_deref()).await?;
     let mut seed = zeroize::Zeroizing::new([0u8; 32]);
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut *seed);
     let key = SigningKey::from_bytes(&seed);
@@ -549,7 +592,13 @@ pub async fn run(dir: &std::path::Path, action: Action) -> Result<Value, String>
             let c = state::load(dir)?;
             let b = state::base_binding(&c)?;
             validate(&c, &b)?;
-            let credential = authenticate(&c.server, no_browser, false).await?;
+            let credential = authenticate(
+                &c.server,
+                no_browser,
+                false,
+                network::server_ca(&c)?.as_deref(),
+            )
+            .await?;
             signed(&c, &credential.token, "policy", &json!({}), 3).await?;
             persist_auth(dir, &credential)?;
             Ok(json!({"authenticated":true,"device_id":c.device_id}))
@@ -564,7 +613,7 @@ pub fn status(dir: &std::path::Path) -> Result<Value, String> {
     let b = state::base_binding(&c)?;
     validate(&c, &b)?;
     Ok(
-        json!({"registered_device":true,"device_id":c.device_id,"requested":remote(&c)?,"upstream_auth_current":credential_current(dir).unwrap_or(false),"capture_coverage":"unknown"}),
+        json!({"registered_device":true,"device_id":c.device_id,"requested":remote(&c)?,"upstream_auth_current":credential_current(dir).unwrap_or(false),"server_trust":if dir.join(network::SERVER_CA_FILE).exists(){"private_ca"}else{"public_roots"},"capture_coverage":"unknown"}),
     )
 }
 #[cfg(test)]
@@ -657,6 +706,7 @@ mod tests {
             yes: true,
             no_browser: true,
             test_token: false,
+            ca_file: None,
         };
         let e = connect(&fresh, args(Some(state::Summarizer::Local), None))
             .await
@@ -673,6 +723,72 @@ mod tests {
         .unwrap_err();
         assert!(e.contains("cannot be combined"), "{e}");
         assert!(!fresh.join("agent.json").exists());
+    }
+    #[test]
+    fn status_names_the_server_trust_in_use() {
+        let (_dir, c, b) = fixture();
+        save_receipt(&c, &b).unwrap();
+        let dir = c.device.as_ref().unwrap().state_dir.clone();
+        assert_eq!(status(&dir).unwrap()["server_trust"], "public_roots");
+        std::fs::write(
+            dir.join(network::SERVER_CA_FILE),
+            &crate::tls_fixture::pki().ca,
+        )
+        .unwrap();
+        assert_eq!(status(&dir).unwrap()["server_trust"], "private_ca");
+    }
+    #[tokio::test]
+    async fn connect_pins_a_private_ca_only_when_one_is_named_and_leaves_nothing_on_failure() {
+        let (dir, c, _b) = fixture();
+        let fresh = dir.path().join("fresh");
+        std::fs::create_dir(&fresh).unwrap();
+        let args = |server: &str, ca_file: Option<std::path::PathBuf>| ConnectArgs {
+            binding: c.binding_file.clone(),
+            service: "backend".into(),
+            server: server.into(),
+            inference: None,
+            summarizer: None,
+            model: "local-model".into(),
+            port: 4319,
+            yes: true,
+            no_browser: true,
+            test_token: false,
+            ca_file,
+        };
+        let write = |name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let good = write("ca.pem", &crate::tls_fixture::pki().ca);
+        let missing = dir.path().join("missing.pem");
+        let junk = write("junk.pem", b"not a certificate");
+        let oversized = write("big.pem", &vec![b'A'; 70_000]);
+        for bad in [missing, junk, oversized] {
+            assert!(connect(&fresh, args("https://127.0.0.1:1", Some(bad)))
+                .await
+                .is_err());
+        }
+        let e = connect(&fresh, args("http://127.0.0.1:1", Some(good.clone())))
+            .await
+            .unwrap_err();
+        assert!(e.contains("requires an HTTPS server"), "{e}");
+        // A valid bundle with an unreachable server fails at sign-in and leaves no trust behind.
+        assert!(connect(&fresh, args("https://127.0.0.1:1", Some(good)))
+            .await
+            .is_err());
+        assert!(!fresh.join("agent.json").exists());
+        assert!(!fresh.join(network::SERVER_CA_FILE).exists());
+        // Without --ca-file a stale bundle from an interrupted attempt is not trusted.
+        std::fs::write(
+            fresh.join(network::SERVER_CA_FILE),
+            &crate::tls_fixture::pki().ca,
+        )
+        .unwrap();
+        assert!(connect(&fresh, args("https://127.0.0.1:1", None))
+            .await
+            .is_err());
+        assert!(!fresh.join(network::SERVER_CA_FILE).exists());
     }
     #[tokio::test]
     async fn delayed_controls_cannot_roll_back_a_newer_pause_revision() {

@@ -8,7 +8,9 @@ and keys are synthetic and random per run. Output is a pass/fail ledger with no
 tokens or credentials.
 
 Usage: python3 scripts/keycloak-acceptance.py [--keycloak-image IMAGE] [--output FILE]
-Requires Docker, openssl and a built target/debug/wk-server.
+Requires Docker, openssl and built target/debug/{wk-server,wk-agent,wk}. The native
+collector check stores synthetic credentials in the macOS keychain (removed afterwards) and is
+skipped, and reported as skipped, on other platforms.
 """
 import argparse, base64, hashlib, html, http.cookiejar, json, os, re, secrets, shutil
 import socket, ssl, subprocess, sys, tempfile, time, urllib.error, urllib.parse
@@ -17,6 +19,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "target/debug/wk-server"
+AGENT = ROOT / "target/debug/wk-agent"
+WK = ROOT / "target/debug/wk"
 REALM = "wk"
 API_AUDIENCE = "wk-api"
 COLLECTOR_AUDIENCE = "wk-collector"
@@ -485,6 +489,9 @@ def accept(stack, ledger):
     status, _, _ = signed("policy", {"product": "demo", "approval_hash": approval, "request": {}}, good)
     ledger.check("signed collector request with an API-audience token is rejected", status == 401, str(status))
 
+    # 4b. The native collector reaches the same private-CA stack with its own --ca-file.
+    collector = native_collector(stack, ledger)
+
     # 5. Misconfiguration fails closed with an operator-readable reason.
     other_ca = ROOT / "crates/server/tests/fixtures/synthetic-ca.pem"
     garbage = stack.work / "garbage.pem"
@@ -535,7 +542,78 @@ def accept(stack, ledger):
         time.sleep(3)
     ledger.check("token signed by a withdrawn key is rejected after the next refresh", rejected_after is not None, "still accepted")
     ledger.check("tokens from the promoted key keep working", api(ca_client, after)[0] == 200)
-    return {"new_key_accepted_after_seconds": accepted_after, "withdrawn_key_rejected_after_seconds": rejected_after}
+    return {"new_key_accepted_after_seconds": accepted_after, "withdrawn_key_rejected_after_seconds": rejected_after, "native_collector": collector}
+
+
+def native_collector(stack, ledger):
+    """`wk-agent device connect` against the private-CA stack: server and provider trust only --ca-file."""
+    if sys.platform != "darwin":
+        return "skipped: the harness cleans up synthetic macOS keychain entries only"
+    scratch = Path(tempfile.mkdtemp(prefix="wk-kc-agent-", dir=stack.work))
+    workspace, consent = scratch / "workspace", scratch / "approval"
+    (workspace / "backend").mkdir(parents=True)
+    run(str(WK), "--state-dir", str(consent), "workspace", "approve", str(workspace), "--product", "demo", "--service", "backend", "--yes")
+    binding = consent / (hashlib.sha256(str(workspace.resolve()).encode()).hexdigest() + ".json")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    states = []
+
+    def connect(state, *extra):
+        states.append(state)
+        return subprocess.Popen([str(AGENT), "--state-dir", str(state), "device", "connect", "--binding", str(binding), "--service", "backend",
+                                 "--server", stack.app_origin, "--summarizer", "rules", "--yes", "--no-browser", *extra],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def agent(state, *args):
+        return subprocess.run([str(AGENT), "--state-dir", str(state), *args], capture_output=True, text=True, timeout=120)
+
+    def sign_in(proc, expected_issuer):
+        """Play the system browser: complete the Keycloak login and return the loopback callback to the collector."""
+        attempt = json.loads(proc.stderr.readline())["authorization_url"]
+        assert attempt.startswith(expected_issuer), "authorization URL points elsewhere"
+        location = stack.authenticate(Client(stack.ca), attempt)
+        assert opener.open(location, timeout=30).status == 200
+
+    try:
+        # Without a bundle the public roots cannot verify the private CA, and nothing falls back.
+        other = ROOT / "crates/server/tests/fixtures/synthetic-ca.pem"
+        garbage = scratch / "garbage.pem"
+        garbage.write_text("not a certificate")
+        for label, extra in (("no --ca-file", ()), ("an unrelated --ca-file", ("--ca-file", str(other))), ("a malformed --ca-file", ("--ca-file", str(garbage)))):
+            state = scratch / ("refused-" + label.replace(" ", "-"))
+            p = connect(state, *extra)
+            _, error = p.communicate(timeout=120)
+            ledger.check(f"collector connect fails closed with {label}", p.returncode != 0 and not (state / "agent.json").exists()
+                         and not (state / "server-ca.pem").exists(), error.strip()[:100])
+        native = scratch / "native"
+        proc = connect(native, "--ca-file", str(stack.ca))
+        sign_in(proc, stack.issuer)
+        stdout, error = proc.communicate(timeout=300)
+        connected = json.loads(stdout) if proc.returncode == 0 else {}
+        ledger.check("collector connects through the private-CA Keycloak and Caddy with --ca-file", bool(connected.get("connected")), error.strip()[:160])
+        stored = native / "server-ca.pem"
+        ledger.check("the approved bundle is copied into private state, owner-only", stored.exists() and stored.read_bytes() == stack.ca.read_bytes()
+                     and (stored.stat().st_mode & 0o077) == 0)
+        status = agent(native, "device", "status")
+        ledger.check("collector status reports the private CA", status.returncode == 0 and json.loads(status.stdout).get("server_trust") == "private_ca", status.stderr[:100])
+        poll = agent(native, "device", "poll")
+        ledger.check("signed collector poll reaches the server over the private CA", poll.returncode == 0, poll.stderr[:160])
+        login = subprocess.Popen([str(AGENT), "--state-dir", str(native), "device", "login", "--no-browser"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        sign_in(login, stack.issuer)
+        out, error = login.communicate(timeout=180)
+        ledger.check("collector re-login uses the stored bundle for discovery and token exchange", login.returncode == 0 and json.loads(out).get("authenticated") is True, error.strip()[:160])
+        stored.write_bytes(other.read_bytes())
+        tampered = agent(native, "device", "poll")
+        ledger.check("a replaced bundle that no longer chains to the server stops the collector", tampered.returncode != 0, tampered.stderr[:100])
+        stored.write_text("garbage")
+        broken = agent(native, "device", "poll")
+        ledger.check("an unusable stored bundle fails instead of using public roots", broken.returncode != 0 and "stored CA bundle invalid" in broken.stderr, broken.stderr[:100])
+    finally:
+        for state in states:
+            account = hashlib.sha256(str(state.resolve() if state.exists() else state).encode()).hexdigest()
+            for purpose in ("capture-key", "ipc-key", "device-key", "server-token"):
+                subprocess.run(["/usr/bin/security", "delete-generic-password", "-s", "workspace-knowledge", "-a", f"{account}:{purpose}"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return "ran"
 
 
 def main():
@@ -543,7 +621,7 @@ def main():
     parser.add_argument("--keycloak-image", default="quay.io/keycloak/keycloak:26.4")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    assert SERVER.exists(), "build target/debug/wk-server first"
+    assert SERVER.exists() and AGENT.exists() and WK.exists(), "build target/debug/{wk-server,wk-agent,wk} first"
     ledger = Ledger()
     stack = Stack(args.keycloak_image)
     try:

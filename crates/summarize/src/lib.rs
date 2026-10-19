@@ -1,4 +1,5 @@
 //! Local inference only. Generated summaries stay private unless policy and review allow publication.
+pub mod tls;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use wk_contracts::{CardSubmission, Completeness, Lifecycle};

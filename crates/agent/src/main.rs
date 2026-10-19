@@ -22,6 +22,8 @@ mod repository;
 mod rules_draft;
 mod state;
 mod team;
+#[cfg(test)]
+mod tls_fixture;
 use clap::{Parser, Subcommand};
 use rand::RngCore;
 use serde_json::{json, Value};

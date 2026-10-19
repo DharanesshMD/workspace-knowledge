@@ -42,6 +42,8 @@ wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" device c
 wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" serve
 ```
 
+If your server and identity provider use a private certificate authority, add `--ca-file /path/to/private-ca.pem` to `device connect`; the collector then trusts only that bundle for them. See [Keycloak setup: native collector](oidc-keycloak.md#native-collector).
+
 `device connect` opens the system browser for upstream public-client OIDC/PKCE sign-in. The token and installation signing key stay in the native OS credential store. Local state stores public configuration, approval receipts and credential expiry. Allow only expected Workspace Knowledge credential-store prompts. Test foreground operation before enabling startup.
 
 In another terminal, run `wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" doctor`. Then follow the [adapter instructions](../adapters/setup.md) for your exact client/version. Connecting a device alone does not install hooks or establish capture coverage. Each collector state binds one chosen service; multiple services require explicit attribution.
@@ -79,7 +81,7 @@ Configure secrets through your deployment secret manager. The required variables
 | `WK_POSTGRES_PASSWORD` | Protected database owner password |
 | `WK_DATABASE_URL` | Runtime connection using the restricted `wk_app` role, never `wk_owner` |
 | `WK_OIDC_ISSUER`, `WK_OIDC_AUDIENCE`, `WK_OIDC_JWKS_URL` | Fixed upstream HTTPS issuer, API audience and verification keys |
-| `WK_OIDC_CA_FILE` | Optional PEM bundle for an identity provider behind a private CA; replaces public roots for provider requests only. See [Keycloak setup](oidc-keycloak.md) |
+| `WK_OIDC_CA_FILE` | Optional PEM bundle for an identity provider behind a private CA; replaces public roots for provider requests only. Collectors take the bundle with `device connect --ca-file`. See [Keycloak setup](oidc-keycloak.md) |
 | `WK_BROWSER_CLIENT_ID` | Registered portal authorization-code client |
 | `WK_BROWSER_CLIENT_SECRET` | Optional secret for a confidential browser client; omit for a public client |
 | `WK_CONSOLE_ORIGIN` | Exact public HTTPS portal origin |
