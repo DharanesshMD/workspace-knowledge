@@ -7,8 +7,7 @@ pub struct Policy {
     pub can_review: bool,
     pub policy_revision: i64,
     pub restrictions: admin::ProductPolicy,
-    /// Server capabilities a collector may rely on. `card_provenance`: accepts `provenance` on
-    /// card submissions and lets a reviewer publish an `assistant_written` partial card.
+    /// Server capabilities a collector may rely on. `card_provenance`: accepts `provenance` on card submissions and lets a reviewer publish an `assistant_written` partial card.
     pub features: Vec<String>,
 }
 /// Capabilities every policy response advertises to collectors.
