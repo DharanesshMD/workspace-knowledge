@@ -97,6 +97,10 @@ impl Knowledge {
         if old.revision != base {
             return Err(Error::Conflict);
         }
+        // The origin label is part of what made the card publishable; a correction keeps it as is.
+        if old.body.provenance != body.provenance {
+            return Err(Error::Invalid);
+        }
         sqlx::query("INSERT INTO card_revisions(org,product,card_id,revision,body,changed_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING").bind(&a.org).bind(product).bind(id).bind(base).bind(serde_json::to_value(&old.body).map_err(|_|Error::Invalid)?).bind(&a.user).execute(&mut *tx).await.map_err(db)?;
         let r=sqlx::query("UPDATE cards SET body=$1,services=$2,revision=revision+1,published=FALSE WHERE id=$3 RETURNING id,body,revision,published").bind(&v).bind(&body.service_ids).bind(id).fetch_one(&mut *tx).await.map_err(db)?;
         sqlx::query("INSERT INTO card_revisions(org,product,card_id,revision,body,changed_by) VALUES($1,$2,$3,$4,$5,$6)").bind(&a.org).bind(product).bind(id).bind(base+1).bind(v).bind(&a.user).execute(&mut *tx).await.map_err(db)?;
