@@ -23,6 +23,67 @@ fn seeded_sensitive_inputs_and_remote_inference_are_rejected() {
     }
     assert!(wk_summarize::local_url("http://127.0.0.1:11434/v1/chat/completions").is_ok());
 }
+
+#[tokio::test]
+async fn contact_details_are_held_before_any_provider_validation_or_contact() {
+    for (source, expected_reason) in [
+        (
+            "Fictional colleague Sam can be reached at sam.synthetic@example.invalid",
+            "contact_email",
+        ),
+        (
+            "Fictional colleague Sam can be reached at +1-202-555-0142",
+            "contact_phone",
+        ),
+        (
+            "Fictional colleague Sam can be reached at (202) 555-0142",
+            "contact_phone",
+        ),
+        (
+            "Fictional colleague Sam can be reached at 202.555.0142",
+            "contact_phone",
+        ),
+        (
+            "Fictional colleague Sam can be reached at 202 555 0142",
+            "contact_phone",
+        ),
+        (
+            "Fictional colleague Sam lives at 123 Example Street",
+            "contact_address",
+        ),
+        ("架空の連絡先: María +81-90-1234-5678", "contact_phone"),
+    ] {
+        assert_eq!(
+            wk_summarize::sensitive_reason(source),
+            Some(expected_reason),
+            "pattern missed: {source}"
+        );
+        let result =
+            wk_summarize::extract("https://must-not-be-contacted.invalid", "synthetic", source)
+                .await;
+        assert_eq!(
+            result.err().expect("contact details must be held"),
+            format!("source requires private review ({expected_reason})"),
+            "source was not held: {source}"
+        );
+    }
+    assert!(wk_summarize::sensitive_reason("Tenant-2026 uses API version 1.2.3").is_none());
+}
+
+#[tokio::test]
+async fn oversized_source_is_rejected_before_provider_validation_or_contact() {
+    let source = "x".repeat(128 * 1024 + 1);
+    let result = wk_summarize::extract(
+        "https://must-not-be-contacted.invalid",
+        "synthetic",
+        &source,
+    )
+    .await;
+    assert_eq!(
+        result.err().expect("oversized source must be held"),
+        "source too large"
+    );
+}
 #[test]
 fn summaries_cannot_promote_implementation() {
     let e = wk_summarize::Extract {

@@ -12,7 +12,7 @@ Git brings the code into your checkout. Workspace Knowledge brings the recorded 
 
 [Try the demo](#quickstart) · [Join a team](#join-a-team-server) · [Host a server](#host-a-team-server) · [Documentation](#documentation) · [Contribute](CONTRIBUTING.md)
 
-> **Source-only alpha candidate, not yet published:** the first scope is a Linux Docker server with macOS developers. Local portal and Claude Code 2.1.296 `Edit`/`Write` acceptance passed with synthetic fixtures. Capture remains partial; strict model-sensitive privacy qualification remains open. The RSA dependency has been removed; unsuppressed Cargo audit reports zero vulnerabilities and one informational maintenance warning. Automatic publication is disabled. Read the [limitations](#limitations-and-release-status), [alpha launch packet](docs/operations/public-alpha.md) and [unreleased changelog](CHANGELOG.md) before choosing a deployment.
+> **Latest release: `v0.1.0-alpha.3`, the private source-only prerelease.** The tag points to `5b982a5`; `main` has since advanced and includes model-free draft improvements. This is an evaluation release, not production-certified or production-supported. Production OIDC/HTTPS, broader privacy/client qualification, a real-team target-server pilot, macOS signing/notarization and independent security review remain open. Automatic publication is disabled. See [current release readiness](docs/operations/production-readiness.md), [limitations](#limitations-and-release-status) and the [changelog](CHANGELOG.md).
 
 <img src="docs/assets/team-context-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
 
@@ -151,7 +151,7 @@ cargo build --locked -p wk-cli
 python scripts/demo.py
 ```
 
-These instructions target the default branch, `main`. After the `v0.1.0-alpha.1` tag exists, add `--branch v0.1.0-alpha.1` to evaluate exactly that prerelease.
+These instructions target the default branch, `main`. To evaluate the currently published source-only prerelease exactly, use `git clone --branch v0.1.0-alpha.3 https://github.com/DharanesshMD/workspace-knowledge.git`; that tag predates the current `main` branch.
 
 The demo creates a temporary synthetic workspace, approves one service, rejects out-of-scope paths, replays a visible conversation fixture and checks that pause stops eligibility. Successful output ends with:
 
@@ -445,11 +445,11 @@ The repository includes implementation and synthetic/local acceptance records. I
 | Knowledge completeness | Undocumented rationale and dependencies remain gaps; source-backed briefs cannot guarantee a safe change |
 | Identity/deployment | Production-provider OIDC/TLS acceptance and real-client remote OAuth certification remain |
 | Native distribution | Owned macOS source installation/Keychain/user-session startup passed; Apple signing/notarization and distributed installer acceptance remain |
-| Security | RSA dependency removed; one informational PEM-parser maintenance warning; strict model-sensitive corpus failed; production security assessment remains |
+| Security | RSA runtime dependency removed; current local audit has zero vulnerability findings and four informational unmaintained-dependency advisories; six-sample local Qwen privacy corpus passes with deterministic contact holds, but broader privacy qualification and independent production security assessment remain |
 | Capacity | Ten-minute local five-identity soak passed; target-server/team, long-duration capacity and protected-edit workload measurement remain |
 | Optional components | Hybrid retrieval requires explicit pgvector/local model configuration and indexing; representative quality/provider capacity remain unqualified. Advisory assessment needs an approved endpoint; Enterprise capture needs entitlement and live acceptance |
 
-The first candidate targets a Linux Docker server and macOS developers. See the [bounded v0.1 checklist](docs/operations/v0.1-release.md) and [earlier readiness evidence](docs/reviews/2026-10-12-v0.1-readiness.md). Production identity testing is deferred. See the [dependency remediation evidence](docs/reviews/2026-10-13-oidc-rsa-remediation.md) and exact-head PR checks for current audit status.
+The source-only alpha evaluation target is a Linux Docker server and macOS developers. Production support has not been qualified. See the [production readiness ledger](docs/operations/production-readiness.md), [v0.1 release checklist](docs/operations/v0.1-release.md), and dated acceptance evidence. The RSA runtime dependency was removed; exact-head automated checks and remaining security/operations gates are tracked in the readiness ledger.
 
 Release work should prioritize these gates before broader support claims. The [completion matrix](docs/architecture/completion-matrix.md) and dated acceptance records distinguish implemented paths from externally verified behavior.
 

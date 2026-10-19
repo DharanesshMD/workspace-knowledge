@@ -1,4 +1,5 @@
 """Exercise source installation/removal in a disposable user prefix (POSIX)."""
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -15,6 +16,8 @@ class SourceInstallTests(unittest.TestCase):
         self.base = Path(self.temporary.name)
         self.root = self.base / "source checkout"
         self.prefix = self.base / "user prefix"
+        self.home = self.base / "user home"
+        self.home.mkdir()
         scripts = self.root / "deploy/scripts"
         scripts.mkdir(parents=True)
         repository = Path(__file__).resolve().parents[2]
@@ -38,12 +41,21 @@ for index, arg in enumerate(sys.argv[1:], 1):
         build.chmod(0o755)
         # The old installer uses system Cargo; route only that dependency to the
         # same fixture so a missing executable is a regression, not a build error.
-        self.env = dict(os.environ, WK_PREFIX=str(self.prefix),
+        self.env = dict(os.environ, HOME=str(self.home), WK_PREFIX=str(self.prefix),
                         PATH=str(build.parent) + os.pathsep + os.environ["PATH"])
 
     def install(self, cwd):
-        subprocess.run(["sh", str(self.root / "deploy/scripts/install-source.sh")],
-                       cwd=cwd, env=self.env, check=True, capture_output=True, text=True)
+        return subprocess.run(["sh", str(self.root / "deploy/scripts/install-source.sh")],
+                              cwd=cwd, env=self.env, check=True, capture_output=True, text=True)
+
+    def test_clean_install_prints_exact_path_and_keeps_setup_opt_in(self):
+        result = self.install(self.root)
+        self.assertIn(f"Add the install directory ({self.prefix}/bin) to PATH", result.stdout)
+        self.assertIn("No capture consent, hooks or startup services were enabled.", result.stdout)
+        self.assertEqual(sorted(path.name for path in self.prefix.iterdir()), ["bin"])
+        self.assertEqual(sorted(path.name for path in (self.prefix / "bin").iterdir()),
+                         ["wk", "wk-agent", "wk-env", "wk-mcp", "wk-server"])
+        self.assertEqual(list(self.home.iterdir()), [])
 
     def test_installs_every_user_command_including_mcp(self):
         self.install(self.root)
@@ -68,6 +80,22 @@ for index, arg in enumerate(sys.argv[1:], 1):
                        env=self.env, check=True, capture_output=True)
         self.assertEqual(sorted(p.name for p in (self.prefix / "bin").iterdir()), ["unrelated"])
         self.assertEqual(state.read_text(encoding="utf-8"), "preserved")
+
+    def test_uninstall_and_same_revision_reinstall_restores_exact_binary_hashes(self):
+        self.install(self.root)
+        binaries = ("wk", "wk-agent", "wk-env", "wk-server", "wk-mcp")
+
+        def hashes():
+            return {
+                binary: hashlib.sha256((self.prefix / "bin" / binary).read_bytes()).hexdigest()
+                for binary in binaries
+            }
+
+        original = hashes()
+        subprocess.run(["sh", str(self.root / "deploy/scripts/uninstall.sh")],
+                       env=self.env, check=True, capture_output=True)
+        self.install(self.root)
+        self.assertEqual(hashes(), original)
 
 
 if __name__ == "__main__":

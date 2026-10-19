@@ -11,5 +11,5 @@ for binary in wk wk-agent wk-env wk-server wk-mcp; do
   install -m 755 "target/release/$binary" "$prefix/bin/$binary"
 done
 printf 'Installed wk, wk-agent, wk-env, wk-server and wk-mcp in %s/bin\n' "$prefix"
-printf '%s\n' 'Add this directory to PATH if needed. See docs/operations/install.md for team connection.'
+printf 'Add the install directory (%s/bin) to PATH if needed. See docs/operations/install.md for team connection.\n' "$prefix"
 printf '%s\n' 'No capture consent, hooks or startup services were enabled.'

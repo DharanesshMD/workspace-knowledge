@@ -17,10 +17,125 @@ pub fn sensitive(text: &str) -> bool {
     sensitive_reason(text).is_some()
 }
 
+fn looks_like_email(token: &str) -> bool {
+    let token = token.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '<' | '>' | ',' | ';' | ':' | '(' | ')' | '[' | ']' | '"' | '\'' | '.'
+        )
+    });
+    let Some((local, domain)) = token.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.is_empty()
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && domain.contains('.')
+        && local
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".!#$%&'*+-/=?^_`{|}~".contains(&byte))
+        && domain
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".-".contains(&byte))
+}
+
+fn looks_like_phone(token: &str) -> bool {
+    let token = token.trim_matches(|ch: char| {
+        ch.is_whitespace() || matches!(ch, ',' | ';' | ':' | '.' | '"' | '\'')
+    });
+    let mut digits = 0;
+    let mut groups = 0;
+    let mut in_digits = false;
+    for ch in token.chars() {
+        if ch.is_ascii_digit() {
+            digits += 1;
+            if !in_digits {
+                groups += 1;
+                in_digits = true;
+            }
+        } else if ch.is_whitespace() || matches!(ch, '+' | '-' | '(' | ')' | '.') {
+            in_digits = false;
+        } else {
+            return false;
+        }
+    }
+    let international = token.starts_with('+');
+    (international && (7..=15).contains(&digits) || digits == 10) && (groups >= 2 || international)
+}
+
+fn contains_phone_number(text: &str) -> bool {
+    let mut candidate = String::new();
+    let mut has_digit = false;
+    for ch in text.chars().chain(std::iter::once(' ')) {
+        if ch.is_ascii_digit() || ch.is_whitespace() || matches!(ch, '+' | '-' | '(' | ')' | '.') {
+            candidate.push(ch);
+            has_digit |= ch.is_ascii_digit();
+        } else {
+            if has_digit && looks_like_phone(&candidate) {
+                return true;
+            }
+            candidate.clear();
+            has_digit = false;
+        }
+    }
+    has_digit && looks_like_phone(&candidate)
+}
+
+fn looks_like_street_address(text: &str) -> bool {
+    let words: Vec<_> = text.split_whitespace().collect();
+    const STREET_SUFFIXES: &[&str] = &[
+        "street",
+        "st",
+        "st.",
+        "road",
+        "rd",
+        "rd.",
+        "avenue",
+        "ave",
+        "ave.",
+        "boulevard",
+        "blvd",
+        "blvd.",
+        "lane",
+        "ln",
+        "ln.",
+        "drive",
+        "dr",
+        "dr.",
+        "court",
+        "ct",
+        "ct.",
+        "way",
+        "place",
+        "pl",
+        "pl.",
+    ];
+    words.iter().enumerate().any(|(index, word)| {
+        let suffix = word.trim_matches(|ch: char| matches!(ch, ',' | ';' | '.' | ')' | ']'));
+        if !STREET_SUFFIXES.contains(&suffix.to_ascii_lowercase().as_str()) || index == 0 {
+            return false;
+        }
+        let previous_has_number = words[index - 1].chars().any(|ch| ch.is_ascii_digit())
+            || (index >= 2 && words[index - 2].chars().any(|ch| ch.is_ascii_digit()));
+        previous_has_number
+    })
+}
+
 /// Which deterministic rule flags `text` (a fixed label, never the matched content).
+/// Contact patterns are deliberately conservative and are not complete PII detection.
 pub fn sensitive_reason(text: &str) -> Option<&'static str> {
     let lower = text.to_ascii_lowercase();
     let normalized = lower.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.split_whitespace().any(looks_like_email) {
+        return Some("contact_email");
+    }
+    if contains_phone_number(text) {
+        return Some("contact_phone");
+    }
+    if normalized.contains("lives at ") || looks_like_street_address(text) {
+        return Some("contact_address");
+    }
     if [
         "system override",
         "ignore previous instructions",
