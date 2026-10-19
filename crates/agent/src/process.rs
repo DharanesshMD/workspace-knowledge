@@ -290,8 +290,8 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
         }
         let note = crate::assistant_draft::adapt_to_server(&mut v, &p);
         let mut response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
-        if let Some(note) = note {
-            response["note"] = json!(note);
+        if let (Some(note), Some(obj)) = (note, response.as_object_mut()) {
+            obj.insert("note".into(), json!(note));
         }
         if !owner_only {
             s.ack(id)?;

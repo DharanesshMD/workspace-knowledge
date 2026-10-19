@@ -26,6 +26,9 @@ const FEATURE: &str = "card_provenance";
 
 /// Before submit: a server that does not advertise `card_provenance` (older than this change)
 /// rejects the unknown field, so send the card as the plain `partial` draft it was before.
+/// The body changes, so the idempotency key changes too (deterministically): otherwise, once the
+/// server is upgraded, running `/wk-summarize` again would send the same key with a different
+/// body and conflict with the row stored without provenance.
 /// Returns the note to show the developer when the field was dropped.
 pub(crate) fn adapt_to_server(draft: &mut Value, policy: &Value) -> Option<&'static str> {
     let supported = policy["features"]
@@ -34,8 +37,13 @@ pub(crate) fn adapt_to_server(draft: &mut Value, policy: &Value) -> Option<&'sta
     if supported {
         return None;
     }
-    draft["card"].as_object_mut()?.remove("provenance")?;
-    Some("this server cannot publish assistant-written cards yet; the card was sent as a partial draft and cannot be published until the server is upgraded")
+    let card = draft["card"].as_object_mut()?;
+    card.remove("provenance")?;
+    if let Some(key) = card.get("idempotency_key").and_then(Value::as_str) {
+        let key = format!("{:x}", Sha256::digest(format!("{key}:no-provenance")));
+        card.insert("idempotency_key".into(), json!(key));
+    }
+    Some("this server cannot publish assistant-written cards yet, so the card was sent as a partial draft that cannot be published; after the server is upgraded, withdraw it and run /wk-summarize again")
 }
 
 /// The label of the assistant that wrote the card: `[a-z0-9-]{1,32}`.
@@ -299,11 +307,23 @@ mod tests {
     #[test]
     fn provenance_is_dropped_for_a_server_that_does_not_advertise_it() {
         let (_, mut draft) = build(OK, "backend", 7, "hash1", "claude-code").unwrap();
-        assert!(adapt_to_server(&mut draft, &json!({"policy_revision":7})).is_some());
+        let original = draft["card"]["idempotency_key"].clone();
+        let mut again = draft.clone();
+        let note = adapt_to_server(&mut draft, &json!({"policy_revision":7})).unwrap();
+        assert!(note.contains("/wk-summarize"));
         assert!(draft["card"].get("provenance").is_none());
+        // A distinct, stable key: the provenance-less body must not collide with the v2 key an
+        // upgraded server will see for the same card.
+        assert_ne!(draft["card"]["idempotency_key"], original);
+        assert!(adapt_to_server(&mut again, &json!({})).is_some());
+        assert_eq!(
+            draft["card"]["idempotency_key"],
+            again["card"]["idempotency_key"]
+        );
         let (_, mut draft) = build(OK, "backend", 7, "hash1", "claude-code").unwrap();
         assert!(adapt_to_server(&mut draft, &json!({"features":["card_provenance"]})).is_none());
         assert_eq!(draft["card"]["provenance"], "assistant_written");
+        assert_eq!(draft["card"]["idempotency_key"], original);
     }
 
     #[test]
