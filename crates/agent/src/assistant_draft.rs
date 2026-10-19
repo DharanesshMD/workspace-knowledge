@@ -324,6 +324,11 @@ mod tests {
         assert!(adapt_to_server(&mut draft, &json!({"features":["card_provenance"]})).is_none());
         assert_eq!(draft["card"]["provenance"], "assistant_written");
         assert_eq!(draft["card"]["idempotency_key"], original);
+        // A draft queued before this change has no provenance: it is sent as it is, key untouched.
+        let (_, mut queued) = build(OK, "backend", 7, "hash1", "claude-code").unwrap();
+        queued["card"].as_object_mut().unwrap().remove("provenance");
+        assert!(adapt_to_server(&mut queued, &json!({})).is_none());
+        assert_eq!(queued["card"]["idempotency_key"], original);
     }
 
     #[test]
