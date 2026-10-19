@@ -219,7 +219,11 @@ fn validate_response(
     )
 }
 fn card_state(c: &wk_knowledge::Card) -> Value {
-    json!({"id":c.id,"revision":c.revision,"title":c.body.title,"intent":c.body.intent,"decisions":c.body.decisions,"constraints":c.body.constraints,"open_questions":c.body.open_questions,"lifecycle":c.body.lifecycle,"coverage":c.body.capture_completeness,"provenance":c.body.provenance})
+    let mut state = json!({"id":c.id,"revision":c.revision,"title":c.body.title,"intent":c.body.intent,"decisions":c.body.decisions,"constraints":c.body.constraints,"open_questions":c.body.open_questions,"lifecycle":c.body.lifecycle,"coverage":c.body.capture_completeness,});
+    if c.body.provenance.is_some() {
+        state["provenance"] = json!(c.body.provenance);
+    }
+    state
 }
 pub(crate) async fn assess(
     State(api): State<Api>,
@@ -319,6 +323,9 @@ mod tests {
         };
         assert_eq!(card_state(&card)["provenance"], "assistant_written");
         assert_eq!(card_state(&card)["coverage"], "partial");
+        let mut plain = card;
+        plain.body.provenance = None;
+        assert!(card_state(&plain).get("provenance").is_none());
     }
     #[test]
     fn review_is_default_and_api_confidence_is_distinct_from_paper_probability() {

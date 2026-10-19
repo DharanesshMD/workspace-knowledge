@@ -191,7 +191,7 @@ async fn reviewer_publishes_assistant_written_partial_card_but_not_plain_partial
         .submit(&actor, "demo", card("publish-http-p", None))
         .await
         .unwrap();
-    let app = wk_server::router(k, vec![("synthetic-token".into(), actor)]);
+    let app = wk_server::router(k.clone(), vec![("synthetic-token".into(), actor.clone())]);
     let publish = |id: uuid::Uuid| {
         Request::builder()
             .method("POST")
@@ -204,5 +204,7 @@ async fn reviewer_publishes_assistant_written_partial_card_but_not_plain_partial
     let r = app.clone().oneshot(publish(assistant.id)).await.unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let r = app.oneshot(publish(plain.id)).await.unwrap();
-    assert!(!r.status().is_success());
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    assert!(k.get(&actor, "demo", assistant.id).await.unwrap().published);
+    assert!(!k.get(&actor, "demo", plain.id).await.unwrap().published);
 }
