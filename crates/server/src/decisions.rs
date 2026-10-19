@@ -219,7 +219,7 @@ fn validate_response(
     )
 }
 fn card_state(c: &wk_knowledge::Card) -> Value {
-    json!({"id":c.id,"revision":c.revision,"title":c.body.title,"intent":c.body.intent,"decisions":c.body.decisions,"constraints":c.body.constraints,"open_questions":c.body.open_questions,"lifecycle":c.body.lifecycle,"coverage":c.body.capture_completeness})
+    json!({"id":c.id,"revision":c.revision,"title":c.body.title,"intent":c.body.intent,"decisions":c.body.decisions,"constraints":c.body.constraints,"open_questions":c.body.open_questions,"lifecycle":c.body.lifecycle,"coverage":c.body.capture_completeness,"provenance":c.body.provenance})
 }
 pub(crate) async fn assess(
     State(api): State<Api>,
@@ -307,6 +307,18 @@ mod tests {
             "route_0":{"type":"choice","choice":"reuse","confidence":0.8,"probabilities":{"reuse":0.95,"extend":0.03,"investigate":0.02}},
             "priority_0":{"type":"score","score":0.,"confidence":1.,"probabilities":{"0":1.,"1":0.,"2":0.,"3":0.}}
         }})
+    }
+    #[test]
+    fn card_state_reports_provenance() {
+        let body = serde_json::json!({"schema_version":1,"idempotency_key":"k","policy_revision":1,"title":"t","intent":"i","rationale":"r","decisions":[],"constraints":[],"open_questions":[],"service_ids":["backend"],"evidence":[],"lifecycle":"proposed","capture_completeness":"partial","base_revision":null,"provenance":"assistant_written"});
+        let card = wk_knowledge::Card {
+            id: uuid::Uuid::nil(),
+            body: serde_json::from_value(body).unwrap(),
+            revision: 1,
+            published: true,
+        };
+        assert_eq!(card_state(&card)["provenance"], "assistant_written");
+        assert_eq!(card_state(&card)["coverage"], "partial");
     }
     #[test]
     fn review_is_default_and_api_confidence_is_distinct_from_paper_probability() {
