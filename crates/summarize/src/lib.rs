@@ -372,6 +372,7 @@ pub fn card(
         },
         base_revision: None,
         observed_at_ms: None,
+        provenance: None,
     };
     c.validate()?;
     Ok(c)

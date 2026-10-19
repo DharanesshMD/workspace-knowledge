@@ -45,6 +45,13 @@
         "deprecated"
       ],
       "type": "string"
+    },
+    "Provenance": {
+      "description": "Who wrote a card, when that (and not capture coverage) is what makes it publishable.\nSelf-declared by the submitter, like `capture_completeness`; the reviewer is the check.",
+      "enum": [
+        "assistant_written"
+      ],
+      "type": "string"
     }
   },
   "$id": "urn:workspace-knowledge:card-submission:v1",
@@ -113,6 +120,17 @@
       "format": "uint64",
       "minimum": 1,
       "type": "integer"
+    },
+    "provenance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Provenance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Set only for a card the developer's assistant wrote and the developer reviewed before\nsubmitting. Omitted from the wire when absent so older servers still accept ordinary cards."
     },
     "rationale": {
       "type": "string"
