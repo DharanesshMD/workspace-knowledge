@@ -1,6 +1,6 @@
 # Publishable assistant-written cards (design)
 
-**Status: proposal for the owner. Nothing is implemented.** Product and privacy decision; the recommendation is in [Recommendation](#recommendation) and the choices that are the owner's are in [Decisions for the owner](#decisions-for-the-owner).
+**Status: accepted by the owner on 2026-10-20 as recommended (see [Decisions](#decisions)). Not yet implemented; the [implementation plan](../plans/2026-10-20-publishable-assistant-cards.md) follows.**
 
 ## Problem
 
@@ -122,17 +122,19 @@ pub provenance: Option<Provenance>,
 
 **Portal (Playwright, `web/tests`):** Publish enabled for an assistant card and disabled for a rule draft and a `truncated` card; the notice and Source row render; correction keeps the label.
 
-**Eval:** the overlap numbers in the comparison are a counterfactual (`summary-quality-eval.py` relabels cards `complete` before publishing them, because as shipped none can be published). After this change, run the script with the real cards (provenance set, completeness `partial`, no relabelling) against a disposable `wk_test` database and confirm the prompt-time numbers are reproduced; this is the first end-to-end proof that the default flow produces a teammate notice. Add an `as-assistant` variant to the script and keep `as-shipped` for rule drafts (still 0 published).
+**Eval:** the overlap numbers in the comparison are a counterfactual (`summary-quality-eval.py` relabels cards `complete` before publishing them, because as shipped none can be published). After this change, run the script with the real cards (provenance set, completeness `partial`, no relabelling) against a disposable `wk_test` database and confirm the prompt-time numbers are reproduced; this is the first end-to-end proof that the default flow produces a teammate notice. The script's `as-shipped` runs then publish the assistant cards for real (their drafts carry provenance) and still publish 0 rule drafts, so no new variant is needed.
 
 **Repo gates:** `cargo fmt`, `clippy -D warnings`, workspace tests, `python3 -m unittest discover` (including `test_release_docs.py` for the changed links).
 
-## Decisions for the owner
+## Decisions
 
-1. **Model.** B (provenance field, `partial` unchanged) as recommended, or A (new completeness value) if one field matters more than clean meaning.
-2. **Acknowledgement.** Non-blocking notice (recommended) or a blocking "I have read this" checkbox on publish for assistant cards.
-3. **Operator switch (E).** Not now (recommended), or add a per-product setting that defaults to off until an operator enables it. If your pilot's privacy owner needs a lever before the first publish, take E in this change.
-4. **Rule drafts.** Stay unpublishable (recommended). Revisit only with a reviewer-rewrite path.
-5. **Reviewer = author.** Today a member with `can_review` can publish their own card. Allow it for assistant cards (recommended; matches `complete` cards and small teams) or require a different reviewer.
+All five were accepted as recommended on 2026-10-20.
+
+1. **Model:** B, a `provenance` field; `partial` keeps its meaning.
+2. **Acknowledgement:** a non-blocking notice, not a checkbox.
+3. **Operator switch (E):** not in this change.
+4. **Rule drafts:** stay unpublishable.
+5. **Reviewer = author:** allowed, as for `complete` cards.
 
 ## Out of scope
 
