@@ -41,6 +41,13 @@
     "can_review": {
       "type": "boolean"
     },
+    "features": {
+      "description": "Server capabilities a collector may rely on. `card_provenance`: accepts `provenance` on\ncard submissions and lets a reviewer publish an `assistant_written` partial card.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "policy_revision": {
       "format": "int64",
       "type": "integer"
@@ -63,7 +70,8 @@
     "services",
     "can_review",
     "policy_revision",
-    "restrictions"
+    "restrictions",
+    "features"
   ],
   "title": "Policy",
   "type": "object"

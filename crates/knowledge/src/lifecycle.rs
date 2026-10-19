@@ -7,6 +7,9 @@ pub struct Policy {
     pub can_review: bool,
     pub policy_revision: i64,
     pub restrictions: admin::ProductPolicy,
+    /// Server capabilities a collector may rely on. `card_provenance`: accepts `provenance` on
+    /// card submissions and lets a reviewer publish an `assistant_written` partial card.
+    pub features: Vec<String>,
 }
 impl Knowledge {
     pub async fn policy(&self, a: &Actor, product: &str) -> Result<Policy, Error> {
@@ -17,6 +20,7 @@ impl Knowledge {
         Ok(Policy {
             product: product.into(),
             restrictions,
+            features: vec!["card_provenance".into()],
             services: if let Some(g) = &self.device_guard {
                 g.services.clone()
             } else {

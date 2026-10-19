@@ -124,3 +124,36 @@ async fn sensitive_correction_error_does_not_echo_canary() {
     let bytes = r.into_body().collect().await.unwrap().to_bytes();
     assert!(!String::from_utf8_lossy(&bytes).contains("HTTP-PRIVATE-CANARY"));
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn policy_advertises_card_provenance() {
+    use http_body_util::BodyExt;
+    let url = std::env::var("WK_TEST_DATABASE_URL").unwrap();
+    assert!(url.ends_with("/wk_test"));
+    let k = wk_knowledge::Knowledge::connect(&url).await.unwrap();
+    let actor = wk_knowledge::Actor {
+        org: uuid::Uuid::new_v4().to_string(),
+        user: "owner".into(),
+    };
+    k.grant(&actor, "demo", &["backend".into()], true)
+        .await
+        .unwrap();
+    let r = wk_server::router(k, vec![("synthetic-token".into(), actor)])
+        .oneshot(
+            Request::builder()
+                .uri("/v1/policy?product=demo")
+                .header("authorization", "Bearer synthetic-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let v: serde_json::Value =
+        serde_json::from_slice(&r.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(
+        v["policy"]["features"],
+        serde_json::json!(["card_provenance"])
+    );
+}
