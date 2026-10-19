@@ -138,3 +138,47 @@ async fn publish_gate_refuses_truncated_even_with_provenance() {
         .bind(c.id).execute(&pool).await.unwrap();
     assert_eq!(k.publish(&a, &p, c.id).await.unwrap_err(), Error::Denied);
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn a_published_assistant_card_reaches_a_teammate_and_a_plain_partial_one_does_not() {
+    use wk_knowledge::activity::OverlapQuery;
+    let (k, a, b, p) = setup().await;
+    let q = || OverlapQuery {
+        files: vec!["backend/retry.rs".into()],
+        query: Some("cap retries".into()),
+        limit: 8,
+    };
+    let plain = k.submit(&a, &p, card("7", "partial", None)).await.unwrap();
+    assert!(k.publish(&a, &p, plain.id).await.is_err());
+    assert!(k
+        .overlaps(&b, &p, q())
+        .await
+        .unwrap()
+        .iter()
+        .all(|n| n.card_id != Some(plain.id)));
+    let c = k
+        .submit(&a, &p, card("8", "partial", Some("assistant_written")))
+        .await
+        .unwrap();
+    k.publish(&a, &p, c.id).await.unwrap();
+    let notices = k.overlaps(&b, &p, q()).await.unwrap();
+    let n = notices
+        .iter()
+        .find(|n| n.card_id == Some(c.id))
+        .unwrap_or_else(|| panic!("{notices:?}"));
+    eprintln!("fired: kind={} matched_by={}", n.kind, n.matched_by);
+    assert_eq!(n.developer, a.user);
+    assert!(
+        !n.text.contains(&c.body.rationale) && !n.summary.contains(&c.body.rationale),
+        "the notice must not carry the rationale"
+    );
+    assert!(
+        k.overlaps(&a, &p, q())
+            .await
+            .unwrap()
+            .iter()
+            .all(|n| n.card_id != Some(c.id)),
+        "own card is not a notice"
+    );
+}
