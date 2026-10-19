@@ -2,7 +2,7 @@
 """Owned synthetic databases only: encrypted snapshot, quarantine and newest journals."""
 import json,os,secrets,subprocess,time,urllib.parse,uuid
 from pathlib import Path
-ROOT=Path(__file__).resolve().parents[1];CONTAINER='wk-cursor-native-test'
+ROOT=Path(__file__).resolve().parents[1];CONTAINER=os.environ.get('WK_TEST_CONTAINER','wk-cursor-native-test')
 def main():
     cfg=json.loads(subprocess.check_output(['docker','inspect',CONTAINER]))[0];settings=dict(x.split('=',1) for x in cfg['Config']['Env'] if '=' in x);assert settings.get('POSTGRES_DB')=='wk_test'
     base=os.environ['WK_TEST_DATABASE_URL'];assert urllib.parse.urlparse(base).path=='/wk_test'

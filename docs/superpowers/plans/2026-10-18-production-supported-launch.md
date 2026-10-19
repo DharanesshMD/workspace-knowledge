@@ -96,7 +96,7 @@
 - Produces: deterministic pass/fail evidence and per-surface support labels; no automatic-publication enablement.
 
 - [ ] **Step 1: Expand synthetic corpus coverage** for contact/credential/personal-data variants, prompt injection, malformed/model-unavailable output, multilingual/Unicode inputs, truncation and ambiguous partial sessions. (Contact/email/phone/address, Unicode phone, and oversized input were added; malformed/model-unavailable, truncation and ambiguous-session coverage still need qualification.)
-- [ ] **Step 2: Confirm strict harness fails on the known contact-sensitive miss and on provider errors misclassified as holds.** (The contact miss was reproduced; provider-error misclassification was not separately reproduced.)
+- [x] **Step 2: Confirm strict harness fails on the known contact-sensitive miss and on provider errors misclassified as holds.** (The contact miss was reproduced; the harness already asserts provider outage and malformed output are not privacy holds, and the contact detector's identifier false positives were found and fixed 2026-10-19.)
 - [x] **Step 3: Fix only reproduced screening/acceptance defects**; keep uncertain drafts private/held and record false-positive/false-negative limitations.
 - [ ] **Step 4: Run named client/version tests on owned isolated profiles** and update exact support claims; unsupported host surfaces remain explicitly unsupported.
 
@@ -129,7 +129,7 @@
 
 - [ ] **Step 1: Define workload, duration, success thresholds, retention horizon, and budget with the owner before provisioning anything.**
 - [ ] **Step 2: Extend the owned pilot harness** to report p50/p95, errors, database CPU/IO, storage/WAL growth, recovery time and deletion/restore outcomes with content-free output.
-- [ ] **Step 3: Run synthetic target-like load and recovery tests**; fix regressions and repeat at the exact final revision.
+- [ ] **Step 3: Run synthetic target-like load and recovery tests**; fix regressions and repeat at the exact final revision. (Local synthetic pilot and 14-check restore drill passed 2026-10-19; repeat at the final revision on target-like infrastructure.)
 - [ ] **Step 4: Run the owner-approved real-team pilot** and document the measured supported envelope; do not extrapolate beyond observed workloads.
 
 ### Task 7: Close security/release controls and final verification

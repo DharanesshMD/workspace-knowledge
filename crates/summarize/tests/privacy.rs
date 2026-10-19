@@ -70,6 +70,36 @@ async fn contact_details_are_held_before_any_provider_validation_or_contact() {
     assert!(wk_summarize::sensitive_reason("Tenant-2026 uses API version 1.2.3").is_none());
 }
 
+#[test]
+fn identifiers_dates_and_counters_are_not_mistaken_for_phone_numbers() {
+    for text in [
+        r#"{"idempotency_key":"3f2a9c1e-1234-5678-90ab-cdef01234567"}"#,
+        "9b1d-2026-1019-1115-4821 and 7c0e-123-456-7890-ab12",
+        "Captured 2026-10-19 11:15 UTC",
+        "Deployed on 2026-10-19 11 times last week",
+        "epoch 1700000000 and build 20261019 10",
+        "Tenant-2026 uses API version 1.2.3 with 2026-555-123-4567 as a ticket id",
+        "Counters 1234567890 and 12 34 56 78 90",
+    ] {
+        assert!(
+            wk_summarize::sensitive_reason(text).is_none(),
+            "false positive: {text}"
+        );
+    }
+    for text in [
+        "reach me on 555-123-4567 12 times a day",
+        "1-555-123-4567",
+        "call (555) 123-4567.",
+        "+44 20 7946 0958",
+    ] {
+        assert_eq!(
+            wk_summarize::sensitive_reason(text),
+            Some("contact_phone"),
+            "missed: {text}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn oversized_source_is_rejected_before_provider_validation_or_contact() {
     let source = "x".repeat(128 * 1024 + 1);

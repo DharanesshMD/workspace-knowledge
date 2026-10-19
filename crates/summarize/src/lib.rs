@@ -40,46 +40,100 @@ fn looks_like_email(token: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b".-".contains(&byte))
 }
 
-fn looks_like_phone(token: &str) -> bool {
-    let token = token.trim_matches(|ch: char| {
-        ch.is_whitespace() || matches!(ch, ',' | ';' | ':' | '.' | '"' | '\'')
-    });
-    let mut digits = 0;
-    let mut groups = 0;
-    let mut in_digits = false;
-    for ch in token.chars() {
-        if ch.is_ascii_digit() {
-            digits += 1;
-            if !in_digits {
-                groups += 1;
-                in_digits = true;
-            }
-        } else if ch.is_whitespace() || matches!(ch, '+' | '-' | '(' | ')' | '.') {
-            in_digits = false;
-        } else {
-            return false;
+fn is_phone_char(ch: char) -> bool {
+    ch.is_ascii_digit() || ch.is_whitespace() || matches!(ch, '+' | '-' | '(' | ')' | '.')
+}
+
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+/// `candidate` is a maximal run of digits and phone punctuation; `attached_*` says it touches a
+/// word character, which marks identifiers (UUIDs, hashes) rather than a phone number.
+fn candidate_is_phone(candidate: &str, attached_before: bool, attached_after: bool) -> bool {
+    let trimmed = candidate.trim();
+    if trimmed.starts_with('+') && !attached_before {
+        let digits = trimmed.bytes().filter(u8::is_ascii_digit).count();
+        if (7..=15).contains(&digits) {
+            return true;
         }
     }
-    let international = token.starts_with('+');
-    (international && (7..=15).contains(&digits) || digits == 10) && (groups >= 2 || international)
+    // Digit groups with the separator that precedes each, plus the trailing separator.
+    let mut groups: Vec<(usize, String)> = Vec::new();
+    let mut separator = String::new();
+    let mut run = 0;
+    for ch in candidate.chars() {
+        if ch.is_ascii_digit() {
+            run += 1;
+        } else {
+            if run > 0 {
+                groups.push((run, std::mem::take(&mut separator)));
+                run = 0;
+            }
+            separator.push(ch);
+        }
+    }
+    if run > 0 {
+        groups.push((run, std::mem::take(&mut separator)));
+    }
+    let trailing = separator;
+    let joiner =
+        |text: &str| text.len() <= 2 && text.chars().all(|ch| matches!(ch, '-' | '.' | ' ' | ')'));
+    let spaced = |text: &str| text.contains(' ');
+    for shape in [&[3usize, 3, 4][..], &[1, 3, 3, 4][..]] {
+        for start in 0..groups.len() {
+            let end = start + shape.len();
+            if end > groups.len()
+                || !groups[start..end]
+                    .iter()
+                    .map(|group| group.0)
+                    .eq(shape.iter().copied())
+                || !groups[start + 1..end].iter().all(|group| joiner(&group.1))
+            {
+                continue;
+            }
+            let leading_ok = if start == 0 {
+                !attached_before
+            } else {
+                spaced(&groups[start].1)
+            };
+            let trailing_ok = if end == groups.len() {
+                !attached_after || trailing.chars().any(char::is_whitespace)
+            } else {
+                spaced(&groups[end].1)
+            };
+            if leading_ok && trailing_ok {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn contains_phone_number(text: &str) -> bool {
-    let mut candidate = String::new();
-    let mut has_digit = false;
-    for ch in text.chars().chain(std::iter::once(' ')) {
-        if ch.is_ascii_digit() || ch.is_whitespace() || matches!(ch, '+' | '-' | '(' | ')' | '.') {
-            candidate.push(ch);
-            has_digit |= ch.is_ascii_digit();
-        } else {
-            if has_digit && looks_like_phone(&candidate) {
-                return true;
-            }
-            candidate.clear();
-            has_digit = false;
+    let chars: Vec<char> = text.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        if !is_phone_char(chars[index]) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < chars.len() && is_phone_char(chars[index]) {
+            index += 1;
+        }
+        let attached_before =
+            start > 0 && is_word_char(chars[start - 1]) && !chars[start].is_whitespace();
+        let attached_after =
+            index < chars.len() && is_word_char(chars[index]) && !chars[index - 1].is_whitespace();
+        let candidate: String = chars[start..index].iter().collect();
+        if candidate.bytes().any(|byte| byte.is_ascii_digit())
+            && candidate_is_phone(&candidate, attached_before, attached_after)
+        {
+            return true;
         }
     }
-    has_digit && looks_like_phone(&candidate)
+    false
 }
 
 fn looks_like_street_address(text: &str) -> bool {
