@@ -80,7 +80,12 @@ async fn correct_keeps_provenance_and_cannot_change_it() {
     next.intent = "Revised scope".into();
     let updated = k.correct(&a, &p, c.id, next).await.unwrap();
     assert!(!updated.published);
-    assert!(updated.body.provenance.is_some());
+    assert_eq!(
+        updated.body.provenance,
+        Some(wk_contracts::Provenance::AssistantWritten)
+    );
+    // The gate holds on the corrected row.
+    k.publish(&a, &p, c.id).await.unwrap();
     // Adding provenance to a plain partial card, or removing it, is refused.
     let plain = k.submit(&a, &p, card("5", "partial", None)).await.unwrap();
     let mut add = card("5", "partial", Some("assistant_written"));
@@ -116,4 +121,20 @@ async fn publish_rescreens_the_stored_text() {
     .await
     .unwrap();
     assert_eq!(k.publish(&a, &p, c.id).await.unwrap_err(), Error::Invalid);
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn publish_gate_refuses_truncated_even_with_provenance() {
+    let (k, a, _b, p) = setup().await;
+    let c = k
+        .submit(&a, &p, card("7", "partial", Some("assistant_written")))
+        .await
+        .unwrap();
+    // Simulate a row edited after submit: the SQL gate itself must refuse truncated.
+    let url = std::env::var("WK_TEST_DATABASE_URL").unwrap();
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+    sqlx::query("UPDATE cards SET body=jsonb_set(body,'{capture_completeness}','\"truncated\"') WHERE id=$1")
+        .bind(c.id).execute(&pool).await.unwrap();
+    assert_eq!(k.publish(&a, &p, c.id).await.unwrap_err(), Error::Denied);
 }
