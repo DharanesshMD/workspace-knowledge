@@ -34,6 +34,9 @@ services:
       WK_COLLECTOR_CLIENT_ID: ${WK_COLLECTOR_CLIENT_ID:?Set registered native public-client ID}
       WK_BROWSER_CLIENT_ID: ${WK_BROWSER_CLIENT_ID:?Set registered browser OIDC client ID}
       WK_BROWSER_CLIENT_SECRET: ${WK_BROWSER_CLIENT_SECRET:-}
+      # Only for an identity provider behind a private CA: mount the PEM bundle read-only (for
+      # example with a compose override) and set this to its in-container path.
+      WK_OIDC_CA_FILE: ${WK_OIDC_CA_FILE:-}
       WK_BIND: 0.0.0.0:8080
       WK_CONSOLE_ORIGIN: ${WK_CONSOLE_ORIGIN:?Set exact HTTPS console origin}
       WK_POOL_MAX: '${WK_POOL_MAX:-10}'

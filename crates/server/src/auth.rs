@@ -2,11 +2,52 @@
 use jsonwebtoken::{decode, decode_header, jwk::JwkSet, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 use std::{
-    sync::{Arc, RwLock},
+    sync::{Arc, OnceLock, RwLock},
     time::{Duration, Instant},
 };
 const KEY_MAX_AGE: Duration = Duration::from_secs(300);
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+static PROVIDER_CA: OnceLock<Vec<reqwest::Certificate>> = OnceLock::new();
+const CA_BUNDLE_MAX: usize = 65536;
+/// Parse an operator-supplied PEM bundle; every block must be a valid certificate.
+pub fn parse_provider_ca(pem: &[u8]) -> Result<Vec<reqwest::Certificate>, String> {
+    if pem.len() > CA_BUNDLE_MAX {
+        return Err("OIDC CA bundle too large".into());
+    }
+    let certificates =
+        reqwest::Certificate::from_pem_bundle(pem).map_err(|_| "invalid OIDC CA bundle")?;
+    if certificates.is_empty() {
+        return Err("OIDC CA bundle contains no certificates".into());
+    }
+    // Parsing is lazy: building a client is what rejects malformed certificate data.
+    let mut probe = reqwest::Client::builder().tls_built_in_root_certs(false);
+    for certificate in &certificates {
+        probe = probe.add_root_certificate(certificate.clone());
+    }
+    probe.build().map_err(|_| "invalid OIDC CA bundle")?;
+    Ok(certificates)
+}
+/// Pin the CA bundle used for issuer discovery, JWKS and token requests (replaces the public
+/// roots for those requests). Call once at startup, before any provider request.
+pub fn trust_provider_ca(pem: &[u8]) -> Result<(), String> {
+    PROVIDER_CA
+        .set(parse_provider_ca(pem)?)
+        .map_err(|_| "OIDC CA bundle already configured".into())
+}
+/// HTTP client for identity-provider requests: no proxy, no redirects, bounded time.
+pub(crate) fn provider_client() -> Result<reqwest::Client, reqwest::Error> {
+    let mut builder = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10));
+    if let Some(certificates) = PROVIDER_CA.get() {
+        builder = builder.tls_built_in_root_certs(false);
+        for certificate in certificates {
+            builder = builder.add_root_certificate(certificate.clone());
+        }
+    }
+    builder.build()
+}
 struct Snapshot {
     keys: JwkSet,
     expires: Instant,
@@ -132,12 +173,7 @@ impl Oidc {
         self.replace_keys(Self::fetch_keys(url).await?)
     }
     async fn fetch_keys(parsed: reqwest::Url) -> Result<JwkSet, String> {
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|_| "JWKS client unavailable")?;
+        let client = provider_client().map_err(|_| "JWKS client unavailable")?;
         let mut response = client
             .get(parsed)
             .send()

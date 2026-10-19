@@ -56,6 +56,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
             "docs/operations/public-alpha.md",
             "docs/operations/v0.1-release.md",
             "docs/operations/production-readiness.md",
+            "docs/operations/oidc-keycloak.md",
             "docs/architecture/completion-matrix.md",
             "docs/reviews/2026-10-19-privacy-acceptance.md",
         )

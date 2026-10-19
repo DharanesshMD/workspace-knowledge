@@ -80,10 +80,10 @@
 - Consumes: owner-selected issuer, portal/collector audiences, callback URLs, and disposable staging environment.
 - Produces: fail-closed provider configuration and exact evidence for PKCE/state/nonce, issuer/audience separation, key rotation, expiry, logout, TLS proxy behavior, and documented recovery.
 
-- [ ] **Step 1: Owner selects provider and supplies a disposable staging test path.** Do not substitute the local synthetic OIDC provider as production evidence.
-- [ ] **Step 2: Add failing provider-specific tests** for the documented callback, audience, expiry/rotation and misconfiguration cases.
-- [ ] **Step 3: Implement only confirmed defects**, using established OIDC/session code and no custom token-verification protocol.
-- [ ] **Step 4: Run the full synthetic matrix and selected-provider HTTPS staging smoke**; record issuer/version, configuration, commit and sanitized results.
+- [x] **Step 1: Owner selects provider and supplies a disposable staging test path.** Owner declined a hosted provider; agreed on a disposable local Keycloak over private-CA HTTPS instead. The synthetic provider is still not production evidence.
+- [x] **Step 2: Add failing provider-specific tests** for the documented callback, audience, expiry/rotation and misconfiguration cases. (`scripts/keycloak-acceptance.py`; CA-bundle unit test.)
+- [x] **Step 3: Implement only confirmed defects**, using established OIDC/session code and no custom token-verification protocol. (`WK_OIDC_CA_FILE` for private-CA providers.)
+- [ ] **Step 4: Run the full synthetic matrix and selected-provider HTTPS staging smoke**; record issuer/version, configuration, commit and sanitized results. (Local Keycloak 42/42 recorded in the readiness ledger; repeat at the final commit and against any hosted provider the owner later selects.)
 
 ### Task 4: Pass privacy and supported-client qualification
 

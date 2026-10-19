@@ -41,6 +41,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let url = required("WK_DATABASE_URL")?;
+    if let Some(path) = std::env::var("WK_OIDC_CA_FILE")
+        .ok()
+        .filter(|p| !p.is_empty())
+    {
+        let pem = std::fs::read(&path).map_err(|_| "WK_OIDC_CA_FILE unreadable")?;
+        wk_server::auth::trust_provider_ca(&pem)?;
+    }
     if mode == "migrate" {
         Knowledge::open(&url).await?.migrate().await?;
         return Ok(());

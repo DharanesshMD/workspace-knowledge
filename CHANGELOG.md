@@ -5,6 +5,8 @@
 - No local model is required: rules-mode drafts are marked partial and `[auto-drafted]`, quote bounded conversation text, are screened, and remain private until reviewed. An optional local model remains available. See [setup without a local model](docs/adapters/setup.md#set-up-without-a-local-model).
 - `wk-agent prompt --client claude-code|copilot|codex` creates `/wk-summarize` instructions for assistant-written cards; `wk-agent draft` validates and stores them as private drafts for 24 hours. Nothing reaches the team server before review. See [Summarize with your assistant](docs/adapters/setup.md#summarize-with-your-assistant-wk-summarize).
 - Behavior change: `wk-agent init` and `wk-agent device connect` without `--inference` now select `rules`. Existing configurations remain `local`; rules configurations contain a key older binaries cannot read. A setup's summarizer mode cannot be changed in place.
+- New `WK_OIDC_CA_FILE` setting lets the server use an identity provider behind a private certificate authority (previously only public CAs were trusted). The [Keycloak guide](docs/operations/oidc-keycloak.md) records the audience rules and the local qualification; the native collector does not yet honor a private CA.
+- Contact-detail screening no longer mistakes UUIDs, hashes and dates for phone numbers (it could intermittently reject legitimate summaries).
 
 ## v0.1.0-alpha.3 — source-only prerelease (2026-10-17)
 

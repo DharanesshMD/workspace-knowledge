@@ -122,3 +122,26 @@ fn browser_and_native_id_tokens_keep_strict_claim_and_signature_checks() {
             .is_err());
     }
 }
+
+#[test]
+fn provider_ca_bundle_accepts_only_certificates() {
+    let pem = include_bytes!("fixtures/synthetic-ca.pem");
+    assert_eq!(wk_server::auth::parse_provider_ca(pem).unwrap().len(), 1);
+    let doubled = [pem.as_slice(), pem.as_slice()].concat();
+    assert_eq!(
+        wk_server::auth::parse_provider_ca(&doubled).unwrap().len(),
+        2
+    );
+    for bad in [
+        &b""[..],
+        b"not a certificate",
+        b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+    ] {
+        assert!(
+            wk_server::auth::parse_provider_ca(bad).is_err(),
+            "accepted: {:?}",
+            String::from_utf8_lossy(bad)
+        );
+    }
+    assert!(wk_server::auth::parse_provider_ca(&vec![b'A'; 70_000]).is_err());
+}

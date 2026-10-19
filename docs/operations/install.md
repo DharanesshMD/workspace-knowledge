@@ -79,12 +79,13 @@ Configure secrets through your deployment secret manager. The required variables
 | `WK_POSTGRES_PASSWORD` | Protected database owner password |
 | `WK_DATABASE_URL` | Runtime connection using the restricted `wk_app` role, never `wk_owner` |
 | `WK_OIDC_ISSUER`, `WK_OIDC_AUDIENCE`, `WK_OIDC_JWKS_URL` | Fixed upstream HTTPS issuer, API audience and verification keys |
+| `WK_OIDC_CA_FILE` | Optional PEM bundle for an identity provider behind a private CA; replaces public roots for provider requests only. See [Keycloak setup](oidc-keycloak.md) |
 | `WK_BROWSER_CLIENT_ID` | Registered portal authorization-code client |
 | `WK_BROWSER_CLIENT_SECRET` | Optional secret for a confidential browser client; omit for a public client |
 | `WK_CONSOLE_ORIGIN` | Exact public HTTPS portal origin |
 | `WK_COLLECTOR_CLIENT_ID`, `WK_COLLECTOR_AUDIENCE` | Separate native public client and collector-only audience |
 
-Register the browser redirect as `WK_CONSOLE_ORIGIN/auth/callback`. Register the native collector with literal `http://127.0.0.1:<ephemeral-port>/callback` support. Collector tokens must have exactly the collector audience, distinct from the API audience. The app does not create an OAuth issuer or infer memberships from provider claims. See [identity details](../architecture/backend.md#hosted-browser-identity).
+Register the browser redirect as `WK_CONSOLE_ORIGIN/auth/callback`. Register the native collector with literal `http://127.0.0.1:<ephemeral-port>/callback` support. Collector tokens must have exactly the collector audience, distinct from the API audience. The app does not create an OAuth issuer or infer memberships from provider claims. See [identity details](../architecture/backend.md#hosted-browser-identity). Keycloak is the one provider qualified so far; see its [setup and audience rules](oidc-keycloak.md).
 
 Build and start only the database first:
 

@@ -124,12 +124,7 @@ impl BrowserConfig {
     }
 }
 async fn bounded_get(url: &str) -> Result<Vec<u8>, String> {
-    let http = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|_| "provider_unavailable")?;
+    let http = crate::auth::provider_client().map_err(|_| "provider_unavailable")?;
     let mut response = http
         .get(url)
         .send()
@@ -188,12 +183,7 @@ async fn oidc_http(
     request: openidconnect::HttpRequest,
 ) -> Result<openidconnect::HttpResponse, std::io::Error> {
     let fail = || std::io::Error::other("provider_unavailable");
-    let http = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|_| fail())?;
+    let http = crate::auth::provider_client().map_err(|_| fail())?;
     let (parts, body) = request.into_parts();
     let mut r = http
         .request(parts.method, parts.uri.to_string())
