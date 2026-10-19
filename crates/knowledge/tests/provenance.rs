@@ -167,7 +167,6 @@ async fn a_published_assistant_card_reaches_a_teammate_and_a_plain_partial_one_d
         .iter()
         .find(|n| n.card_id == Some(c.id))
         .unwrap_or_else(|| panic!("{notices:?}"));
-    eprintln!("fired: kind={} matched_by={}", n.kind, n.matched_by);
     assert_eq!(n.developer, a.user);
     assert!(
         !n.text.contains(&c.body.rationale) && !n.summary.contains(&c.body.rationale),
