@@ -5,6 +5,7 @@ const queue=[
  {id:'00000000-0000-0000-0000-000000000001',revision:1,published:false,body:body({title:'Assistant card',provenance:'assistant_written'})},
  {id:'00000000-0000-0000-0000-000000000002',revision:1,published:false,body:body({title:'[auto-drafted] Rule card'})},
  {id:'00000000-0000-0000-0000-000000000003',revision:1,published:false,body:body({title:'Truncated card',capture_completeness:'truncated'})},
+ {id:'00000000-0000-0000-0000-000000000004',revision:1,published:true,body:body({title:'Live assistant summary',provenance:'assistant_written'})},
 ];
 async function openQueue(page:import('@playwright/test').Page){
  await page.route('**/v1/policy?*',r=>r.fulfill({json:{policy:{can_review:true}}}));
@@ -22,7 +23,11 @@ test('an assistant-written card can be published and says who wrote it',async({p
  await row.click();
  await expect(page.getByText('Written by the author’s assistant; submitted after the author’s review')).toBeVisible();
  await expect(page.getByRole('note')).toContainText('Publishing makes it searchable');
- await expect(page.getByRole('button',{name:'Publish summary'})).toBeEnabled();
+ await expect(page.getByRole('note')).toHaveAttribute('id','assistant-note');
+ await expect(page.getByText('Capture coverage')).toHaveCount(0);
+ const publish=page.getByRole('button',{name:'Publish summary'});
+ await expect(publish).toBeEnabled();
+ await expect(publish).toHaveAttribute('aria-describedby','assistant-note');
 });
 test('rule drafts and truncated cards still cannot be published',async({page})=>{
  await openQueue(page);
@@ -30,5 +35,29 @@ test('rule drafts and truncated cards still cannot be published',async({page})=>
   await page.getByRole('button').filter({hasText:title}).click();
   await expect(page.getByRole('button',{name:'Publish summary'})).toBeDisabled();
   await expect(page.getByRole('note')).toHaveCount(0);
+  await expect(page.getByText('Capture coverage')).toBeVisible();
+  await expect(page.locator('dd.warning')).toBeVisible();
  }
+});
+test('an already published assistant card shows its label but no publish notice',async({page})=>{
+ await openQueue(page);
+ const row=page.getByRole('button').filter({hasText:'Live assistant summary'});
+ await expect(row).toContainText('Assistant-written');
+ await row.click();
+ await expect(page.getByText('Written by the author’s assistant; submitted after the author’s review')).toBeVisible();
+ await expect(page.getByRole('note')).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Publish summary'})).toHaveCount(0);
+});
+test('correcting an assistant-written card keeps its provenance and base revision',async({page})=>{
+ let posted:any=null;
+ await page.route('**/v1/cards/*/correct',r=>{posted=r.request().postDataJSON();return r.fulfill({json:{}});});
+ await openQueue(page);
+ await page.getByRole('button').filter({hasText:'Assistant card'}).click();
+ await page.getByRole('button',{name:'Correct summary'}).click();
+ await page.getByLabel('Intent').fill('Avoid repeat charges on retry');
+ await page.getByRole('button',{name:'Save correction'}).click();
+ await expect.poll(()=>posted).not.toBeNull();
+ expect(posted.card.provenance).toBe('assistant_written');
+ expect(posted.card.base_revision).toBe(1);
+ expect(posted.card.intent).toBe('Avoid repeat charges on retry');
 });
