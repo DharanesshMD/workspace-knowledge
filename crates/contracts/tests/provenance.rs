@@ -37,5 +37,8 @@ fn rejects_provenance_on_a_truncated_card() {
     let mut v = card();
     v["provenance"] = json!("assistant_written");
     v["capture_completeness"] = json!("truncated");
-    assert!(validate_card(&v).is_err());
+    assert_eq!(
+        validate_card(&v).unwrap_err(),
+        "provenance cannot be set on a truncated card"
+    );
 }
