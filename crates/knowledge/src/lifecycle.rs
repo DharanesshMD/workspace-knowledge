@@ -11,6 +11,10 @@ pub struct Policy {
     /// card submissions and lets a reviewer publish an `assistant_written` partial card.
     pub features: Vec<String>,
 }
+/// Capabilities every policy response advertises to collectors.
+pub(crate) fn policy_features() -> Vec<String> {
+    vec!["card_provenance".into()]
+}
 impl Knowledge {
     pub async fn policy(&self, a: &Actor, product: &str) -> Result<Policy, Error> {
         self.device_scope(product, &[])?;
@@ -20,7 +24,7 @@ impl Knowledge {
         Ok(Policy {
             product: product.into(),
             restrictions,
-            features: vec!["card_provenance".into()],
+            features: policy_features(),
             services: if let Some(g) = &self.device_guard {
                 g.services.clone()
             } else {
