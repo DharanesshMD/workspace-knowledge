@@ -21,6 +21,23 @@ struct Input {
     open_questions: Vec<String>,
 }
 
+/// Server capability that accepts `provenance` and publishes `assistant_written` cards.
+const FEATURE: &str = "card_provenance";
+
+/// Before submit: a server that does not advertise `card_provenance` (older than this change)
+/// rejects the unknown field, so send the card as the plain `partial` draft it was before.
+/// Returns the note to show the developer when the field was dropped.
+pub(crate) fn adapt_to_server(draft: &mut Value, policy: &Value) -> Option<&'static str> {
+    let supported = policy["features"]
+        .as_array()
+        .is_some_and(|f| f.iter().any(|x| x == FEATURE));
+    if supported {
+        return None;
+    }
+    draft["card"].as_object_mut()?.remove("provenance")?;
+    Some("this server cannot publish assistant-written cards yet; the card was sent as a partial draft and cannot be published until the server is upgraded")
+}
+
 /// The label of the assistant that wrote the card: `[a-z0-9-]{1,32}`.
 pub(crate) fn valid_client(client: &str) -> Result<(), String> {
     if (1..=32).contains(&client.len())
@@ -70,7 +87,7 @@ pub(crate) fn build(
                 service,
                 policy_hash,
                 revision,
-                "assistant-v1"
+                "assistant-v2"
             ))
             .map_err(|_| "invalid card")?
         )
@@ -268,6 +285,27 @@ mod tests {
         let s = wk_local::LocalStore::open(&dir.path().join("t.db"), [7; 32], 1_000_000).unwrap();
         (dir, s)
     }
+    #[test]
+    fn draft_is_assistant_written_with_a_v2_key() {
+        let (key, draft) = build(OK, "backend", 7, "hash1", "claude-code").unwrap();
+        assert_eq!(draft["card"]["provenance"], "assistant_written");
+        assert_eq!(draft["card"]["capture_completeness"], "partial");
+        // The digest tag moved from "assistant-v1" so a resubmission after an upgrade is a new
+        // card, not a body conflict with an older provenance-less row. Pin the tag change.
+        assert!(include_str!("assistant_draft.rs").contains("\"assistant-v2\""));
+        assert!(key.starts_with("draft:") && key.len() == 70);
+    }
+
+    #[test]
+    fn provenance_is_dropped_for_a_server_that_does_not_advertise_it() {
+        let (_, mut draft) = build(OK, "backend", 7, "hash1", "claude-code").unwrap();
+        assert!(adapt_to_server(&mut draft, &json!({"policy_revision":7})).is_some());
+        assert!(draft["card"].get("provenance").is_none());
+        let (_, mut draft) = build(OK, "backend", 7, "hash1", "claude-code").unwrap();
+        assert!(adapt_to_server(&mut draft, &json!({"features":["card_provenance"]})).is_none());
+        assert_eq!(draft["card"]["provenance"], "assistant_written");
+    }
+
     #[test]
     fn builds_a_partial_proposed_card_with_a_stable_key() {
         let (key, draft) = build(OK, "backend", 7, "hash1", "claude-code").unwrap();

@@ -1412,6 +1412,10 @@ mod tests {
             let draft: Value =
                 serde_json::from_slice(&f.store.read_record(&id, now).unwrap().unwrap()).unwrap();
             assert_eq!(draft["card"]["capture_completeness"], "partial");
+            assert!(
+                draft["card"].get("provenance").is_none(),
+                "rule drafts never carry provenance"
+            );
             assert_eq!(draft["model"], "rules");
             let title = draft["card"]["title"].as_str().unwrap().to_string();
             assert!(title.starts_with("[auto-drafted] "), "{title}");

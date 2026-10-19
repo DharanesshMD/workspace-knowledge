@@ -261,7 +261,7 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
     let bytes = s
         .read_record(id, daemon::now()?)?
         .ok_or("draft expired or unavailable")?;
-    let v: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid private draft")?;
+    let mut v: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid private draft")?;
     if owner_only {
         crate::personal_sync::payload(&v["card"])?;
     }
@@ -288,7 +288,11 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
             }
             Readiness::Ready => {}
         }
-        let response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
+        let note = crate::assistant_draft::adapt_to_server(&mut v, &p);
+        let mut response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
+        if let Some(note) = note {
+            response["note"] = json!(note);
+        }
         if !owner_only {
             s.ack(id)?;
         }
@@ -915,6 +919,10 @@ mod rules_tests {
             let draft: Value =
                 serde_json::from_slice(&store.read_record(&id, now).unwrap().unwrap()).unwrap();
             assert_eq!(draft["card"]["capture_completeness"], "partial");
+            assert!(
+                draft["card"].get("provenance").is_none(),
+                "rule drafts never carry provenance"
+            );
             cards.push(draft["card"].clone());
         }
         assert_eq!(cards.len(), 2);

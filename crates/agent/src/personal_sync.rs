@@ -194,6 +194,12 @@ mod tests {
         assert!(configure(temp.path(), "enable", false).await.is_err());
     }
     #[test]
+    fn assistant_written_cards_are_never_synchronized() {
+        let mut card = json!({"schema_version":1,"idempotency_key":"a","policy_revision":1,"title":"T","intent":"I","rationale":"R","decisions":[],"constraints":[],"open_questions":[],"service_ids":["backend"],"evidence":[],"lifecycle":"proposed","capture_completeness":"partial","base_revision":null});
+        card["provenance"] = json!("assistant_written");
+        assert!(payload(&card).is_err());
+    }
+    #[test]
     fn captured_payload_is_strict_complete_and_screened() {
         assert!(payload(&json!({"capture_completeness":"partial"})).is_err());
         let card = json!({"schema_version":1,"idempotency_key":"sync-one","policy_revision":1,"title":"Tenant limiter","intent":"Prevent overload","rationale":"Shared middleware","decisions":[],"constraints":[],"open_questions":[],"service_ids":["backend"],"evidence":[],"lifecycle":"proposed","capture_completeness":"complete","base_revision":null});
