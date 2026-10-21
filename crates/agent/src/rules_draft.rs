@@ -50,15 +50,234 @@ fn clean(s: &str, max: usize) -> String {
     clip(&wk_adapters::cursor_history::redact(s), max)
 }
 
+/// The words of `line` (letters, digits and apostrophes), lower-cased.
+fn words(line: &str) -> Vec<String> {
+    line.split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// True when the line has words and every one is in `allowed` (digits always count).
+fn only(line: &str, allowed: &[&str]) -> bool {
+    let w = words(line);
+    !w.is_empty()
+        && w.iter()
+            .all(|x| allowed.contains(&x.as_str()) || x.chars().all(|c| c.is_ascii_digit()))
+}
+
+const GREETING_WORDS: &[&str] = &[
+    "hi",
+    "hey",
+    "hello",
+    "howdy",
+    "there",
+    "team",
+    "all",
+    "everyone",
+    "claude",
+    "hope",
+    "you",
+    "you're",
+    "youre",
+    "are",
+    "doing",
+    "having",
+    "well",
+    "a",
+    "good",
+    "great",
+    "week",
+    "day",
+    "morning",
+    "afternoon",
+    "evening",
+    "weekend",
+    "quick",
+    "one",
+    "question",
+    "for",
+    "thanks",
+    "thank",
+    "so",
+    "much",
+    "just",
+    "i",
+    "have",
+    "how",
+    "is",
+    "it",
+    "going",
+];
+
+const CONFIRMATION_WORDS: &[&str] = &[
+    "yes", "yeah", "yep", "yup", "ok", "okay", "sure", "continue", "go", "ahead", "proceed", "do",
+    "it", "please", "thanks", "thank", "you", "great", "perfect", "good", "sounds", "lgtm",
+    "option", "approach", "with", "the", "that", "this", "one", "and", "looks", "ship", "correct",
+    "right", "fine", "first", "second", "a", "b", "then",
+];
+
+const FILLER_SENTENCES: &[&str] = &[
+    "done",
+    "sure",
+    "ok",
+    "okay",
+    "all",
+    "set",
+    "great",
+    "certainly",
+    "absolutely",
+    "here",
+    "you",
+    "go",
+    "finished",
+    "complete",
+    "completed",
+    "perfect",
+    "got",
+    "it",
+    "will",
+    "do",
+    "yes",
+    "thanks",
+];
+
+/// A line that is pasted material rather than the developer's words: indented code, a stack
+/// frame or the first line of an error report.
+fn looks_pasted(line: &str) -> bool {
+    let t = line.trim();
+    let first = t
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(':');
+    line.starts_with(char::is_whitespace)
+        || t.starts_with("Traceback")
+        || t.starts_with("File \"")
+        || t.starts_with("at ")
+        || t.starts_with("$ ")
+        || t.to_lowercase().starts_with("error:")
+        || t.to_lowercase().starts_with("error[")
+        || first.ends_with("Error")
+        || first.ends_with("Exception")
+}
+
+/// The prompt from the line where the request starts: leading blank lines, greetings, code
+/// fences and pasted traces are skipped. A prompt with nothing else is kept whole.
+fn request(prompt: &str) -> &str {
+    let p = prompt.trim();
+    let (mut at, mut fenced) = (0, false);
+    for line in p.split_inclusive('\n') {
+        let t = line.trim();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fenced = !fenced;
+        } else if !fenced && !t.is_empty() && !looks_pasted(line) && !only(t, GREETING_WORDS) {
+            return &p[at..];
+        }
+        at += line.len();
+    }
+    p
+}
+
+/// A short reply to the agent ("ok do it", "continue") that says nothing about the work.
+fn is_confirmation(prompt: &str) -> bool {
+    words(prompt).len() <= 6 && only(prompt, CONFIRMATION_WORDS)
+}
+
+/// The first sentence of `reply` that says something, with where it starts.
+fn headline(reply: &str) -> Option<(usize, &str)> {
+    let mut at = 0;
+    for line in reply.split_inclusive('\n') {
+        let body = line.trim_start_matches(|c: char| "#*->_ \t".contains(c));
+        let start = at + (line.len() - body.len());
+        let mut from = 0;
+        while from < body.trim_end().len() {
+            let rest = &body[from..];
+            let end = rest
+                .match_indices(['.', '!', '?'])
+                .find(|(i, _)| {
+                    rest[i + 1..].starts_with(char::is_whitespace) || rest[i + 1..].is_empty()
+                })
+                .map_or(rest.trim_end().len(), |(i, _)| i + 1);
+            let sentence = rest[..end].trim().trim_matches(|c| c == '*' || c == '_');
+            if !sentence.is_empty() && !only(sentence, FILLER_SENTENCES) {
+                return Some((start + from, sentence));
+            }
+            from += end;
+            from += rest[end..].len() - rest[end..].trim_start().len();
+        }
+        at += line.len();
+    }
+    None
+}
+
+const CLOSERS: &[&str] = &[
+    "let me know",
+    "hope this helps",
+    "happy to help",
+    "feel free to",
+    "would you like me to",
+    "want me to",
+    "shall i ",
+    "i can also",
+];
+const SUMMARY_MARKERS: &[&str] = &[
+    "in summary",
+    "summary",
+    "tl;dr",
+    "tldr",
+    "to summarize",
+    "in short",
+    "what changed",
+];
+
+/// The part of a reply worth quoting as the outcome: courtesies at its end are dropped, and a
+/// reply too long to quote starts at its summary paragraph when it has one.
+fn outcome(reply: &str) -> String {
+    let mut paragraphs: Vec<&str> = reply.trim().split("\n\n").collect();
+    let courtesy = |p: &str| {
+        let lower = p.to_lowercase();
+        p.chars().count() < 300 && CLOSERS.iter().any(|c| lower.contains(c))
+    };
+    while paragraphs.len() > 1 && paragraphs.last().is_some_and(|p| courtesy(p)) {
+        paragraphs.pop();
+    }
+    let text = paragraphs.join("\n\n");
+    if text.chars().count() <= RATIONALE_MAX {
+        return text;
+    }
+    let marked = paragraphs.iter().position(|p| {
+        let lead = p
+            .trim_start_matches(|c: char| "#*_ ".contains(c))
+            .to_lowercase();
+        SUMMARY_MARKERS.iter().any(|m| lead.starts_with(m))
+    });
+    match marked {
+        Some(i) => paragraphs[i..]
+            .join("\n\n")
+            .trim_start_matches(['#', ' '])
+            .to_string(),
+        None => text,
+    }
+}
+
 /// Build an `Extract` without a model. Errors hold the item (nothing to quote, or sensitive).
 pub(crate) fn from_shape(shape: &Shape<'_>) -> Result<Extract, String> {
     let (title, intent, rationale, whole) = match shape {
-        Shape::Exchange { prompt, reply } => (
-            first_line(prompt),
-            clean(prompt, INTENT_MAX),
-            clean(reply, RATIONALE_MAX),
-            format!("{prompt}\n{reply}"),
-        ),
+        Shape::Exchange { prompt, reply } => {
+            // A bare "ok do it" says nothing about the work, so the reply names it instead.
+            let said = headline(reply.trim()).filter(|_| is_confirmation(prompt));
+            let (title, wording) = match said {
+                Some((at, sentence)) => (sentence, &reply.trim()[at..]),
+                None => (first_line(request(prompt)), request(prompt)),
+            };
+            (
+                title,
+                clean(wording, INTENT_MAX),
+                clean(&outcome(reply), RATIONALE_MAX),
+                format!("{prompt}\n{reply}"),
+            )
+        }
         // A note's heading is its intent and its text the rationale (matches the plan).
         Shape::Note { title, body } => (
             first_line(title),
@@ -323,5 +542,226 @@ mod tests {
         assert_eq!(e.rationale, "Used middleware");
         // A held item stays held through the dispatcher.
         assert!(extract(&c, &exchange("", "r"), "").await.is_err());
+    }
+
+    fn title_of(prompt: &str) -> String {
+        from_shape(&exchange(prompt, "Done."))
+            .unwrap()
+            .title
+            .trim_start_matches(MARK)
+            .to_string()
+    }
+
+    #[test]
+    fn greetings_before_the_request_do_not_become_the_title() {
+        let e = from_shape(&exchange(
+            "Hey! Quick one for you.\nThe order list is slow for big customers. Add pagination.",
+            "Added cursor pagination.",
+        ))
+        .unwrap();
+        assert_eq!(
+            e.title,
+            "[auto-drafted] The order list is slow for big customers. Add pagination."
+        );
+        assert!(
+            e.intent.starts_with("The order list is slow"),
+            "{}",
+            e.intent
+        );
+        assert_eq!(
+            title_of("Hi there, hope you're having a good week!\nAdd an export by date range."),
+            "Add an export by date range."
+        );
+        // A request that merely starts with a greeting word is kept whole.
+        assert_eq!(
+            title_of("Hey, fix the login redirect"),
+            "Hey, fix the login redirect"
+        );
+        // Nothing but a greeting: keep what was said rather than invent a title.
+        assert_eq!(title_of("Hi!"), "Hi!");
+    }
+
+    #[test]
+    fn pasted_traces_and_code_fences_before_the_request_do_not_become_the_title() {
+        let trace = "Traceback (most recent call last):\n  File \"auth/session.py\", line 88, in load\n    sid = cookies['session_id']\nKeyError: 'session_id'\n\nwhy does login fail after a deploy?";
+        assert_eq!(title_of(trace), "why does login fail after a deploy?");
+        assert_eq!(
+            title_of("KeyError: 'wk_session'\n    at load_session (auth/session.py:92)\n\nthe mobile build crashes on login, can you look?"),
+            "the mobile build crashes on login, can you look?"
+        );
+        assert_eq!(
+            title_of(
+                "```\n- timeout = 10\n+ timeout = 30\n```\nIs this diff OK for the gateway client?"
+            ),
+            "Is this diff OK for the gateway client?"
+        );
+        // Only a trace or only a fence: fall back to the first line as before.
+        assert_eq!(title_of("KeyError: 'x'"), "KeyError: 'x'");
+        assert_eq!(title_of("```\nlet a = 1;\n```"), "```");
+        // Prose that mentions an error later is not skipped.
+        assert_eq!(
+            title_of("Handle the KeyError in load_session"),
+            "Handle the KeyError in load_session"
+        );
+    }
+
+    #[test]
+    fn a_bare_confirmation_is_titled_from_the_reply() {
+        for prompt in [
+            "yes, go ahead with option 2",
+            "ok do it",
+            "Continue",
+            "Looks good, ship it.",
+        ] {
+            let e = from_shape(&exchange(
+                prompt,
+                "Done. Webhook handling now acknowledges the gateway first and queues the event. Events are deduplicated by id.",
+            ))
+            .unwrap();
+            assert_eq!(
+                e.title,
+                "[auto-drafted] Webhook handling now acknowledges the gateway first and queues the event.",
+                "{prompt}"
+            );
+            assert!(
+                e.intent.starts_with("Webhook handling now acknowledges"),
+                "{prompt}: {}",
+                e.intent
+            );
+        }
+        // A short question is a real request, not a confirmation.
+        assert_eq!(
+            title_of("Yes or no: should retries stop at 3?"),
+            "Yes or no: should retries stop at 3?"
+        );
+        // Nothing to take a title from in the reply: keep the prompt.
+        let e = from_shape(&exchange("continue", "Done.")).unwrap();
+        assert_eq!(e.title, "[auto-drafted] continue");
+    }
+
+    #[test]
+    fn trailing_courtesies_are_dropped_from_the_rationale() {
+        let e = from_shape(&exchange(
+            "Rename the key",
+            "Renamed the key everywhere.\nThe old name is no longer read.\n\nHope this helps! Let me know if you'd like a deprecation warning.",
+        ))
+        .unwrap();
+        assert_eq!(
+            e.rationale,
+            "Renamed the key everywhere.\nThe old name is no longer read."
+        );
+        // Only the closing paragraph goes; a courtesy in the middle stays.
+        let e = from_shape(&exchange(
+            "Rename the key",
+            "Feel free to revert this step.\n\nRenamed the key.\n\nWould you like me to also add a warning?",
+        ))
+        .unwrap();
+        assert_eq!(
+            e.rationale,
+            "Feel free to revert this step.\n\nRenamed the key."
+        );
+        // A reply that is only a courtesy is kept rather than emptied.
+        let e = from_shape(&exchange("Rename the key", "Let me know if that works.")).unwrap();
+        assert_eq!(e.rationale, "Let me know if that works.");
+    }
+
+    #[test]
+    fn a_long_reply_keeps_its_summary_not_just_its_opening() {
+        let explore = "I read the handler and traced every call. ".repeat(60);
+        let reply = format!("{explore}\n\nIn summary: the button had two handlers; I removed onClick and disabled it while a request is in flight.");
+        assert!(reply.chars().count() > RATIONALE_MAX);
+        let e = from_shape(&exchange("Why two submits?", &reply)).unwrap();
+        assert!(
+            e.rationale
+                .starts_with("In summary: the button had two handlers"),
+            "{}",
+            e.rationale
+        );
+        assert!(!e.rationale.contains("traced every call"));
+        for marker in [
+            "TL;DR: removed onClick.",
+            "## Summary\nRemoved onClick.",
+            "**Summary**: removed onClick.",
+        ] {
+            let e = from_shape(&exchange(
+                "Why two submits?",
+                &format!("{explore}\n\n{marker}"),
+            ))
+            .unwrap();
+            assert!(
+                e.rationale.contains("removed onClick") || e.rationale.contains("Removed onClick"),
+                "{marker}"
+            );
+            assert!(
+                e.rationale.chars().count() < 100,
+                "{marker}: {}",
+                e.rationale
+            );
+        }
+        // Without a marker, or when the reply already fits, nothing moves.
+        let e = from_shape(&exchange("Why?", &explore)).unwrap();
+        assert!(e.rationale.starts_with("I read the handler"));
+        let e = from_shape(&exchange(
+            "Why?",
+            "I looked around.\n\nIn summary: it is fine.",
+        ))
+        .unwrap();
+        assert!(e.rationale.starts_with("I looked around."));
+    }
+
+    /// Not a test: writes the three draft kinds for a synthetic fixture so
+    /// `scripts/summary-quality-eval.py` can score them. Run with `--ignored` and
+    /// `WK_EVAL_FIXTURE`, `WK_EVAL_OUT` (and `WK_EVAL_INFERENCE`, `WK_EVAL_MODEL` for the local model).
+    #[tokio::test]
+    #[ignore]
+    async fn dump_drafts_for_summary_quality_eval() {
+        let fixture: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(std::env::var("WK_EVAL_FIXTURE").unwrap()).unwrap(),
+        )
+        .unwrap();
+        let endpoint = std::env::var("WK_EVAL_INFERENCE").unwrap_or_default();
+        let model = std::env::var("WK_EVAL_MODEL").unwrap_or_default();
+        let as_card = |e: Extract, id: &str, complete: bool| {
+            wk_summarize::card(e, id.into(), 1, vec!["backend".into()], complete)
+                .map(|c| serde_json::to_value(c).unwrap())
+        };
+        let mut out = vec![];
+        for turn in fixture["turns"].as_array().unwrap() {
+            let (id, prompt, reply) = (
+                turn["id"].as_str().unwrap(),
+                turn["prompt"].as_str().unwrap(),
+                turn["reply"].as_str().unwrap(),
+            );
+            let show = |r: Result<serde_json::Value, String>| match r {
+                Ok(card) => serde_json::json!({ "card": card }),
+                Err(e) => serde_json::json!({ "held": e }),
+            };
+            let rules = from_shape(&exchange(prompt, reply)).and_then(|e| as_card(e, id, false));
+            let local = if endpoint.is_empty() {
+                serde_json::json!({ "skipped": "no endpoint" })
+            } else {
+                let source = format!("user_prompt: {prompt}\nassistant_response: {reply}");
+                show(
+                    wk_summarize::extract(&endpoint, &model, &source)
+                        .await
+                        .and_then(|e| as_card(e, id, true)),
+                )
+            };
+            let given = serde_json::to_string(&turn["card"]).unwrap();
+            let assistant =
+                crate::assistant_draft::build(&given, "backend", 1, "eval", "claude-code")
+                    .map(|(_, record)| record["card"].clone());
+            out.push(serde_json::json!({
+                "id": id,
+                "rules": show(rules),
+                "local": local,
+                "assistant": show(assistant),
+            }));
+        }
+        std::fs::write(
+            std::env::var("WK_EVAL_OUT").unwrap(),
+            serde_json::to_string_pretty(&out).unwrap(),
+        )
+        .unwrap();
     }
 }

@@ -2,17 +2,40 @@
 
 Install the [user tools](../operations/install.md#install-the-tools), then follow the steps below. Live acceptance uses isolated synthetic conversations; these examples do not authorize collecting existing chats.
 
+## Summaries: let your assistant write them (recommended)
+
+A card is only worth sharing if a teammate can tell from its title what was done and from its decisions why. Three ways of writing the text are supported; start with the first.
+
+| Way | What it is | Choose it when |
+|---|---|---|
+| **Assistant-written (recommended)** | Your coding assistant already has the conversation, so it writes the card when you run `/wk-summarize` at the end of a task. Nothing new is sent to anyone. | Your client supports a saved command or prompt: Claude Code, VS Code Copilot Chat, Codex (see [Summarize with your assistant](#summarize-with-your-assistant-wk-summarize)). |
+| **Rules (zero-setup fallback)** | No model, no command: the collector builds a draft in the background by quoting the first request and the last reply. No decisions or constraints, marked `[auto-drafted]`. | The client has no saved-command support, or nobody has run `/wk-summarize` yet. |
+| **Local model (optional)** | A model on your machine writes the card in the background. | You already run a local model and want drafts without a manual command. |
+
+Set up the recommended way once per machine, after step 4 below:
+
+```sh
+wk-agent --state-dir /private/collector prompt --client claude-code --raw > ~/.claude/commands/wk-summarize.md
+```
+
+Then run `/wk-summarize` when a task is finished, read the result with `wk-agent drafts` and send it with `wk-agent submit --id ID --reviewed`. Rule drafts keep appearing in the background as the fallback, so you never need a model or a command to get started.
+
+On a synthetic comparison of 20 turns ([results and limits](../reviews/2026-10-19-summary-quality-comparison.md)), assistant-written cards named the work in every title and had decisions or constraints in every card; rule drafts had no decisions or constraints and, before the fixes described under [Rule drafts](#rule-drafts-and-their-limits), had a greeting, confirmation, pasted trace or code fence as the title in 45% of cards. The sample is small and the cards were written by the same author as the fixture, so treat it as direction, not a measured rate. The assistant flow is also manual: a card exists only if someone runs the command.
+
+**Publication caveat.** Assistant-written and rule drafts are `partial`, and the server publishes only `complete` cards. A submitted draft reaches reviewers as a private review copy but cannot be published into shared team knowledge today, so it also produces no overlap notices for teammates. See the [comparison](../reviews/2026-10-19-summary-quality-comparison.md#finding-partial-cards-cannot-be-published). Cards from a configured local model that are `complete`, and notes written under My context in the portal, can be published.
+
 1. Approve only intended service folders using `wk --state-dir /private/consent workspace approve /work/product --product PRODUCT --service backend --service frontend --yes`. The consent directory must be outside the product and private. Each separate collector state binds one chosen service. A multi-service capture must be explicitly attributed; unknown attribution remains partial.
 2. Ask the operator to provision your product/service membership. Copy the `binding_file` returned by approval, then run `wk-agent --state-dir /private/collector device connect --binding /private/consent/APPROVAL.json --service backend --server https://knowledge.example --yes`. Add `--model LOCAL_MODEL --inference http://127.0.0.1:11434/v1/chat/completions` only if you want a local model to write drafts; both are optional, and without `--inference` the collector builds drafts from rules (see [Set up without a local model](#set-up-without-a-local-model)). Complete the browser sign-in to the configured upstream provider. Connection validates membership and stores credentials in the native keyring; it does not start capture or install hooks. See [team connection](../operations/install.md#join-a-team-server). Legacy `init` and environment tokens are limited to loopback development; `init` takes the same optional `--inference`, `--summarizer` and `--model` flags.
 3. Run `wk-agent --state-dir /private/collector serve` in the user's session. Linux requires Secret Service/DBus. Missing secure storage disables persistence. Windows uses native Credential Store plus a private-directory ACL check. Platform certification remains required.
 4. Generate hook config with `wk-agent --state-dir /private/collector config --client cursor` (also `claude-code`, `gemini`). Inspect the fragment, then use `install --client CLIENT --file ABS_CONFIG --yes`. Installation merges strict JSON, backs up the prior object privately, and records owned entries. JSONC is refused unchanged. Uninstall removes exact owned entries and preserves user-modified entries. Do not install into real profiles until synthetic client certification is complete.
-5. `doctor` separately reports local approval, current membership, key availability, event counters and client capability labels. It does not turn untested fields green. Renew an expired hosted credential with `wk-agent --state-dir /private/collector device login` through upstream browser sign-in.
+5. Recommended: save the `/wk-summarize` command for your client ([above](#summaries-let-your-assistant-write-them-recommended)) so summaries are written by your assistant rather than quoted.
+6. `doctor` separately reports local approval, current membership, key availability, event counters and client capability labels. It does not turn untested fields green. Renew an expired hosted credential with `wk-agent --state-dir /private/collector device login` through upstream browser sign-in.
 
 A hook failure returns normally to the developer's agent and records a content-free capture gap locally. Knowledge generation/submission stops until `reset-capture --yes` closes pending sessions and discards private drafts. Then start a genuinely new client session. Restarts alone must not change client session identity. Hooks do not extract thinking/reasoning. The opt-in Cursor recovery described below validates callback-supplied transcript paths before a background reader may open them; other hooks do not read transcript paths. Product cwd is attribution metadata, not proof that all model context was in scope. Unknown external context therefore prevents automatic publication.
 
 ## Set up without a local model
 
-You do not need to install or run a model. `wk-agent` writes drafts in one of two ways, chosen when the collector is first set up:
+You do not need to install or run a model. `/wk-summarize` (the [recommended way](#summaries-let-your-assistant-write-them-recommended)) works in either mode below. In the background, `wk-agent` writes drafts in one of two ways, chosen when the collector is first set up:
 
 | Mode | How to choose it | Where draft text comes from |
 |---|---|---|
@@ -39,7 +62,7 @@ Raw conversations stay on your machine in `rules` mode: no model, local or remot
 
 In `rules` mode `process` still runs every 15 seconds (or on demand) and still reads live captured turns, native turns, imported session parts and memory notes. It builds each draft from structure:
 
-- **Conversation turns and imported parts:** the title is the first line of the first prompt, the goal (`intent`) is the first prompt clipped to 400 characters and the outcome (`rationale`) is the last reply clipped to 1,500 characters. A part with several exchanges uses its first prompt and its last reply. `decisions`, `constraints` and `open_questions` are empty.
+- **Conversation turns and imported parts:** the title is the first meaningful line of the first prompt and the goal (`intent`) is the prompt from that line on, clipped to 400 characters. Leading greetings ("Hey! Quick one"), code fences and pasted traces or indented code are skipped; a prompt with nothing else is kept whole. When the first prompt is only a confirmation ("ok do it", "continue"), the title and goal come from the first meaningful sentence of the reply instead. The outcome (`rationale`) is the last reply clipped to 1,500 characters, without closing courtesy paragraphs ("Let me know if …"); a reply longer than that starts at its "In summary", "TL;DR" or "Summary" paragraph when it has one. A part with several exchanges uses its first prompt and its last reply. `decisions`, `constraints` and `open_questions` are empty.
 - **Memory notes and instruction sections:** the title and goal are the heading (the note's name when it has none) and the rationale is the section text, clipped. A frontmatter hint such as `description` is put in front of the section text instead of being passed to a model.
 - **Marking:** every title starts with `[auto-drafted] ` (titles are cut to 256 bytes, marker included) and the card is `partial`, so reviewers see that it is built from structure and was not summarised.
 - **Safety:** quoted text is masked with the same pattern masking as the history tools (see [Masking](#import-past-agent-sessions)), and the source is held when it looks sensitive. Model-backed summarization also screens common email, formatted telephone and street-address patterns before inference, then checks the output. These are conservative heuristics, not complete personal-data detection; held items are counted and no draft is made.

@@ -61,7 +61,7 @@ The useful result is a source-backed brief before a change. Its quality depends 
 | Capability | What developers can do |
 |---|---|
 | **My context** | Keep owner-only summaries and structured manual notes; edit, delete or submit an explicit copy for review |
-| **No local model needed** | Set up with no model: drafts are built from the conversation's structure and marked `[auto-drafted]`, or your own assistant writes a card with `/wk-summarize`; a loopback model stays optional ([setup](docs/adapters/setup.md#set-up-without-a-local-model)) |
+| **Summaries your assistant writes** | Run `/wk-summarize` at the end of a task and your own coding assistant writes the card (title, goal, decisions, constraints) as a private draft you review ([setup](docs/adapters/setup.md#summaries-let-your-assistant-write-them-recommended)); with no command and no model, the collector still builds quoted `[auto-drafted]` drafts as a zero-setup fallback, and a loopback model stays optional |
 | **Agent memory import** | Turn existing `CLAUDE.md`, `AGENTS.md`, GitHub Copilot instruction files and Claude Code project notes into private drafts for review ([setup](docs/adapters/setup.md#import-existing-agent-memory)) |
 | **Agent history import** | Review, mask and export past Claude Code, Codex, VS Code Copilot and Cursor sessions for an approved folder, then import them as one private draft per session part ([setup](docs/adapters/setup.md#import-past-agent-sessions)) |
 | **Team context** | Browse published summaries by developer, service, date and file, within current membership scope |
@@ -119,7 +119,7 @@ flowchart LR
 
 1. **Approve scope locally.** A developer approves explicit product/service folders. Personal, sibling and unknown contexts stay outside that approval.
 2. **Capture only supported visible content.** Enabled adapters feed a private encrypted journal. Unsupported or ambiguous sessions are partial or held.
-3. **Summarize locally.** By default, drafts are built on your machine from the conversation's structure, without a model. You can instead configure a loopback model for written summaries, or ask your own coding assistant to write a card with `/wk-summarize`. Drafts are screened, encrypted and private until you submit them. There is no cloud summarization fallback.
+3. **Summarize locally.** Recommended: ask your own coding assistant to write the card with `/wk-summarize`. With no setup, drafts are built on your machine from the conversation's structure, without a model, as a fallback; you can also configure a loopback model for written summaries. Drafts are screened, encrypted and private until you submit them. There is no cloud summarization fallback.
 4. **Choose what to share.** Optional owner synchronization creates private server summaries. Explicit submission creates a review copy; authorized publication makes that copy available to the team.
 5. **Retrieve within scope.** The portal, CLI and MCP enforce current identity and product/service membership. Code-change context adds reviewed provenance and local Git snapshot observations for enrolled repositories.
 
@@ -202,7 +202,7 @@ Copy the five executables from `target/release` to a user-owned directory on PAT
 
 Get the portal URL, product and permitted services from your administrator, then sign in through the team's configured OIDC provider. You can use My context, Team context and manual notes without installing a collector.
 
-For local capture you do not need a model. Replace the placeholders below with your own approved values, and keep private state outside the product folder. Without a model, the collector builds drafts from the conversation's structure (quoted, marked `[auto-drafted]` and partial), and you can ask your own assistant for better cards; see [setup without a local model](docs/adapters/setup.md#set-up-without-a-local-model). To have a local model write drafts instead, add `--model MODEL --inference URL` with a loopback OpenAI-compatible endpoint to the connect command below.
+For local capture you do not need a model. Replace the placeholders below with your own approved values, and keep private state outside the product folder. The recommended way to get good summaries is to save the `/wk-summarize` command for your assistant and run it after a task ([setup](docs/adapters/setup.md#summaries-let-your-assistant-write-them-recommended)). Until you do, and with no model, the collector builds fallback drafts from the conversation's structure (quoted, marked `[auto-drafted]` and partial); see [setup without a local model](docs/adapters/setup.md#set-up-without-a-local-model). To have a local model write drafts instead, add `--model MODEL --inference URL` with a loopback OpenAI-compatible endpoint to the connect command below.
 
 **1. Approve the local workspace and service.**
 

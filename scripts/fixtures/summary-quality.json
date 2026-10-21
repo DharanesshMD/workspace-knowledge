@@ -1,0 +1,684 @@
+{
+ "project": "shopfront (synthetic)",
+ "note": "Entirely synthetic. No real conversation, person, company or repository content. Written for scripts/summary-quality-eval.py.",
+ "turns": [
+  {
+   "id": "t01",
+   "role": "A",
+   "kind": "clean",
+   "prompt": "Make the payment retry loop idempotent so customers are not charged twice when the gateway times out.",
+   "reply": "Retries now send a stable idempotency key per order attempt (payments/retry.py), so the gateway treats a repeated request as the same charge. I capped retries at 3 with exponential backoff because the gateway repeats charges on its own side after a timeout, and more attempts only multiply the risk. Added tests for a timed-out first attempt and a duplicate response.",
+   "files": [
+    "payments/retry.py",
+    "payments/gateway.py",
+    "tests/test_retry.py"
+   ],
+   "topic": [
+    "idempot",
+    "retr"
+   ],
+   "why": [
+    "gateway",
+    "cap",
+    "3"
+   ],
+   "card": {
+    "title": "Make payment retries idempotent with a per-order key",
+    "intent": "Stop customers being charged twice when the payment gateway times out and the client retries.",
+    "rationale": "Each order attempt now sends a stable idempotency key so the gateway treats a repeated request as the same charge. Retries are capped at 3 with exponential backoff.",
+    "decisions": [
+     "Send one stable idempotency key per order attempt on every retry.",
+     "Cap payment retries at 3 with exponential backoff."
+    ],
+    "constraints": [
+     "The gateway repeats charges on its own after a timeout, so extra attempts multiply the risk."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t02",
+   "role": "A",
+   "kind": "greeting",
+   "prompt": "Hey! Quick one for you.\nThe order list endpoint gets very slow once a customer has a few thousand orders. Can you add pagination?",
+   "reply": "Added cursor-based pagination to GET /orders (api/orders.py) with a default page size of 50 and a hard maximum of 200. I used a cursor on (created_at, id) instead of OFFSET because offset scans got slower the deeper the page. Existing clients that send no parameters get the first page and a next_cursor field. Updated tests/test_orders.py.\n\nLet me know if you want me to add it to the export endpoint too!",
+   "files": [
+    "api/orders.py",
+    "tests/test_orders.py"
+   ],
+   "topic": [
+    "paginat",
+    "order"
+   ],
+   "why": [
+    "cursor",
+    "offset",
+    "50"
+   ],
+   "card": {
+    "title": "Cursor pagination for the orders list endpoint",
+    "intent": "Keep GET /orders fast for customers with thousands of orders.",
+    "rationale": "Added cursor pagination on (created_at, id) with a default page of 50 and a maximum of 200. Offset paging was rejected because deep pages got slower.",
+    "decisions": [
+     "Use a cursor on created_at and id instead of OFFSET.",
+     "Default to 50 orders per page with a hard maximum of 200."
+    ],
+    "constraints": [
+     "Clients that send no parameters must still work and get the first page plus a next_cursor."
+    ],
+    "open_questions": [
+     "Should the export endpoint use the same cursor pagination?"
+    ]
+   }
+  },
+  {
+   "id": "t03",
+   "role": "A",
+   "kind": "log-first",
+   "prompt": "Traceback (most recent call last):\n  File \"auth/session.py\", line 88, in load_session\n    sid = cookies['session_id']\nKeyError: 'session_id'\n\nwhy does login fail for some users right after we deploy?",
+   "reply": "The deploy renamed the session cookie from session_id to wk_session, so users with an old cookie hit a KeyError in load_session. I made load_session read wk_session first and fall back to session_id for one release, and it now clears the old cookie after a successful login. Added a regression test with an old-style cookie.",
+   "files": [
+    "auth/session.py",
+    "tests/test_session.py"
+   ],
+   "topic": [
+    "session",
+    "cookie"
+   ],
+   "why": [
+    "renam",
+    "fall back",
+    "one release"
+   ],
+   "card": {
+    "title": "Fix login failures after the session cookie rename",
+    "intent": "Find why some users could not log in right after a deploy.",
+    "rationale": "The deploy renamed the session cookie from session_id to wk_session, so users with the old cookie hit a KeyError in load_session. The loader now reads the new name and falls back to the old one.",
+    "decisions": [
+     "Accept both cookie names for one release, then drop the old one.",
+     "Clear the old cookie after a successful login."
+    ],
+    "constraints": [
+     "Users who logged in before the deploy still hold the old session_id cookie."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t04",
+   "role": "A",
+   "kind": "confirmation",
+   "prompt": "yes, go ahead with option 2",
+   "reply": "Done. Webhook processing now acknowledges the gateway immediately and hands the event to a queue (infra/queue.py, payments/webhooks.py); a worker applies it afterwards. The gateway gives up after 10 seconds and then resends, which produced duplicate processing, so the handler returns 200 as soon as the event is stored. Events are deduplicated by event id. Tests cover a slow worker and a resent event.",
+   "files": [
+    "infra/queue.py",
+    "payments/webhooks.py",
+    "tests/test_webhooks.py"
+   ],
+   "topic": [
+    "webhook",
+    "queue"
+   ],
+   "why": [
+    "10 seconds",
+    "dedup",
+    "event id"
+   ],
+   "card": {
+    "title": "Process payment webhooks through a queue",
+    "intent": "Stop duplicate webhook processing caused by the gateway timing out and resending.",
+    "rationale": "The handler stores the event, returns 200 immediately and a queue worker applies it later. Events are deduplicated by event id.",
+    "decisions": [
+     "Acknowledge the gateway before doing any work and process events from a queue.",
+     "Deduplicate webhook events by event id."
+    ],
+    "constraints": [
+     "The gateway gives up after 10 seconds and resends the event."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t05",
+   "role": "A",
+   "kind": "clean",
+   "prompt": "Add a migration that adds a nullable refunded_at column to orders and backfill it from the refunds table.",
+   "reply": "Added db/migrations/0012_refunded_at.sql. The column is nullable so the migration is instant and takes no long lock on orders; the backfill runs in batches of 1000 rows in a separate script (db/backfill_refunded_at.py) so it can be stopped and resumed. api/orders.py now exposes refunded_at. Rolling back only drops the column.",
+   "files": [
+    "db/migrations/0012_refunded_at.sql",
+    "db/backfill_refunded_at.py",
+    "api/orders.py"
+   ],
+   "topic": [
+    "refunded_at",
+    "migrat"
+   ],
+   "why": [
+    "nullable",
+    "batch",
+    "lock"
+   ],
+   "card": {
+    "title": "Add a nullable refunded_at column to orders",
+    "intent": "Record when an order was refunded and backfill existing orders from the refunds table.",
+    "rationale": "The column is added as nullable so the migration is instant and takes no long lock on orders. The backfill runs separately in batches of 1000 rows so it can be stopped and resumed.",
+    "decisions": [
+     "Add refunded_at as nullable and backfill in a separate script.",
+     "Backfill in batches of 1000 rows."
+    ],
+    "constraints": [
+     "The migration must not hold a long lock on the orders table."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t06",
+   "role": "A",
+   "kind": "late-summary",
+   "prompt": "Why does the checkout page submit the order twice?",
+   "reply": "I started by reading web/checkout.tsx and the components it imports. The page renders a CheckoutForm that wraps a PayButton, and both the form and the button are wired to the order submission handler, so I traced every call to submitOrder. I then looked at the network panel traces you pasted earlier and compared the timing of the two POST /orders requests: they are 40 to 120 ms apart on a fast connection and up to 900 ms apart on the throttled profile. I also checked whether React strict mode double-invocation could explain it, but that only happens in development and the duplicates also appear in the production build. Next I searched the repository for other callers of submitOrder and found the analytics wrapper, which only logs. I read the idempotency handling on the server in api/orders.py to see how a duplicate would be treated: the server accepts both because the client does not send an idempotency key for order creation. I then reproduced the problem in a test with a mocked fetch and a fake timer, and confirmed the handler runs twice for a single click. \n\nIn summary: the PayButton had both an onClick handler and the form onSubmit handler bound to submitOrder, so one click ran it twice. I removed the onClick handler, disabled the button while a request is in flight, and send an idempotency key with order creation so a duplicate can never create a second order.",
+   "files": [
+    "web/checkout.tsx",
+    "api/orders.py",
+    "tests/checkout.test.tsx"
+   ],
+   "topic": [
+    "checkout",
+    "twice",
+    "double",
+    "submit"
+   ],
+   "why": [
+    "onclick",
+    "disabled",
+    "in flight"
+   ],
+   "card": {
+    "title": "Fix double order submission on the checkout page",
+    "intent": "Find and fix why one click on Pay created two order requests.",
+    "rationale": "The pay button had both an onClick handler and the form onSubmit handler bound to submitOrder, so one click ran it twice. The server also accepted both because order creation sent no idempotency key.",
+    "decisions": [
+     "Remove the onClick handler and rely on the form submit event.",
+     "Disable the pay button while a request is in flight.",
+     "Send an idempotency key with order creation so duplicates cannot create a second order."
+    ],
+    "constraints": [
+     "The duplicates also happen in the production build, so this is not a React strict mode artifact."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t07",
+   "role": "A",
+   "kind": "trailing-offer",
+   "prompt": "Rename the config key PAYMENT_TIMEOUT to GATEWAY_TIMEOUT_SECONDS everywhere.",
+   "reply": "Renamed PAYMENT_TIMEOUT to GATEWAY_TIMEOUT_SECONDS in config/settings.py, payments/gateway.py and docs/runbook.md. The new name includes the unit because the old one was read as milliseconds in one place. The old name is no longer read, so deployments must set the new variable before upgrading.\n\nHope this helps! Let me know if you'd like me to also add a deprecation warning for the old name.",
+   "files": [
+    "config/settings.py",
+    "payments/gateway.py",
+    "docs/runbook.md"
+   ],
+   "topic": [
+    "gateway_timeout",
+    "timeout",
+    "rename"
+   ],
+   "why": [
+    "unit",
+    "milliseconds",
+    "before upgrading"
+   ],
+   "card": {
+    "title": "Rename PAYMENT_TIMEOUT to GATEWAY_TIMEOUT_SECONDS",
+    "intent": "Make the gateway timeout setting name state its unit.",
+    "rationale": "The old name was read as milliseconds in one place and seconds in another, so the new name includes the unit. The old name is no longer read.",
+    "decisions": [
+     "Rename the key in settings, the gateway client and the runbook with no fallback to the old name."
+    ],
+    "constraints": [
+     "Deployments must set GATEWAY_TIMEOUT_SECONDS before upgrading."
+    ],
+    "open_questions": [
+     "Should the old name log a deprecation warning for one release?"
+    ]
+   }
+  },
+  {
+   "id": "t08",
+   "role": "A",
+   "kind": "code-first",
+   "prompt": "```\n- timeout = 10\n+ timeout = 30\n```\nIs this diff OK for the gateway client, or will a longer timeout block our workers?",
+   "reply": "A 30 second timeout is fine only if workers do not hold a database connection while waiting. I raised the gateway client timeout to 30 seconds in payments/gateway.py and moved the call outside the database transaction, so a slow gateway no longer pins a connection. I also added a circuit breaker that opens after 5 consecutive timeouts so a gateway outage fails fast instead of filling the worker pool.",
+   "files": [
+    "payments/gateway.py"
+   ],
+   "topic": [
+    "timeout",
+    "circuit"
+   ],
+   "why": [
+    "transaction",
+    "connection",
+    "5"
+   ],
+   "card": {
+    "title": "Raise the gateway timeout to 30s with a circuit breaker",
+    "intent": "Decide whether a 30 second gateway timeout would block workers.",
+    "rationale": "A longer timeout is safe only if workers do not hold a database connection while waiting, so the gateway call now happens outside the transaction. A circuit breaker opens after 5 consecutive timeouts so an outage fails fast.",
+    "decisions": [
+     "Raise the gateway client timeout from 10 to 30 seconds.",
+     "Make the gateway call outside the database transaction.",
+     "Open a circuit breaker after 5 consecutive timeouts."
+    ],
+    "constraints": [
+     "Workers must not hold a database connection while waiting on the gateway."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t09",
+   "role": "A",
+   "kind": "question",
+   "prompt": "Set up rate limiting for the public API.",
+   "reply": "Before I change anything I need two decisions. Should limits apply per API key or per IP address? Public endpoints have no key today, so IP-based limits would affect customers behind shared proxies. And what should the limit be for unauthenticated reads? I can implement a token bucket in the gateway middleware once you choose.",
+   "files": [],
+   "topic": [
+    "rate limit",
+    "limit"
+   ],
+   "why": [
+    "per api key",
+    "ip",
+    "proxies"
+   ],
+   "card": {
+    "title": "Rate limiting for the public API: open design questions",
+    "intent": "Add rate limiting to the public API.",
+    "rationale": "No code changed yet. Public endpoints have no API key, so IP-based limits would affect customers behind shared proxies. A token bucket in the gateway middleware is the proposed mechanism.",
+    "decisions": [],
+    "constraints": [
+     "Public endpoints have no API key today, so IP limits hit customers behind shared proxies."
+    ],
+    "open_questions": [
+     "Should limits apply per API key or per IP address?",
+     "What limit should apply to unauthenticated reads?"
+    ]
+   }
+  },
+  {
+   "id": "t10",
+   "role": "A",
+   "kind": "clean",
+   "prompt": "Cache the product catalog lookups in Redis for 5 minutes and invalidate on update.",
+   "reply": "Added a Redis cache in front of CatalogService.get_product (catalog/service.py, infra/cache.py) with a 300 second TTL. Updates delete the product key, so editors see changes immediately. A short lock stops many requests from rebuilding the same expired entry at once. If Redis is down the service reads from the database, so the catalog never goes down with the cache.",
+   "files": [
+    "catalog/service.py",
+    "infra/cache.py",
+    "tests/test_catalog_cache.py"
+   ],
+   "topic": [
+    "cache",
+    "redis",
+    "catalog"
+   ],
+   "why": [
+    "300",
+    "invalidat",
+    "lock",
+    "database"
+   ],
+   "card": {
+    "title": "Cache catalog product lookups in Redis",
+    "intent": "Reduce database load from repeated product lookups.",
+    "rationale": "CatalogService.get_product is cached in Redis for 300 seconds and updates delete the key. A short lock prevents many requests rebuilding an expired entry at once.",
+    "decisions": [
+     "Cache product lookups for 300 seconds and invalidate the key on update.",
+     "Fall back to the database when Redis is unavailable."
+    ],
+    "constraints": [
+     "Editors must see product changes immediately."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t11",
+   "role": "B",
+   "kind": "clean",
+   "prompt": "Customers on slow networks were billed twice again. Look at the charge retry loop in payments.",
+   "reply": "The duplicate came from a code path that built a fresh idempotency key on every attempt in payments/retry.py when the order had a coupon. I now derive the key from the order id and attempt group so all retries share it, and added a test with a coupon order. The retry cap of 3 is unchanged.",
+   "files": [
+    "payments/retry.py",
+    "tests/test_retry.py"
+   ],
+   "topic": [
+    "retr",
+    "idempot",
+    "billed",
+    "charge"
+   ],
+   "why": [
+    "fresh",
+    "coupon",
+    "order id"
+   ],
+   "card": {
+    "title": "Fix duplicate charges from a per-attempt idempotency key with coupons",
+    "intent": "Find why customers on slow networks were billed twice again.",
+    "rationale": "With a coupon the retry path built a new idempotency key on every attempt, so the gateway saw separate charges. The key is now derived from the order id so all retries share it.",
+    "decisions": [
+     "Derive the idempotency key from the order id so every retry shares it."
+    ],
+    "constraints": [
+     "The retry cap of 3 stays unchanged."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t12",
+   "role": "B",
+   "kind": "greeting",
+   "prompt": "Hi there, hope you're having a good week!\nSupport needs an orders export filtered by date range for finance. Please add it.",
+   "reply": "Added GET /orders/export?from=&to= (api/orders.py) that streams CSV in pages using the existing cursor pagination, so memory stays flat for large ranges. Dates are inclusive and interpreted in UTC. The endpoint is limited to finance and support roles. Tests added.",
+   "files": [
+    "api/orders.py",
+    "tests/test_orders.py"
+   ],
+   "topic": [
+    "export",
+    "date",
+    "csv"
+   ],
+   "why": [
+    "stream",
+    "utc",
+    "role"
+   ],
+   "card": {
+    "title": "Add a date-range orders export for finance",
+    "intent": "Let support and finance export orders for a date range.",
+    "rationale": "GET /orders/export streams CSV using the existing cursor pagination so memory stays flat for large ranges. Dates are inclusive and in UTC.",
+    "decisions": [
+     "Stream the export in pages with the existing cursor pagination.",
+     "Restrict the endpoint to finance and support roles."
+    ],
+    "constraints": [
+     "Date range boundaries are inclusive and interpreted in UTC."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t13",
+   "role": "B",
+   "kind": "confirmation",
+   "prompt": "ok do it",
+   "reply": "I added signature verification to the webhook handler (payments/webhooks.py). Requests with a missing or invalid signature header now get a 401 before anything is queued, and the check uses a constant-time comparison. The verification key is read from settings and never logged. A replayed event older than 5 minutes is rejected.",
+   "files": [
+    "payments/webhooks.py",
+    "tests/test_webhooks.py"
+   ],
+   "topic": [
+    "webhook",
+    "signature"
+   ],
+   "why": [
+    "401",
+    "constant-time",
+    "5 minutes"
+   ],
+   "card": {
+    "title": "Verify webhook signatures before queueing events",
+    "intent": "Reject forged payment webhook requests.",
+    "rationale": "The handler checks the signature header with a constant-time comparison and returns 401 before anything is queued. Events older than 5 minutes are rejected to stop replays.",
+    "decisions": [
+     "Verify the signature before queueing and return 401 on failure.",
+     "Reject events older than 5 minutes."
+    ],
+    "constraints": [
+     "The verification key comes from settings and must never be logged."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t14",
+   "role": "B",
+   "kind": "log-first",
+   "prompt": "KeyError: 'wk_session'\n    at load_session (auth/session.py:92)\n\nthe new mobile app build crashes on login with this, can you look?",
+   "reply": "The mobile build sends the session in an Authorization header instead of a cookie, and load_session only looked at cookies. I made load_session accept the header as well, preferring the header when both are present, and fixed the KeyError by using cookies.get. Added tests for header-only and cookie-only requests.",
+   "files": [
+    "auth/session.py",
+    "tests/test_session.py"
+   ],
+   "topic": [
+    "session",
+    "header",
+    "mobile"
+   ],
+   "why": [
+    "authorization",
+    "cookies.get",
+    "prefer"
+   ],
+   "card": {
+    "title": "Accept the session in an Authorization header for the mobile app",
+    "intent": "Fix login crashes in the new mobile build.",
+    "rationale": "The mobile build sends the session in an Authorization header and load_session only looked at cookies, raising a KeyError. It now accepts either and prefers the header.",
+    "decisions": [
+     "Accept the session from the Authorization header and prefer it over the cookie.",
+     "Use cookies.get so a missing cookie no longer raises."
+    ],
+    "constraints": [
+     "Cookie-only web clients must keep working."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t15",
+   "role": "B",
+   "kind": "late-summary",
+   "prompt": "The checkout pay button seems to fire two requests on slow phones. Can you check?",
+   "reply": "Let me look at how the checkout button behaves on slow phones. I opened web/checkout.tsx, the PayButton component and the useSubmit hook, and then replayed the throttled traces. The request fires from the click handler and again from the form submit event. On a slow device the second event arrives after the first response has started, so the loading state has not yet disabled the button. I also looked at the mobile viewport CSS and the debounce helper in web/utils.ts, which is imported but never used in this component. I compared against the settings page, which does not have the problem because it only uses the form submit event. I checked git history for the handler and found the onClick was added during a styling change. Finally I wrote a small test with a fake timer that clicks twice within 300 ms. Before settling on a fix I also compared three options. The first was a debounce of 400 ms on the handler, which hides the symptom but delays the request on fast phones and still allows a double submit if the user waits. The second was to disable the button from the click handler, which misses the keyboard submit path. The third was to make the submit handler the only entry point and set the loading flag synchronously before any await, which closes both paths. I read the useSubmit hook line by line to confirm the flag is read before the first await, and I checked the analytics wrapper does not retry on its own. I also ran the existing checkout tests, which passed, and the new test, which failed before the fix. \n\nTL;DR: the button still has an onClick handler besides the form submit, and on slow phones the second event lands before the loading state disables the button. I removed the onClick, moved the loading flag to be set synchronously in the submit handler, and added a test that clicks twice within 300 ms.",
+   "files": [
+    "web/checkout.tsx",
+    "tests/checkout.test.tsx"
+   ],
+   "topic": [
+    "checkout",
+    "button",
+    "twice",
+    "double",
+    "submit"
+   ],
+   "why": [
+    "removed the onclick",
+    "synchronous"
+   ],
+   "card": {
+    "title": "Stop double submits on slow phones in checkout",
+    "intent": "Find why the pay button fires two requests on slow phones.",
+    "rationale": "A leftover onClick handler fires alongside the form submit and the loading state was set too late to disable the button. The loading flag is now set synchronously in the submit handler.",
+    "decisions": [
+     "Remove the leftover onClick handler.",
+     "Set the loading flag synchronously inside the submit handler."
+    ],
+    "constraints": [
+     "The second event can arrive before the first response starts on slow devices."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t16",
+   "role": "B",
+   "kind": "clean",
+   "prompt": "Add a dark mode toggle to the settings page and remember the choice per user.",
+   "reply": "Added a theme toggle to web/settings.tsx that stores the choice in the user profile (api/profile.py), so it follows the user across devices. The first visit follows the operating system preference. Colors come from CSS variables so no component needed changes.",
+   "files": [
+    "web/settings.tsx",
+    "api/profile.py",
+    "web/theme.css"
+   ],
+   "topic": [
+    "dark",
+    "theme"
+   ],
+   "why": [
+    "profile",
+    "css variables",
+    "operating system"
+   ],
+   "card": {
+    "title": "Add a per-user dark mode toggle",
+    "intent": "Let users switch to dark mode and remember the choice.",
+    "rationale": "The choice is stored in the user profile so it follows the user across devices. First visits follow the operating system preference and colors come from CSS variables.",
+    "decisions": [
+     "Store the theme in the user profile rather than local storage.",
+     "Default to the operating system preference."
+    ],
+    "constraints": [],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t17",
+   "role": "B",
+   "kind": "trailing-offer",
+   "prompt": "Upgrade the logging library and drop the deprecated formatter.",
+   "reply": "Upgraded the logging library to the current major version in infra/logging.py and replaced the deprecated formatter with the structured JSON formatter. Log field names are unchanged so existing dashboards keep working. Removed two unused handler classes.\n\nLet me know if you want me to also wire the request id into every log line. Happy to help with that next!",
+   "files": [
+    "infra/logging.py",
+    "requirements.txt"
+   ],
+   "topic": [
+    "logging",
+    "formatter"
+   ],
+   "why": [
+    "json",
+    "field names",
+    "dashboards"
+   ],
+   "card": {
+    "title": "Upgrade the logging library and use the JSON formatter",
+    "intent": "Remove the deprecated log formatter.",
+    "rationale": "The library is upgraded and the deprecated formatter is replaced by the structured JSON formatter. Field names are unchanged so existing dashboards keep working.",
+    "decisions": [
+     "Replace the deprecated formatter with the structured JSON formatter.",
+     "Keep log field names unchanged."
+    ],
+    "constraints": [
+     "Existing dashboards depend on the current log field names."
+    ],
+    "open_questions": [
+     "Should the request id be added to every log line?"
+    ]
+   }
+  },
+  {
+   "id": "t18",
+   "role": "B",
+   "kind": "clean",
+   "prompt": "Product pages are slow because catalog lookups hit the database on every view. Fix that.",
+   "reply": "get_product in catalog/service.py now reads through the Redis cache and I raised the TTL for rarely edited products to 15 minutes. Cache keys include the locale so translated pages do not collide. A warm-up job fills the cache for the top 500 products after a deploy.",
+   "files": [
+    "catalog/service.py",
+    "infra/cache.py",
+    "jobs/warm_catalog.py"
+   ],
+   "topic": [
+    "catalog",
+    "cache"
+   ],
+   "why": [
+    "locale",
+    "15 minutes",
+    "warm"
+   ],
+   "card": {
+    "title": "Extend the catalog cache with locale keys and a warm-up job",
+    "intent": "Make product pages fast by avoiding a database lookup on every view.",
+    "rationale": "Product lookups read through Redis with a 15 minute TTL for rarely edited products. Cache keys include the locale and a warm-up job fills the top 500 products after a deploy.",
+    "decisions": [
+     "Include the locale in cache keys.",
+     "Warm the cache for the top 500 products after a deploy."
+    ],
+    "constraints": [
+     "Translated pages must not collide in the cache."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t19",
+   "role": "B",
+   "kind": "code-first",
+   "prompt": "```\nGATEWAY_TIMEOUT_SECONDS=45\n```\nShould I set this for the EU region? Customers there see timeouts.",
+   "reply": "Yes, but only for EU: set GATEWAY_TIMEOUT_SECONDS=45 in the EU settings (config/settings.py) and keep 30 elsewhere. EU traffic goes through a slower acquirer, and with the circuit breaker at 5 timeouts the longer wait will not pile up workers. I made the value per region and documented it in docs/runbook.md.",
+   "files": [
+    "config/settings.py",
+    "docs/runbook.md"
+   ],
+   "topic": [
+    "timeout",
+    "eu",
+    "region"
+   ],
+   "why": [
+    "acquirer",
+    "circuit breaker",
+    "30"
+   ],
+   "card": {
+    "title": "Use a 45 second gateway timeout for the EU region only",
+    "intent": "Decide whether to raise the gateway timeout for EU customers who see timeouts.",
+    "rationale": "EU traffic goes through a slower acquirer, so the EU region gets 45 seconds while other regions keep 30. The circuit breaker at 5 timeouts keeps the longer wait from piling up workers.",
+    "decisions": [
+     "Make GATEWAY_TIMEOUT_SECONDS a per-region value with 45 for EU and 30 elsewhere."
+    ],
+    "constraints": [
+     "The circuit breaker opens after 5 consecutive timeouts."
+    ],
+    "open_questions": []
+   }
+  },
+  {
+   "id": "t20",
+   "role": "B",
+   "kind": "confirmation",
+   "prompt": "continue",
+   "reply": "Finished the audit log. db/migrations/0013_audit_log.sql creates an append-only audit_log table, and api/admin.py writes an entry for role changes and refunds. Rows are never updated or deleted by the application; the database role it uses has INSERT and SELECT only. Added tests that an update attempt fails.",
+   "files": [
+    "db/migrations/0013_audit_log.sql",
+    "api/admin.py",
+    "tests/test_audit.py"
+   ],
+   "topic": [
+    "audit"
+   ],
+   "why": [
+    "append-only",
+    "insert",
+    "select"
+   ],
+   "card": {
+    "title": "Add an append-only audit log for role changes and refunds",
+    "intent": "Keep a tamper-resistant record of sensitive admin actions.",
+    "rationale": "A new audit_log table is written for role changes and refunds. The application database role has INSERT and SELECT only, so rows cannot be changed or removed.",
+    "decisions": [
+     "Make audit_log append-only by granting the application role INSERT and SELECT only."
+    ],
+    "constraints": [
+     "The application must never update or delete audit rows."
+    ],
+    "open_questions": []
+   }
+  }
+ ]
+}
