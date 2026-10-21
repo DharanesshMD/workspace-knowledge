@@ -178,6 +178,8 @@ impl KnowledgeMcp {
         &self,
         Parameters(args): Parameters<Record>,
     ) -> Result<CallToolResult, ErrorData> {
+        wk_contracts::reject_collector_only_fields(&args.card)
+            .map_err(|_| error("provenance is set only by the collector"))?;
         wk_contracts::validate_card(&args.card).map_err(|_| error("invalid summary card"))?;
         if wk_summarize::sensitive(&args.card.to_string()) {
             return Err(error("summary requires private review"));

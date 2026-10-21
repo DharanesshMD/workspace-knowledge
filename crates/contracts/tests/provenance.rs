@@ -42,3 +42,12 @@ fn rejects_provenance_on_a_truncated_card() {
         "provenance cannot be set on a truncated card"
     );
 }
+
+#[test]
+fn tool_callers_may_not_set_provenance() {
+    use wk_contracts::reject_collector_only_fields;
+    assert!(reject_collector_only_fields(&card()).is_ok());
+    let mut v = card();
+    v["provenance"] = json!("assistant_written");
+    assert!(reject_collector_only_fields(&v).is_err());
+}
