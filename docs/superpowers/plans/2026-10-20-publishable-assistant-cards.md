@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status (2026-10-20): Tasks 1-6 and Task 7 step 1 are implemented and reviewed (fmt, clippy -D warnings and the full workspace suite including Postgres tests pass). Not done: Task 7 step 2 (eval re-run) and Task 8 (docs, changelog, review note), which edit files that are still uncommitted in the main checkout; do them once the item-2 changes are committed.**
+**Status (2026-10-21): Tasks 1-6 and Task 7 step 1 merged in #22; `knowledge.record` hardening in #23; the setup/README/CHANGELOG wording of Task 8 is done. Remaining: Task 7 step 2 (re-run `scripts/summary-quality-eval.py` with real assistant cards) and the review-note update in `docs/reviews/2026-10-19-summary-quality-comparison.md`, both blocked until item 2's files are committed.**
 
 **Goal:** A card written by the developer's assistant (`wk-agent draft` / `/wk-summarize`) and submitted after the author's review can be published by a reviewer and then reaches teammates, while rule drafts, hook partials, imports and truncated cards stay unpublishable.
 
