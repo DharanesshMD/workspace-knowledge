@@ -413,8 +413,8 @@ impl Knowledge {
                 "SELECT c.id,c.revision,c.author,c.body,(extract(epoch from c.created_at)*1000)::bigint AS at FROM cards c
                  JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$3
                  WHERE c.org=$1 AND c.product=$2 AND c.author<>$3 AND c.published AND NOT c.withdrawn AND m.services @> c.services AND $5::text[] @> c.services
-                 AND to_tsvector('simple',(c.body->>'title')||' '||(c.body->>'intent')||' '||(c.body->>'rationale')) @@ to_tsquery('simple',$4)
-                 ORDER BY ts_rank(to_tsvector('simple',(c.body->>'title')||' '||(c.body->>'intent')||' '||(c.body->>'rationale')), to_tsquery('simple',$4)) DESC, c.created_at DESC
+                 AND c.search_vector @@ to_tsquery('simple',$4)
+                 ORDER BY ts_rank(c.search_vector, to_tsquery('simple',$4)) DESC, c.created_at DESC
                  LIMIT 10",
             )
             .bind(&a.org).bind(product).bind(&a.user).bind(&tsq).bind(&services)

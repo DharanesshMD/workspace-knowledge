@@ -1,6 +1,6 @@
 # Adoption friction: prioritized work
 
-**Status: item 1 implemented and tested locally (see the [real-client results](../../reviews/2026-10-19-remote-mcp-signin-results.md)); item 2 (assistant-written default, quality comparison, rule-draft fixes) done, see the [comparison](../../reviews/2026-10-19-summary-quality-comparison.md) — its main finding is that partial cards cannot be published; item 5 (source-install path) done; items 3–4 proposed as separate sessions; signed binaries still need an Apple Developer identity.** Source: the "where it won't be smooth" assessment of 2026-10-19 for a small team self-hosting the alpha. Order is by developer pain removed per unit of effort, with items that need owner resources last. None of this changes the [production readiness](../../operations/production-readiness.md) gates.
+**Status: item 1 implemented and tested locally (see the [real-client results](../../reviews/2026-10-19-remote-mcp-signin-results.md)); item 2 (assistant-written default, quality comparison, rule-draft fixes) done, see the [comparison](../../reviews/2026-10-19-summary-quality-comparison.md) — its main finding is that partial cards cannot be published; item 3 (capacity and search performance) done locally, see the [capacity review](../../reviews/2026-10-21-capacity-and-search.md) — the real-team pilot is still the owner's; item 5 (source-install path) done; item 4 proposed as a separate session; signed binaries still need an Apple Developer identity.** Source: the "where it won't be smooth" assessment of 2026-10-19 for a small team self-hosting the alpha. Order is by developer pain removed per unit of effort, with items that need owner resources last. None of this changes the [production readiness](../../operations/production-readiness.md) gates.
 
 ## Priority order
 
@@ -33,6 +33,7 @@ Today `wk-mcp` needs a hand-supplied short-lived `WK_ACCESS_TOKEN`, and native r
 - Profile where database CPU goes under search/MCP load (the 2-core database hit its cap at five identities); look at query plans, indexes and per-request work before adding hardware.
 - Re-run the pilot at 20 and 50 synthetic identities and for at least 30 minutes; publish the operating envelope for a small team only.
 - **Done when:** search p95 is lower or the cap is explained, and the envelope is recorded. A real-team pilot remains an owner-scoped gate.
+- **Result (2026-10-21):** done. Two root causes found and fixed (schema 18); five-identity search p95 about 0.9 s to 34 ms; 20 and 50 identities and a 30-minute soak recorded in the [review](../../reviews/2026-10-21-capacity-and-search.md). Local Docker VM and synthetic content only.
 
 ## 4. Capture support boundary
 

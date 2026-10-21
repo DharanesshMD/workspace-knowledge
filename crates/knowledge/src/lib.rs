@@ -152,7 +152,7 @@ impl Knowledge {
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db)?;
-        if versions != (1..=17).collect::<Vec<_>>() {
+        if versions != (1..=18).collect::<Vec<_>>() {
             return Err(Error::Storage);
         }
         Ok(())
@@ -188,6 +188,7 @@ impl Knowledge {
             (15, include_str!("../../../migrations/server/0015.sql")),
             (16, include_str!("../../../migrations/server/0016.sql")),
             (17, include_str!("../../../migrations/server/0017.sql")),
+            (18, include_str!("../../../migrations/server/0018.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
@@ -356,7 +357,7 @@ impl Knowledge {
         if query.trim().is_empty() || query.len() > 1024 || limit == 0 || limit > 20 {
             return Err(Error::Invalid);
         }
-        let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND ($6::text[] IS NULL OR $6::text[] @> c.services) AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND to_tsvector('simple',(c.body->>'title') || ' ' || (c.body->>'intent') || ' ' || (c.body->>'rationale') || ' ' || COALESCE(c.body->>'decisions','') || ' ' || COALESCE(c.body->>'constraints','') || ' ' || COALESCE(c.body->>'open_questions','')) @@ plainto_tsquery('simple',$4) ORDER BY c.id LIMIT $5").bind(&actor.user).bind(&actor.org).bind(product).bind(query).bind(i64::from(limit)).bind(self.device_guard.as_ref().map(|g|g.services.clone())).fetch_all(&mut *tx).await.map_err(db)?;
+        let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND ($6::text[] IS NULL OR $6::text[] @> c.services) AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND c.search_vector @@ plainto_tsquery('simple',$4) ORDER BY c.id LIMIT $5").bind(&actor.user).bind(&actor.org).bind(product).bind(query).bind(i64::from(limit)).bind(self.device_guard.as_ref().map(|g|g.services.clone())).fetch_all(&mut *tx).await.map_err(db)?;
         rows.into_iter().map(decode).collect()
     }
 }
