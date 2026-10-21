@@ -1,6 +1,6 @@
 # Native collector and agent setup
 
-Install the [user tools](../operations/install.md#install-the-tools), then follow the steps below. Live acceptance uses isolated synthetic conversations; these examples do not authorize collecting existing chats.
+Install the [user tools](../operations/install.md#install-the-tools), then follow the steps below. Which client versions and operating systems are supported, and what is captured or held for each, is in the single [capture support table](support.md); a version not listed there is not supported. Live acceptance uses isolated synthetic conversations; these examples do not authorize collecting existing chats.
 
 ## Summaries: let your assistant write them (recommended)
 

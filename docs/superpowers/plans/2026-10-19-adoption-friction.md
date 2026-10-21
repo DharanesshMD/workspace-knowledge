@@ -1,6 +1,6 @@
 # Adoption friction: prioritized work
 
-**Status: item 1 implemented and tested locally (see the [real-client results](../../reviews/2026-10-19-remote-mcp-signin-results.md)); item 2 (assistant-written default, quality comparison, rule-draft fixes) done, see the [comparison](../../reviews/2026-10-19-summary-quality-comparison.md) — its main finding is that partial cards cannot be published; item 3 (capacity and search performance) done locally, see the [capacity review](../../reviews/2026-10-21-capacity-and-search.md) — the real-team pilot is still the owner's; item 5 (source-install path) done; item 4 proposed as a separate session; signed binaries still need an Apple Developer identity.** Source: the "where it won't be smooth" assessment of 2026-10-19 for a small team self-hosting the alpha. Order is by developer pain removed per unit of effort, with items that need owner resources last. None of this changes the [production readiness](../../operations/production-readiness.md) gates.
+**Status: item 1 implemented and tested locally (see the [real-client results](../../reviews/2026-10-19-remote-mcp-signin-results.md)); item 2 (assistant-written default, quality comparison, rule-draft fixes) done, see the [comparison](../../reviews/2026-10-19-summary-quality-comparison.md) — its main finding is that partial cards cannot be published; item 3 (capacity and search performance) done locally, see the [capacity review](../../reviews/2026-10-21-capacity-and-search.md) — the real-team pilot is still the owner's; item 5 (source-install path) done; item 4 (capture support boundary) done, see the [support table](../../adapters/support.md); signed binaries still need an Apple Developer identity.** Source: the "where it won't be smooth" assessment of 2026-10-19 for a small team self-hosting the alpha. Order is by developer pain removed per unit of effort, with items that need owner resources last. None of this changes the [production readiness](../../operations/production-readiness.md) gates.
 
 ## Priority order
 
@@ -41,6 +41,7 @@ Today `wk-mcp` needs a hand-supplied short-lived `WK_ACCESS_TOKEN`, and native r
 - A scheduled check that flags new Claude Code and Cursor releases so unsupported versions are noticed rather than silently half-working.
 - Codex and Antigravity stay experimental; Windows stays unsupported. Point everyone else at the universal fallback: explicit export and the assistant-written flow.
 - **Done when:** unsupported versions fail with a clear message and the table is the single source of truth.
+- **Result (2026-10-21):** done. `docs/adapters/support.md` is generated and checked; a weekly check flags newer Claude Code and Cursor releases (both currently ahead of the tested versions, so capture on them is unverified); pinned-version refusals now explain themselves. Claude Code capture is still not version-checked at run time, only flagged by the release check.
 
 ## 5. macOS distribution
 

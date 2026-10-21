@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "certified_clients": [],
   "adapters": [
     {
@@ -14,20 +14,43 @@
         "unsupported context holds",
         "24-hour fixed collector retention",
         "review required"
-      ]
+      ],
+      "os": "macOS",
+      "version_policy": "exact",
+      "watch": {
+        "source": "cursor-update-api",
+        "tested_version": "3.23.23"
+      },
+      "captured": "Prompts and responses of explicitly callback-bound Agents-window sessions on This Mac, recovered privately for 24 hours",
+      "held": "Unsupported context holds the session; sessions missed before enrollment are not detected; owner review before anything is shared",
+      "other_versions": "Refused: private recovery stays off (`cursor_version_unverified`)"
     },
     {
       "client": "Claude Code",
       "surface": "CLI/Code mode",
       "status": "partial",
       "method": "native hook fields",
-      "live_tested": "2.1.293 with subscription/Sonnet 5.5: actual search/get and prompt/response callbacks passed; coverage remains partial; see docs/reviews/2026-10-08-multiclient-live-results.md"
+      "live_tested": "2.1.293 with subscription/Sonnet 5.5: actual search/get and prompt/response callbacks passed; coverage remains partial; see docs/reviews/2026-10-08-multiclient-live-results.md",
+      "os": "macOS (tested)",
+      "version_policy": "unpinned",
+      "watch": {
+        "source": "npm:@anthropic-ai/claude-code",
+        "tested_version": "2.1.293"
+      },
+      "captured": "Visible prompt and response hook fields; coverage is partial",
+      "held": "Anything the hook fields do not carry; the optional edit-protection hook is separate and needs 2.1.295 or later",
+      "other_versions": "Not checked at capture time; only the tested version is evidence. A newer release may half-work, so the release check flags it"
     },
     {
       "client": "Gemini CLI",
       "status": "partial",
       "method": "native hook fields",
-      "live_tested": false
+      "live_tested": false,
+      "os": "not tested",
+      "version_policy": "unpinned",
+      "captured": "Hook fields only; no live certification",
+      "held": "Broad live certification pending",
+      "other_versions": "Not tested"
     },
     {
       "client": "Codex",
@@ -42,7 +65,12 @@
         "Actual emitter must match pinned installed binary",
         "Fixed 24-hour retention; explicit enrollment and review required"
       ],
-      "live_tested": "2026-10-09 actual no-tool hooks -> local Qwen3.5:2b draft -> reviewer correction revision 2 -> publication -> second identity MCP search/get; full certification pending"
+      "live_tested": "2026-10-09 actual no-tool hooks -> local Qwen3.5:2b draft -> reviewer correction revision 2 -> publication -> second identity MCP search/get; full certification pending",
+      "os": "macOS",
+      "version_policy": "exact",
+      "captured": "Visible no-tool turns, delivered through enrolled hooks",
+      "held": "Tool use, subagents, compaction and ambiguous context hold the session",
+      "other_versions": "Refused at enrollment; Codex 0.162.0-alpha.17.2 was rejected"
     },
     {
       "client": "Antigravity",
@@ -56,7 +84,12 @@
         "Terminal attribution unverified: all native publication blocked",
         "Only exact callback-bound transcript is read",
         "Actual emitter ancestry verification and full collector acceptance pending"
-      ]
+      ],
+      "os": "macOS",
+      "version_policy": "exact",
+      "captured": "Hook delivery and private capture of the exact callback-bound transcript",
+      "held": "All native turns remain held and cannot be published (terminal attribution unverified)",
+      "other_versions": "Not supported"
     },
     {
       "client": "Claude Desktop",
@@ -64,13 +97,59 @@
       "status": "partial",
       "method": "explicit bound Enterprise Compliance chat pull",
       "requires": "Enterprise read entitlement and isolated broker",
-      "live_tested": false
+      "live_tested": false,
+      "os": "macOS (isolated broker)",
+      "version_policy": "n/a",
+      "captured": "Explicit consent-bound text pull",
+      "held": "Needs Enterprise read entitlement; live deployment acceptance pending",
+      "other_versions": "n/a"
     },
     {
       "client": "Workspace Knowledge managed chat",
       "status": "implemented-unverified",
       "method": "controlled visible prompt/response capture",
-      "provider": "loopback OpenAI-compatible chat endpoint"
+      "provider": "loopback OpenAI-compatible chat endpoint",
+      "os": "any",
+      "version_policy": "n/a",
+      "captured": "Explicitly selected, visible prompt and response",
+      "held": "Unverified against live providers",
+      "other_versions": "n/a"
+    },
+    {
+      "client": "Past-session import (Claude Code, Codex, VS Code Copilot Chat, Cursor)",
+      "status": "partial",
+      "os": "macOS",
+      "version_policy": "unpinned",
+      "captured": "Sessions you list, review and choose with `wk agent-history` and `wk-agent import`; read-only, never automatic",
+      "held": "Coverage is partial; storage formats are undocumented and version-dependent",
+      "other_versions": "Not checked; a format change can make a session unreadable"
+    },
+    {
+      "client": "VS Code GitHub Copilot (MCP)",
+      "status": "partial",
+      "os": "any",
+      "version_policy": "n/a",
+      "captured": "Nothing: agent mode can call the knowledge tools through `.vscode/mcp.json`",
+      "held": "No capture hooks and no automatic prompt-time notices yet",
+      "other_versions": "n/a"
+    },
+    {
+      "client": "Windows (any client)",
+      "status": "unsupported",
+      "os": "Windows",
+      "version_policy": "n/a",
+      "captured": "Nothing: native capture is not supported",
+      "held": "Use explicit export or the assistant-written flow",
+      "other_versions": "n/a"
+    },
+    {
+      "client": "Any other client or version",
+      "status": "universal-fallback",
+      "os": "any",
+      "version_policy": "n/a",
+      "captured": "Explicit export (`wk-agent import`, `/wk-summarize`) of sessions you choose",
+      "held": "Nothing is captured automatically; every card is private until reviewed",
+      "other_versions": "n/a"
     }
   ]
 }

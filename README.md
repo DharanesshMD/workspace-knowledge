@@ -321,17 +321,7 @@ A project rule relies on the agent following it. The separate protection hook su
 
 Capture support depends on the exact **client, version, operating system and surface**. Installing tools, connecting a device or adding MCP does not establish capture coverage.
 
-| Client / surface | Current capture boundary |
-|---|---|
-| Cursor 3.23.23, macOS Agents, This Mac | Opt-in recovery of explicitly callback-bound sessions; bounded live acceptance, owner review required |
-| Claude Code | Partial visible capture hooks; the optional edit-protection hook is separate |
-| Gemini CLI | Partial hook coverage; broad live certification remains pending |
-| Codex CLI 0.162.0-alpha.2, macOS | Experimental supported visible no-tool turns; tools, compaction, subagents and ambiguous context are held |
-| Antigravity desktop 2.19.1, macOS | Experimental hook delivery/private capture; **all native turns remain held and cannot be published** |
-| Claude Desktop Enterprise | Explicit consent-bound text pull on an isolated broker; entitlement and live deployment acceptance required |
-| Claude Code, Codex, VS Code Copilot Chat, Cursor: past-session import | Explicit `wk agent-history` list, review, export and `wk-agent import` of chosen sessions; read-only, never automatic, partial coverage; storage formats are undocumented and version-dependent ([setup](docs/adapters/setup.md#import-past-agent-sessions)) |
-| VS Code GitHub Copilot (MCP) | Agent mode can call the knowledge tools through `.vscode/mcp.json`; no capture hooks and no automatic prompt-time notices yet ([setup](docs/adapters/setup.md#vs-code-and-github-copilot-mcp)) |
-| Managed local chat / explicit export | Explicitly selected content; distinct coverage and review requirements described in setup |
+The supported client versions, operating systems and what is captured or held for each are in one generated table: **[capture support table](docs/adapters/support.md)**. Cursor 3.23.23 and Codex 0.162.0-alpha.2 on macOS are version-pinned and refuse other versions with a message; Claude Code is tested at 2.1.293 and a weekly check flags newer releases; Codex and Antigravity stay experimental; Windows is unsupported. Anything else uses explicit export or the assistant-written flow. Past-session import and VS Code Copilot MCP are described in [setup](docs/adapters/setup.md#import-past-agent-sessions).
 
 Other versions and surfaces are not implied supported. The updated Codex `0.162.0-alpha.17.2` was rejected by the pinned adapter. Held sessions do not become complete because a later message looks clean; follow the adapter's reset/new-session guidance.
 

@@ -21,6 +21,7 @@ mod protection;
 mod repository;
 mod rules_draft;
 mod state;
+mod support_hint;
 mod team;
 #[cfg(test)]
 mod tls_fixture {
@@ -247,7 +248,14 @@ async fn main() {
                 println!("{output}");
                 eprintln!("workspace knowledge capture unavailable; coverage is partial");
             } else {
-                eprintln!("{}", json!({"error":e}));
+                let help = support_hint::explain(&e);
+                eprintln!(
+                    "{}",
+                    match help {
+                        Some(h) => json!({"error":e,"help":h}),
+                        None => json!({"error":e}),
+                    }
+                );
                 std::process::exit(2);
             }
         }

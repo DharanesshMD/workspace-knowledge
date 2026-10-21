@@ -1,0 +1,17 @@
+name: Client release check
+on:
+  # Weekly, plus on demand. A failure means a watched client shipped a version the
+  # capture adapters have not been tested with (see docs/adapters/support.md).
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail when a watched client has a newer release than the tested one
+        run: python3 scripts/check-client-releases.py
