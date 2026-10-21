@@ -715,10 +715,12 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn dump_drafts_for_summary_quality_eval() {
-        let fixture: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(std::env::var("WK_EVAL_FIXTURE").unwrap()).unwrap(),
-        )
-        .unwrap();
+        // CI runs ignored tests too; without the evaluation inputs there is nothing to do.
+        let Ok(fixture_path) = std::env::var("WK_EVAL_FIXTURE") else {
+            return;
+        };
+        let fixture: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(fixture_path).unwrap()).unwrap();
         let endpoint = std::env::var("WK_EVAL_INFERENCE").unwrap_or_default();
         let model = std::env::var("WK_EVAL_MODEL").unwrap_or_default();
         let as_card = |e: Extract, id: &str, complete: bool| {

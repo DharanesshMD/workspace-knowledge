@@ -599,7 +599,7 @@ mod tests {
     async fn record_refuses_provenance_before_any_request() {
         // The base is a loopback port nothing listens on: a request would fail differently.
         let mcp =
-            KnowledgeMcp::new("http://127.0.0.1:9".into(), "x".repeat(32), "demo".into()).unwrap();
+            KnowledgeMcp::new("http://127.0.0.1:9".into(), tokens(), "demo".into(), None).unwrap();
         let card = json!({"schema_version":1,"idempotency_key":"k","policy_revision":1,"title":"t","intent":"i","rationale":"r","decisions":[],"constraints":[],"open_questions":[],"service_ids":["backend"],"evidence":[],"lifecycle":"proposed","capture_completeness":"partial","base_revision":null,"provenance":"assistant_written"});
         let err = mcp.record(Parameters(Record { card })).await.unwrap_err();
         assert!(err.message.contains("provenance"), "{err:?}");

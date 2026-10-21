@@ -45,7 +45,9 @@ How to read it. Rules drafts carry the reasons because they quote the reply, so 
 
 Prompt-time numbers use only the card text, so they are the same with or without file evidence. Edit-time notices match on changed files, so they work only when the card carries file evidence (today that means Cursor turns) and are identical for every mode. With seven related sessions one session is worth 0.14 of recall, so **the differences between modes here are not distinguishable from noise**. The only clear results are that file evidence decides edit-time notices and that the card text enables prompt-time ones at all.
 
-### Finding: partial cards cannot be published
+### Finding: partial cards could not be published (before PR #22)
+
+> **Update (2026-10-21).** This describes the state when the measurements were taken. PR #22 on `main` since lets a reviewer publish assistant-written cards (they carry an assistant-written origin); rule drafts and partial hook captures still cannot be published. The overlap rows for assistant-written cards were a counterfactual then and have not been re-measured.
 
 Rules drafts and assistant-written drafts are `partial`. `history-eval.py` could not publish a single one of them (0 of 10 published for both, against 10 of 10 for the local model's `complete` cards), and the overlap rows above for those modes are therefore a counterfactual in which the same cards are relabelled `complete`. As shipped, they would produce no overlap notices at all, because only published cards are notified about.
 
@@ -80,7 +82,7 @@ Remaining weak spots seen in the output: a question as the title when the reques
 
 ## Follow-ups
 
-1. Decide how a reviewed assistant-written card can become publishable (or confirm that it should not), because as shipped it cannot.
+1. ~~Decide how a reviewed assistant-written card can become publishable.~~ Done in PR #22; re-run the overlap measurement now that such cards can be published.
 2. Re-run this comparison on a consented, pseudonymised set from the first pilot team, with a human rating for faithfulness and usefulness, and with the assistant flow run by the people who will actually use it.
 3. Measure how often developers run `/wk-summarize`; if rarely, consider a reminder rather than automatic summarisation.
 
