@@ -1,6 +1,6 @@
 # Publishable assistant-written cards (design)
 
-**Status: accepted by the owner on 2026-10-20 as recommended (see [Decisions](#decisions)). Not yet implemented; the [implementation plan](../plans/2026-10-20-publishable-assistant-cards.md) follows.**
+**Status: accepted by the owner on 2026-10-20 as recommended (see [Decisions](#decisions)). Implemented in #22 and #23; the [implementation plan](../plans/2026-10-20-publishable-assistant-cards.md) records what remains (the quality-eval re-run).**
 
 ## Problem
 

@@ -238,7 +238,7 @@ wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" doctor
 
 **4. Configure your exact client/version.** Follow [adapter setup](docs/adapters/setup.md). Capture configuration, native opt-ins and edit protection are separate choices. Each collector state binds one service; multi-service projects need explicit attribution.
 
-**5. Choose summary sharing.** Owner sync and activity sharing default off. Owner sync requires both the hosted Devices permission and explicit local consent. Review local drafts before submitting a summary; authorized reviewers publish the shared copy. See [private summaries and review](docs/adapters/setup.md#private-summaries-and-review).
+**5. Choose summary sharing.** Owner sync and activity sharing default off. Owner sync requires both the hosted Devices permission and explicit local consent. Review local drafts before submitting a summary; authorized reviewers publish the shared copy (assistant-written `/wk-summarize` cards included; rule drafts and partial hook captures cannot be published). See [private summaries and review](docs/adapters/setup.md#private-summaries-and-review).
 
 Test foreground operation before enabling [optional startup](docs/operations/install.md#optional-startup). Use `device login` with the same state directory when upstream credentials expire; automatic refresh-token storage is currently absent.
 
