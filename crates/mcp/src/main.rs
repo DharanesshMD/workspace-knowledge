@@ -227,6 +227,8 @@ impl KnowledgeMcp {
         &self,
         Parameters(args): Parameters<Record>,
     ) -> Result<CallToolResult, ErrorData> {
+        wk_contracts::reject_collector_only_fields(&args.card)
+            .map_err(|_| error("provenance is set only by the collector"))?;
         wk_contracts::validate_card(&args.card).map_err(|_| error("invalid summary card"))?;
         if wk_summarize::sensitive(&args.card.to_string()) {
             return Err(error("summary requires private review"));
@@ -434,6 +436,15 @@ mod tests {
             "demo".into()
         )
         .is_ok());
+    }
+    #[tokio::test]
+    async fn record_refuses_provenance_before_any_request() {
+        // The base is a loopback port nothing listens on: a request would fail differently.
+        let mcp =
+            KnowledgeMcp::new("http://127.0.0.1:9".into(), "x".repeat(32), "demo".into()).unwrap();
+        let card = json!({"schema_version":1,"idempotency_key":"k","policy_revision":1,"title":"t","intent":"i","rationale":"r","decisions":[],"constraints":[],"open_questions":[],"service_ids":["backend"],"evidence":[],"lifecycle":"proposed","capture_completeness":"partial","base_revision":null,"provenance":"assistant_written"});
+        let err = mcp.record(Parameters(Record { card })).await.unwrap_err();
+        assert!(err.message.contains("provenance"), "{err:?}");
     }
     #[test]
     fn context_remains_bounded_with_unicode_and_large_titles() {

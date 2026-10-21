@@ -127,6 +127,14 @@ pub fn valid_id(s: &str) -> bool {
         && s.bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
+/// Fields only the collector may set: `wk-agent draft` screens the card and the developer
+/// reviews it before submit, which a generic tool caller (an MCP assistant) has not done.
+pub fn reject_collector_only_fields(value: &serde_json::Value) -> Result<(), String> {
+    if value.get("provenance").is_some() {
+        return Err("provenance is set only by the collector".into());
+    }
+    Ok(())
+}
 pub fn validate_card(value: &serde_json::Value) -> Result<(), String> {
     let card: CardSubmission =
         serde_json::from_value(value.clone()).map_err(|_| "invalid card schema".to_string())?;
