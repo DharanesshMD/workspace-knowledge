@@ -57,8 +57,13 @@ class ReleaseDocumentationTests(unittest.TestCase):
             "docs/operations/v0.1-release.md",
             "docs/operations/production-readiness.md",
             "docs/operations/oidc-keycloak.md",
+            "docs/operations/quick-start-keycloak.md",
+            "docs/adapters/setup.md",
+            "docs/architecture/remote-mcp.md",
+            "docs/reviews/2026-10-19-remote-mcp-signin-results.md",
             "docs/architecture/completion-matrix.md",
             "docs/reviews/2026-10-19-privacy-acceptance.md",
+            "docs/reviews/2026-10-19-summary-quality-comparison.md",
         )
         link_pattern = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
         for relative_page in pages:

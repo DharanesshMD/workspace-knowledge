@@ -8,9 +8,9 @@ and keys are synthetic and random per run. Output is a pass/fail ledger with no
 tokens or credentials.
 
 Usage: python3 scripts/keycloak-acceptance.py [--keycloak-image IMAGE] [--output FILE]
-Requires Docker, openssl and built target/debug/{wk-server,wk-agent,wk}. The native
-collector check stores synthetic credentials in the macOS keychain (removed afterwards) and is
-skipped, and reported as skipped, on other platforms.
+Requires Docker, openssl and built target/debug/{wk-server,wk-agent,wk,wk-mcp}. The native
+collector and `wk-mcp login` checks store synthetic credentials in the macOS keychain (removed
+afterwards) and are skipped, and reported as skipped, on other platforms.
 """
 import argparse, base64, hashlib, html, http.cookiejar, json, os, re, secrets, shutil
 import socket, ssl, subprocess, sys, tempfile, time, urllib.error, urllib.parse
@@ -21,8 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "target/debug/wk-server"
 AGENT = ROOT / "target/debug/wk-agent"
 WK = ROOT / "target/debug/wk"
+MCP = ROOT / "target/debug/wk-mcp"
 REALM = "wk"
-API_AUDIENCE = "wk-api"
 COLLECTOR_AUDIENCE = "wk-collector"
 OPENSSL = os.environ.get("WK_TEST_OPENSSL") or (
     "/opt/homebrew/opt/openssl@3/bin/openssl"
@@ -93,8 +93,20 @@ class Ledger:
         print(("PASS " if ok else "FAIL ") + name + (f" — {detail}" if detail and not ok else ""), file=sys.stderr)
 
 
-def realm_document(app_origin, secrets_):
-    """Realm with one user, a confidential portal client, and single-audience API/collector clients."""
+STARTER_REALM = ROOT / "deploy/keycloak/wk-realm.json"
+
+
+def starter_realm(values):
+    """The shipped starter realm with its ${WK_*} placeholders filled, exactly as Keycloak would."""
+    text = STARTER_REALM.read_text()
+    for name, value in values.items():
+        text = text.replace("${" + name + "}", value)
+    assert "${" not in text, "starter realm has an unfilled placeholder"
+    return json.loads(text)
+
+
+def realm_document(app_origin, secrets_, api_audience):
+    """The starter realm (portal, collector and MCP clients) plus a test user and test-only clients."""
 
     def audience_mapper(audience):
         return {
@@ -122,68 +134,46 @@ def realm_document(app_origin, secrets_):
         client.update(extra)
         return client
 
-    return {
-        "realm": REALM,
-        "enabled": True,
-        "sslRequired": "all",
-        "accessTokenLifespan": 300,
-        "defaultRole": {"name": "default-roles-wk", "composite": True,
-                        "composites": {"client": {"account": ["view-profile", "manage-account"]}}},
-        "users": [
-            {
-                "id": secrets_["user_id"],
-                "username": "alice",
-                "enabled": True,
-                "email": "alice@example.invalid",
-                "emailVerified": True,
-                "realmRoles": ["default-roles-wk"],
-                "firstName": "Alice",
-                "lastName": "Synthetic",
-                "credentials": [{"type": "password", "value": secrets_["password"], "temporary": False}],
-            }
-        ],
-        "clients": [
-            {
-                "clientId": "wk-portal",
-                "enabled": True,
-                "publicClient": False,
-                "secret": secrets_["portal_secret"],
-                "standardFlowEnabled": True,
-                "directAccessGrantsEnabled": False,
-                "redirectUris": [app_origin + "/auth/callback"],
-                "defaultClientScopes": ["basic"],
-                "optionalClientScopes": [],
-                "attributes": {"pkce.code.challenge.method": "S256"},
-            },
-            {
-                "clientId": "wk-collector",
-                "enabled": True,
-                "publicClient": True,
-                "standardFlowEnabled": True,
-                "directAccessGrantsEnabled": False,
-                "redirectUris": ["http://127.0.0.1/callback"],
-                "defaultClientScopes": ["basic"],
-                "optionalClientScopes": [],
-                "attributes": {"pkce.code.challenge.method": "S256"},
-                "protocolMappers": [audience_mapper(COLLECTOR_AUDIENCE)],
-            },
-            token_client("api-ok", [API_AUDIENCE]),
-            token_client("api-short", [API_AUDIENCE], lifespan=4),
-            token_client("api-rotation", [API_AUDIENCE], lifespan=900),
-            token_client("api-wrong-audience", ["some-other-api"]),
-            token_client("api-two-audiences", [API_AUDIENCE, "some-other-api"]),
-            token_client("api-no-audience", []),
-            # Keycloak's default scopes add "account" to aud; kept to document that pitfall.
-            {
-                "clientId": "api-default-scopes",
-                "enabled": True,
-                "publicClient": True,
-                "directAccessGrantsEnabled": True,
-                "standardFlowEnabled": False,
-                "protocolMappers": [audience_mapper(API_AUDIENCE)],
-            },
-        ],
-    }
+    realm = starter_realm({
+        "WK_CONSOLE_ORIGIN": app_origin,
+        "WK_BROWSER_CLIENT_SECRET": secrets_["portal_secret"],
+        "WK_OIDC_AUDIENCE": api_audience,
+        "WK_COLLECTOR_AUDIENCE": COLLECTOR_AUDIENCE,
+    })
+    realm["defaultRole"] = {"name": "default-roles-wk", "composite": True,
+                            "composites": {"realm": ["offline_access", "uma_authorization"],
+                                       "client": {"account": ["view-profile", "manage-account"]}}}
+    realm["users"] = [
+        {
+            "id": secrets_["user_id"],
+            "username": "alice",
+            "enabled": True,
+            "email": "alice@example.invalid",
+            "emailVerified": True,
+            "realmRoles": ["default-roles-wk"],
+            "firstName": "Alice",
+            "lastName": "Synthetic",
+            "credentials": [{"type": "password", "value": secrets_["password"], "temporary": False}],
+        }
+    ]
+    realm["clients"] += [
+        token_client("api-ok", [api_audience]),
+        token_client("api-short", [api_audience], lifespan=4),
+        token_client("api-rotation", [api_audience], lifespan=900),
+        token_client("api-wrong-audience", ["some-other-api"]),
+        token_client("api-two-audiences", [api_audience, "some-other-api"]),
+        token_client("api-no-audience", []),
+        # Keycloak's default scopes add "account" to aud; kept to document that pitfall.
+        {
+            "clientId": "api-default-scopes",
+            "enabled": True,
+            "publicClient": True,
+            "directAccessGrantsEnabled": True,
+            "standardFlowEnabled": False,
+            "protocolMappers": [audience_mapper(api_audience)],
+        },
+    ]
+    return realm
 
 
 class Stack:
@@ -197,6 +187,8 @@ class Stack:
         self.kc_port, self.app_port, self.server_port, self.db_port = (free_port() for _ in range(4))
         self.issuer = f"https://localhost:{self.kc_port}/realms/{REALM}"
         self.app_origin = f"https://localhost:{self.app_port}"
+        # The remote MCP resource is the server origin, and the one API audience must equal it.
+        self.api_audience = self.app_origin
         self.secrets = {
             "user_id": str(uuid.uuid4()),
             "password": secrets.token_urlsafe(18),
@@ -205,6 +197,8 @@ class Stack:
             "db_owner": secrets.token_hex(16),
             "db_runtime": secrets.token_hex(16),
         }
+        # Request paths (never bodies; Caddy redacts credentials) so a real client's discovery can be read back.
+        self.access_log = False
         self.ca = self.work / "ca.pem"
         self.db = f"wk_kc_{self.tag}"
         self.role = "wk_kc_runtime"
@@ -248,11 +242,16 @@ class Stack:
             raise RuntimeError(f"wk-server {mode} failed: {p.stderr[:200]}")
         return p.stdout.strip()
 
+    def provision(self):
+        """Provision alice to the issuer/subject Keycloak will present; the app never infers membership from claims."""
+        self.cli("provision", {"issuer": self.issuer, "subject": self.secrets["user_id"], "org": "kc-org", "user": "alice",
+                               "product": "demo", "services": ["backend"], "can_review": True})
+
     def start_keycloak(self):
         name = f"wk-kc-keycloak-{self.tag}"
         self.containers.append(name)
         realm = self.work / "realm.json"
-        realm.write_text(json.dumps(realm_document(self.app_origin, self.secrets)))
+        realm.write_text(json.dumps(realm_document(self.app_origin, self.secrets, self.api_audience)))
         realm.chmod(0o644)
         run("docker", "run", "-d", "--name", name,
             "-e", "KC_BOOTSTRAP_ADMIN_USERNAME=admin", "-e", f"KC_BOOTSTRAP_ADMIN_PASSWORD={self.secrets['admin']}",
@@ -282,7 +281,8 @@ class Stack:
         caddyfile.write_text(
             "{\n  admin off\n  auto_https off\n}\n"
             f"https://localhost:{self.app_port} {{\n  tls /certs/leaf.pem /certs/leaf.key\n"
-            f"  reverse_proxy host.docker.internal:{self.server_port}\n}}\n"
+            + ("  log\n" if self.access_log else "")
+            + f"  reverse_proxy host.docker.internal:{self.server_port}\n}}\n"
         )
         caddyfile.chmod(0o644)
         run("docker", "run", "-d", "--name", name, "-p", f"127.0.0.1:{self.app_port}:{self.app_port}",
@@ -294,7 +294,9 @@ class Stack:
             os.environ,
             WK_DATABASE_URL=self.runtime_url,
             WK_OIDC_ISSUER=self.issuer,
-            WK_OIDC_AUDIENCE=API_AUDIENCE,
+            WK_OIDC_AUDIENCE=self.api_audience,
+            WK_MCP_RESOURCE=self.app_origin,
+            WK_MCP_CLIENT_ID="wk-mcp",
             WK_OIDC_JWKS_URL=self.issuer + "/protocol/openid-connect/certs",
             WK_OIDC_CA_FILE=str(self.ca),
             WK_CONSOLE_ORIGIN=self.app_origin,
@@ -375,9 +377,7 @@ def accept(stack, ledger):
     def api(client, token):
         return client.request(stack.app_origin + "/v1/search", {"product": "demo", "query": "middleware", "limit": 3},
                               headers={"Authorization": "Bearer " + token})
-    # Provision alice to the issuer/subject Keycloak will present; the app never infers membership from claims.
-    stack.cli("provision", {"issuer": stack.issuer, "subject": stack.secrets["user_id"], "org": "kc-org", "user": "alice",
-                            "product": "demo", "services": ["backend"], "can_review": True})
+    stack.provision()
 
     # 1. Browser authorization-code + PKCE login through the real provider.
     browser = Client(stack.ca)
@@ -421,7 +421,7 @@ def accept(stack, ledger):
     status, token = stack.password_token("api-ok", ca_client)
     good = token.get("access_token", "")
     claims = decode_claims(good) if good else {}
-    ledger.check("provider issues a single-audience API token", status == 200 and claims.get("aud") == API_AUDIENCE and "iat" in claims, str(claims.get("aud")))
+    ledger.check("provider issues a single-audience API token", status == 200 and claims.get("aud") == stack.api_audience and "iat" in claims, str(claims.get("aud")))
     status, _, _ = api(ca_client, good)
     ledger.check("API token is accepted", status == 200, str(status))
     for client_id, why in (("api-wrong-audience", "wrong audience"), ("api-two-audiences", "extra audience"),
@@ -492,6 +492,12 @@ def accept(stack, ledger):
     # 4b. The native collector reaches the same private-CA stack with its own --ca-file.
     collector = native_collector(stack, ledger)
 
+    # 4c. `wk-mcp login` and the stdio bridge, then the hosted /mcp endpoint itself.
+    mcp = remote_mcp(stack, ledger, ca_client, good)
+
+    # 4d. Native remote-MCP sign-in: dynamic client registration is off until the documented setup step.
+    signin = remote_signin(stack, ledger, ca_client)
+
     # 5. Misconfiguration fails closed with an operator-readable reason.
     other_ca = ROOT / "crates/server/tests/fixtures/synthetic-ca.pem"
     garbage = stack.work / "garbage.pem"
@@ -542,7 +548,7 @@ def accept(stack, ledger):
         time.sleep(3)
     ledger.check("token signed by a withdrawn key is rejected after the next refresh", rejected_after is not None, "still accepted")
     ledger.check("tokens from the promoted key keep working", api(ca_client, after)[0] == 200)
-    return {"new_key_accepted_after_seconds": accepted_after, "withdrawn_key_rejected_after_seconds": rejected_after, "native_collector": collector}
+    return {"new_key_accepted_after_seconds": accepted_after, "withdrawn_key_rejected_after_seconds": rejected_after, "native_collector": collector, "wk_mcp": mcp, "remote_mcp_signin": signin}
 
 
 def native_collector(stack, ledger):
@@ -616,14 +622,273 @@ def native_collector(stack, ledger):
     return "ran"
 
 
+def play_browser(stack, proc, expected_issuer):
+    """Play the system browser for a process that printed its authorization URL on stderr."""
+    attempt = json.loads(proc.stderr.readline())["authorization_url"]
+    assert attempt.startswith(expected_issuer), "authorization URL points elsewhere"
+    location = stack.authenticate(Client(stack.ca), attempt)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    assert opener.open(location, timeout=30).status == 200
+    return urllib.parse.parse_qs(urllib.parse.urlparse(attempt).query)
+
+
+def mcp_exchange(env, calls, timeout=60):
+    """Speak MCP over stdio to a `wk-mcp` bridge; returns the JSON-RPC response for each call."""
+    import select
+    proc = subprocess.Popen([str(MCP)], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def send(message):
+        proc.stdin.write(json.dumps(message) + "\n")
+        proc.stdin.flush()
+
+    def receive(identifier):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                return {"error": {"message": "bridge exited: " + proc.stderr.read()[:200]}}
+            if select.select([proc.stdout], [], [], 1)[0]:
+                line = proc.stdout.readline()
+                if line and json.loads(line).get("id") == identifier:
+                    return json.loads(line)
+        return {"error": {"message": "timed out"}}
+
+    results = []
+    try:
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "keycloak-acceptance", "version": "0"}}})
+        first = receive(1)
+        if "result" not in first:
+            return [first]
+        send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        for number, (method, params) in enumerate(calls, start=2):
+            send({"jsonrpc": "2.0", "id": number, "method": method, "params": params})
+            results.append(receive(number))
+    finally:
+        proc.stdin.close()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    return results
+
+
+def remote_mcp(stack, ledger, ca_client, api_token):
+    """The hosted MCP endpoint, then `wk-mcp login` and the bridge against the private-CA stack."""
+    metadata = ca_client.request(stack.app_origin + "/.well-known/oauth-protected-resource")
+    document = json.loads(metadata[2]) if metadata[0] == 200 else {}
+    ledger.check("protected-resource metadata names the resource, the single issuer and the sign-in client",
+                 document.get("resource") == stack.app_origin and document.get("authorization_servers") == [stack.issuer]
+                 and document.get("wk_mcp_client_id") == "wk-mcp", str(document))
+    initialize = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "acceptance", "version": "0"}}}
+    headers = {"Accept": "application/json, text/event-stream"}
+    status, response, _ = ca_client.request(stack.app_origin + "/mcp/demo", initialize, headers=headers)
+    challenge = response.get("WWW-Authenticate", "")
+    ledger.check("/mcp/demo without a token is 401 and points at the resource metadata",
+                 status == 401 and "resource_metadata" in challenge and stack.app_origin in challenge, f"{status} {challenge}")
+    status, _, raw = ca_client.request(stack.app_origin + "/mcp/demo", initialize, headers=dict(headers, Authorization="Bearer " + api_token))
+    ledger.check("/mcp/demo accepts a single-audience token", status == 200 and b"serverInfo" in raw, f"{status} {raw[:100]!r}")
+    _, token = stack.password_token("api-two-audiences", ca_client)
+    status, _, _ = ca_client.request(stack.app_origin + "/mcp/demo", initialize, headers=dict(headers, Authorization="Bearer " + token.get("access_token", "")))
+    ledger.check("/mcp/demo rejects a token with an extra audience", status == 401, str(status))
+    if sys.platform != "darwin":
+        return "skipped: the harness cleans up synthetic macOS keychain entries only"
+
+    account = "mcp:" + hashlib.sha256(stack.app_origin.encode()).hexdigest()
+    keychain = lambda: subprocess.run(["/usr/bin/security", "find-generic-password", "-s", "workspace-knowledge", "-a", account],
+                                      capture_output=True).returncode == 0
+    bridge_env = {k: v for k, v in os.environ.items() if k not in ("WK_ACCESS_TOKEN", "WK_DEV_TOKEN", "WK_SERVER_CA_FILE", "WK_SERVER_URL", "WK_MCP_CLIENT_ID")}
+    bridge_env.update(WK_SERVER_URL=stack.app_origin, WK_PRODUCT="demo")
+    search = ("tools/call", {"name": "knowledge.search", "arguments": {"query": "middleware", "limit": 3}})
+
+    def searched(env):
+        responses = mcp_exchange(env, [search])
+        reply = responses[-1]
+        return "result" in reply and not reply["result"].get("isError"), json.dumps(reply)[:200]
+
+    def login(*extra, ca=True):
+        argv = [str(MCP), "login", "--server", stack.app_origin, "--no-browser", *extra]
+        if ca:
+            argv += ["--ca-file", str(stack.ca)]
+        return subprocess.Popen(argv, env=bridge_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    try:
+        # Without a bundle the public roots cannot verify the private CA, and nothing falls back.
+        p = login(ca=False)
+        _, error = p.communicate(timeout=60)
+        ledger.check("wk-mcp login fails closed without the private CA", p.returncode != 0 and not keychain(), error.strip()[:120])
+        p = login("--ca-file", str(ROOT / "crates/server/tests/fixtures/synthetic-ca.pem"), ca=False)
+        _, error = p.communicate(timeout=60)
+        ledger.check("wk-mcp login fails closed with an unrelated CA bundle", p.returncode != 0 and not keychain(), error.strip()[:120])
+
+        p = login()
+        query = play_browser(stack, p, stack.issuer)
+        ledger.check("wk-mcp login asks for the MCP resource with PKCE S256 and a loopback redirect",
+                     query.get("resource") == [stack.app_origin] and query.get("code_challenge_method") == ["S256"]
+                     and query.get("client_id") == ["wk-mcp"] and query["redirect_uri"][0].startswith("http://127.0.0.1:"), str(query))
+        out, error = p.communicate(timeout=120)
+        signed = json.loads(out) if p.returncode == 0 else {}
+        ledger.check("wk-mcp login signs in through the private-CA Keycloak", signed.get("authenticated") is True, error.strip()[:160])
+        ledger.check("login output carries no token material", "eyJ" not in out + error)
+        ledger.check("the refresh token is in the OS credential store", keychain())
+        status = subprocess.run([str(MCP), "status", "--server", stack.app_origin], env=bridge_env, capture_output=True, text=True)
+        ledger.check("wk-mcp status reports the stored sign-in without contacting the server",
+                     status.returncode == 0 and json.loads(status.stdout).get("signed_in") is True and "eyJ" not in status.stdout)
+
+        trusted = dict(bridge_env, WK_SERVER_CA_FILE=str(stack.ca))
+        ok, detail = searched(trusted)
+        ledger.check("the stdio bridge searches with the stored sign-in and no copied token", ok, detail)
+        ok, detail = searched(trusted)
+        ledger.check("a second bridge start renews silently from the same stored sign-in", ok, detail)
+        ok, detail = searched(bridge_env)
+        ledger.check("the bridge cannot reach the provider without the CA and does not use public roots", not ok, detail)
+        ok, detail = searched(dict(bridge_env, WK_SERVER_CA_FILE=str(ROOT / "crates/server/tests/fixtures/synthetic-ca.pem")))
+        ledger.check("the bridge fails with an unrelated CA bundle", not ok, detail)
+
+        p = subprocess.run([str(MCP), "logout", "--server", stack.app_origin], env=bridge_env, capture_output=True, text=True)
+        ledger.check("wk-mcp logout removes the credential-store entry", p.returncode == 0 and not keychain(), p.stderr[:100])
+        ok, detail = searched(trusted)
+        ledger.check("after logout the bridge asks for a login", not ok and "wk-mcp login" in detail, detail)
+        ok, detail = searched(dict(trusted, WK_ACCESS_TOKEN=api_token))
+        ledger.check("WK_ACCESS_TOKEN still works when nothing is stored", ok, detail)
+
+        p = login("--offline-access")
+        play_browser(stack, p, stack.issuer)
+        out, error = p.communicate(timeout=120)
+        ledger.check("wk-mcp login --offline-access signs in", p.returncode == 0 and keychain(), error.strip()[:160])
+        ok, detail = searched(trusted)
+        ledger.check("the bridge works with an offline-access sign-in", ok, detail)
+    finally:
+        subprocess.run(["/usr/bin/security", "delete-generic-password", "-s", "workspace-knowledge", "-a", account],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return "ran"
+
+
+def remote_signin(stack, ledger, ca_client):
+    """What Claude Code, VS Code and Cursor do: register themselves, sign in with consent, then refresh."""
+    registration = stack.issuer + "/clients-registrations/openid-connect"
+    port = free_port()
+    redirect = f"http://localhost:{port}/callback"
+    document = {"client_name": "acceptance-native-client", "redirect_uris": [redirect], "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"], "token_endpoint_auth_method": "none"}
+    status, _, raw = ca_client.request(registration, document)
+    ledger.check("anonymous client registration is refused until the setup step is run", status in (401, 403) and b"not trusted" in raw, f"{status} {raw[:120]!r}")
+
+    script = ROOT / "deploy/keycloak/enable-remote-mcp-signin.py"
+    env = dict(os.environ, KC_ADMIN_PASSWORD=stack.secrets["admin"])
+    args = [sys.executable, str(script), "--keycloak", f"https://localhost:{stack.kc_port}", "--realm", REALM,
+            "--audience", stack.app_origin, "--ca-file", str(stack.ca)]
+    first = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
+    ledger.check("enable-remote-mcp-signin.py configures the realm", first.returncode == 0 and "Trusted Hosts" in first.stdout, first.stderr[:200] + first.stdout[:200])
+    again = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
+    ledger.check("the setup step is idempotent", again.returncode == 0 and "nothing to change" in again.stdout, again.stderr[:200] + again.stdout[:200])
+    ledger.check("the setup step takes the admin password from the environment only", stack.secrets["admin"] not in " ".join(args))
+
+    status, _, raw = ca_client.request(registration, document)
+    registered = json.loads(raw) if status in (200, 201) else {}
+    ledger.check("a native client can now register a loopback redirect", bool(registered.get("client_id")), f"{status} {raw[:120]!r}")
+    status, _, raw = ca_client.request(registration, dict(document, redirect_uris=["https://attacker.example/callback"]))
+    ledger.check("a client with a non-loopback redirect cannot register", status in (400, 401, 403), f"{status} {raw[:120]!r}")
+    if not registered.get("client_id"):
+        return "registration failed"
+
+    client_id = registered["client_id"]
+    verifier = secrets.token_urlsafe(48)
+    browser = Client(stack.ca)
+    url = stack.issuer + "/protocol/openid-connect/auth?" + urllib.parse.urlencode({
+        "response_type": "code", "client_id": client_id, "redirect_uri": redirect, "state": secrets.token_hex(8),
+        "code_challenge": b64url(hashlib.sha256(verifier.encode()).digest()), "code_challenge_method": "S256",
+        "resource": stack.app_origin + "/"})
+    location = stack.authenticate(browser, url)
+    consent = location.startswith(stack.issuer) and "required-action" in location
+    ledger.check("Keycloak asks the user to consent to a self-registered client", consent, location[:100])
+    if consent:
+        status, headers, raw = browser.request(location)
+        form = re.search(r'<form[^>]*action="([^"]+)"', raw.decode())
+        fields = dict(re.findall(r'<input[^>]*name="(code)"[^>]*value="([^"]*)"', raw.decode()))
+        status, headers, _ = browser.request(urllib.parse.urljoin(stack.issuer, html.unescape(form.group(1))), dict(fields, accept="Yes"), form=True)
+        location = headers.get("Location", "")
+    code = urllib.parse.parse_qs(urllib.parse.urlparse(location).query).get("code", [""])[0]
+    ledger.check("consent returns the authorization code to the registered loopback redirect", location.startswith(redirect + "?") and bool(code), location[:100])
+    status, _, raw = ca_client.request(stack.token_endpoint(), {"grant_type": "authorization_code", "client_id": client_id, "code": code,
+                                                                 "redirect_uri": redirect, "code_verifier": verifier, "resource": stack.app_origin + "/"}, form=True)
+    tokens = json.loads(raw) if status == 200 else {}
+    claims = decode_claims(tokens["access_token"]) if tokens.get("access_token") else {}
+    ledger.check("a self-registered client's token carries exactly the MCP resource audience", claims.get("aud") == stack.app_origin, str(claims.get("aud")))
+    ledger.check("it also receives a refresh token", bool(tokens.get("refresh_token")))
+    initialize = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                                                                              "clientInfo": {"name": "native", "version": "0"}}}
+    headers = {"Accept": "application/json, text/event-stream"}
+
+    def mcp_status(token):
+        return ca_client.request(stack.app_origin + "/mcp/demo", initialize, headers=dict(headers, Authorization="Bearer " + token))[0]
+
+    ledger.check("the hosted MCP endpoint accepts that token", mcp_status(tokens.get("access_token", "")) == 200)
+    status, _, raw = ca_client.request(stack.token_endpoint(), {"grant_type": "refresh_token", "client_id": client_id,
+                                                                 "refresh_token": tokens.get("refresh_token", "")}, form=True)
+    refreshed = json.loads(raw) if status == 200 else {}
+    claims = decode_claims(refreshed["access_token"]) if refreshed.get("access_token") else {}
+    ledger.check("refreshing keeps the exact audience and the endpoint accepts the new token",
+                 claims.get("aud") == stack.app_origin and mcp_status(refreshed.get("access_token", "")) == 200, f"{status} {claims.get('aud')}")
+    return "ran"
+
+
+def starter_realm_import(ledger):
+    """The shipped realm file, unmodified, imports with its ${WK_*} placeholders filled from the environment."""
+    name = f"wk-kc-starter-{uuid.uuid4().hex[:8]}"
+    port = free_port()
+    values = {"WK_CONSOLE_ORIGIN": "https://knowledge.example", "WK_BROWSER_CLIENT_SECRET": secrets.token_urlsafe(18),
+              "WK_OIDC_AUDIENCE": "https://knowledge.example", "WK_COLLECTOR_AUDIENCE": "wk-collector-audience"}
+    admin_password = secrets.token_urlsafe(18)
+    work = Path(tempfile.mkdtemp(prefix="wk-kc-starter-"))
+    try:
+        shutil.copy(STARTER_REALM, work / "wk-realm.json")
+        (work / "wk-realm.json").chmod(0o644)
+        envs = [item for k, v in values.items() for item in ("-e", f"{k}={v}")]
+        run("docker", "run", "-d", "--name", name, "-p", f"127.0.0.1:{port}:8080", "-e", "KC_BOOTSTRAP_ADMIN_USERNAME=admin",
+            "-e", f"KC_BOOTSTRAP_ADMIN_PASSWORD={admin_password}", *envs, "-v", f"{work}/wk-realm.json:/opt/keycloak/data/import/wk-realm.json:ro",
+            "quay.io/keycloak/keycloak:26.4", "start-dev", "--import-realm")
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        base = f"http://127.0.0.1:{port}"
+
+        def fetch(path, form=None, token=None):
+            request = urllib.request.Request(base + path, data=urllib.parse.urlencode(form).encode() if form else None,
+                                             headers={"Authorization": "Bearer " + token} if token else {})
+            return json.loads(opener.open(request, timeout=20).read())
+
+        for _ in range(120):
+            try:
+                fetch("/realms/wk/.well-known/openid-configuration")
+                break
+            except Exception:
+                time.sleep(1)
+        token = fetch("/realms/master/protocol/openid-connect/token", {"grant_type": "password", "client_id": "admin-cli",
+                                                                        "username": "admin", "password": admin_password})["access_token"]
+        clients = {c["clientId"]: c for c in fetch("/admin/realms/wk/clients", token=token)}
+        audience = lambda c: [m["config"]["included.custom.audience"] for m in c.get("protocolMappers", [])]
+        secret = fetch(f"/admin/realms/wk/clients/{clients['wk-portal']['id']}/client-secret", token=token)["value"]
+        ok = (clients["wk-portal"]["redirectUris"] == ["https://knowledge.example/auth/callback"] and secret == values["WK_BROWSER_CLIENT_SECRET"]
+              and audience(clients["wk-mcp"]) == ["https://knowledge.example"] and audience(clients["wk-collector"]) == ["wk-collector-audience"]
+              and all(c["defaultClientScopes"] == ["basic"] and c["attributes"].get("pkce.code.challenge.method") == "S256"
+                      for c in (clients["wk-portal"], clients["wk-collector"], clients["wk-mcp"])))
+        ledger.check("the unmodified starter realm imports with its environment placeholders filled in", ok, json.dumps({k: clients[k].get("redirectUris") for k in clients if k.startswith("wk-")}))
+    finally:
+        run("docker", "rm", "-f", "-v", name, check=False)
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--keycloak-image", default="quay.io/keycloak/keycloak:26.4")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--stack-only", type=Path, metavar="INFO_FILE",
+                        help="start the stack, write its connection details (including synthetic credentials) "
+                             "to INFO_FILE, then wait for SIGTERM or Ctrl-C instead of running the checks; for trying real clients")
     args = parser.parse_args()
-    assert SERVER.exists() and AGENT.exists() and WK.exists(), "build target/debug/{wk-server,wk-agent,wk} first"
+    assert SERVER.exists() and AGENT.exists() and WK.exists() and MCP.exists(), "build target/debug/{wk-server,wk-agent,wk,wk-mcp} first"
     ledger = Ledger()
     stack = Stack(args.keycloak_image)
+    stack.access_log = bool(args.stack_only)
     try:
         stack.certificates()
         stack.start_postgres()
@@ -631,7 +896,10 @@ def main():
         stack.start_proxy()
         ledger.check("server cannot start without the private CA bundle (fails closed)", _fails_without_ca(stack))
         stack.start_server()
+        if args.stack_only:
+            return keep_alive(stack, args.stack_only)
         timings = accept(stack, ledger)
+        starter_realm_import(ledger)
     finally:
         stack.cleanup()
     summary = {"keycloak_image": args.keycloak_image, "passed": sum(r["passed"] for r in ledger.rows),
@@ -641,6 +909,29 @@ def main():
         args.output.write_text(text)
     print(json.dumps({k: summary[k] for k in ("keycloak_image", "passed", "failed")}))
     return 0 if summary["failed"] == 0 else 1
+
+
+def keep_alive(stack, info_file):
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    stack.provision()
+    # The documented step that lets native MCP clients register themselves and get the right audience.
+    run(sys.executable, str(ROOT / "deploy/keycloak/enable-remote-mcp-signin.py"), "--keycloak", f"https://localhost:{stack.kc_port}",
+        "--realm", REALM, "--audience", stack.app_origin, "--ca-file", str(stack.ca),
+        # Claude Code and the Cursor agent CLI register loopback redirects; Cursor and VS Code also register their own hosts.
+        *[a for host in ("localhost", "127.0.0.1", "www.cursor.com", "anysphere.cursor-mcp", "vscode.dev", "insiders.vscode.dev", "code.visualstudio.com") for a in ("--trusted-host", host)],
+        env=dict(os.environ, KC_ADMIN_PASSWORD=stack.secrets["admin"]))
+    info = {"app_origin": stack.app_origin, "issuer": stack.issuer, "ca_file": str(stack.ca), "realm": REALM, "product": "demo",
+            "username": "alice", "password": stack.secrets["password"], "admin_url": f"https://localhost:{stack.kc_port}",
+            "admin_password": stack.secrets["admin"], "work_dir": str(stack.work), "wk_server_port": stack.server_port, "proxy_container": f"wk-kc-caddy-{stack.tag}"}
+    info_file.write_text(json.dumps(info, indent=2))
+    info_file.chmod(0o600)
+    print(f"stack ready; details in {info_file}; send SIGTERM or press Ctrl-C to remove it", file=sys.stderr)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        return 0
 
 
 def _fails_without_ca(stack):

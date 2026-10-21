@@ -23,7 +23,9 @@ mod rules_draft;
 mod state;
 mod team;
 #[cfg(test)]
-mod tls_fixture;
+mod tls_fixture {
+    pub use wk_login::test_support::*;
+}
 use clap::{Parser, Subcommand};
 use rand::RngCore;
 use serde_json::{json, Value};

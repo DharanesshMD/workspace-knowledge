@@ -17,6 +17,8 @@ export PATH="$HOME/.local/bin:$PATH"
 
 The script works from another directory when invoked by its absolute path. It installs `wk`, `wk-agent`, `wk-env`, `wk-server` and `wk-mcp` into `~/.local/bin`. Set `WK_PREFIX` to use another user-owned prefix. The PATH command applies to the current shell; add the directory to your shell configuration if you want it available in future sessions. Never run the collector installer as root.
 
+**macOS and Gatekeeper.** Binaries you build with this script are signed ad hoc by the linker and are not quarantined (checked on macOS with `xattr` and `codesign -dv`), so macOS shows no unsigned-developer prompt. Only binaries downloaded from a browser or chat get quarantined; no signed or notarized binary is published yet, so prefer the source install above. The first run of a rebuilt `wk-agent` can still ask for Keychain access to its existing items: allow only the expected Workspace Knowledge items. A signed, notarized release needs an Apple Developer identity the project does not have yet ([readiness ledger](production-readiness.md)).
+
 On Windows, run:
 
 ```powershell
@@ -43,6 +45,8 @@ wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" serve
 ```
 
 If your server and identity provider use a private certificate authority, add `--ca-file /path/to/private-ca.pem` to `device connect`; the collector then trusts only that bundle for them. See [Keycloak setup: native collector](oidc-keycloak.md#native-collector).
+
+For an AI agent's MCP access, run `wk-mcp login --server https://knowledge.internal` once (add `--ca-file` for a private CA); the stdio bridge then renews its access token silently from a refresh token kept in the OS credential store. See the [quick start](quick-start-keycloak.md#3-sign-in-once-and-connect-an-agent).
 
 `device connect` opens the system browser for upstream public-client OIDC/PKCE sign-in. The token and installation signing key stay in the native OS credential store. Local state stores public configuration, approval receipts and credential expiry. Allow only expected Workspace Knowledge credential-store prompts. Test foreground operation before enabling startup.
 
@@ -82,12 +86,13 @@ Configure secrets through your deployment secret manager. The required variables
 | `WK_DATABASE_URL` | Runtime connection using the restricted `wk_app` role, never `wk_owner` |
 | `WK_OIDC_ISSUER`, `WK_OIDC_AUDIENCE`, `WK_OIDC_JWKS_URL` | Fixed upstream HTTPS issuer, API audience and verification keys |
 | `WK_OIDC_CA_FILE` | Optional PEM bundle for an identity provider behind a private CA; replaces public roots for provider requests only. Collectors take the bundle with `device connect --ca-file`. See [Keycloak setup](oidc-keycloak.md) |
+| `WK_MCP_RESOURCE`, `WK_MCP_CLIENT_ID` | Optional, for remote MCP and `wk-mcp login`: the server's public HTTPS origin with no trailing slash (it must equal `WK_OIDC_AUDIENCE`) and the public sign-in client. See the [Keycloak quick start](quick-start-keycloak.md) and [remote MCP](../architecture/remote-mcp.md) |
 | `WK_BROWSER_CLIENT_ID` | Registered portal authorization-code client |
 | `WK_BROWSER_CLIENT_SECRET` | Optional secret for a confidential browser client; omit for a public client |
 | `WK_CONSOLE_ORIGIN` | Exact public HTTPS portal origin |
 | `WK_COLLECTOR_CLIENT_ID`, `WK_COLLECTOR_AUDIENCE` | Separate native public client and collector-only audience |
 
-Register the browser redirect as `WK_CONSOLE_ORIGIN/auth/callback`. Register the native collector with literal `http://127.0.0.1:<ephemeral-port>/callback` support. Collector tokens must have exactly the collector audience, distinct from the API audience. The app does not create an OAuth issuer or infer memberships from provider claims. See [identity details](../architecture/backend.md#hosted-browser-identity). Keycloak is the one provider qualified so far; see its [setup and audience rules](oidc-keycloak.md).
+Register the browser redirect as `WK_CONSOLE_ORIGIN/auth/callback`. Register the native collector with literal `http://127.0.0.1:<ephemeral-port>/callback` support. Collector tokens must have exactly the collector audience, distinct from the API audience. The app does not create an OAuth issuer or infer memberships from provider claims. See [identity details](../architecture/backend.md#hosted-browser-identity). Keycloak is the one provider qualified so far; see its [setup and audience rules](oidc-keycloak.md), the prefilled realm and the [Keycloak quick start](quick-start-keycloak.md).
 
 Build and start only the database first:
 

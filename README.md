@@ -252,7 +252,7 @@ The server container includes both the API and portal. The deployment template s
 4. Use the protected operator connection for migrations, runtime-role grants and initial provisioning.
 5. Start the restricted application, then verify sign-in, membership isolation, readiness, retention and backup/restore in your deployment.
 
-Start with [the complete server setup](docs/operations/install.md#host-a-team-server) and [Compose template](deploy/compose/compose.yaml). Starting Compose alone does not provision identity or database roles. Production configuration has no browser token-paste fallback.
+Start with [the complete server setup](docs/operations/install.md#host-a-team-server) and [Compose template](deploy/compose/compose.yaml). For Keycloak, a prefilled realm and a one-login MCP bridge, follow the [Keycloak quick start](docs/operations/quick-start-keycloak.md). Starting Compose alone does not provision identity or database roles. Production configuration has no browser token-paste fallback.
 
 ## Code-change context
 
@@ -293,7 +293,7 @@ Enable private hybrid retrieval with **pgvector inside PostgreSQL** and a review
 
 Setup uses a separate optional migration, read-only runtime grants and a bounded operator index pass. HTTP, MCP and the portal report the retrieval mode and keyword fallback when the model or index is unavailable. When it is enabled, prompt-time team notices also include teammates' summaries that match the prompt's locally extracted keywords by meaning ([overlap notices](docs/architecture/overlap-notices.md)). Review [semantic setup, boundaries and evaluation](docs/architecture/semantic-search.md) before enabling it; model/network capacity and representative team quality require deployment-specific acceptance.
 
-Agents can retrieve authorized shared knowledge through `wk-mcp` over stdio or the server's authenticated stateless Streamable HTTP endpoint, `/mcp/{product}`. Remote requests authenticate independently and enforce route-bound product membership. MCP provides integration and retrieval; it does not capture conversations. For VS Code and GitHub Copilot, see the [`.vscode/mcp.json` examples](docs/adapters/setup.md#vs-code-and-github-copilot-mcp).
+Agents can retrieve authorized shared knowledge through `wk-mcp` over stdio (sign in once with `wk-mcp login`; no token to copy) or the server's authenticated stateless Streamable HTTP endpoint, `/mcp/{product}`. Remote requests authenticate independently and enforce route-bound product membership. MCP provides integration and retrieval; it does not capture conversations. For VS Code and GitHub Copilot, see the [`.vscode/mcp.json` examples](docs/adapters/setup.md#vs-code-and-github-copilot-mcp).
 
 | Tool | Purpose |
 |---|---|
@@ -425,7 +425,7 @@ Linux runners may need `npx playwright install --with-deps chromium`. See [CONTR
 
 | Area | Guides |
 |---|---|
-| Getting started | [Installation](docs/operations/install.md) · [Collector/client setup](docs/adapters/setup.md) |
+| Getting started | [Installation](docs/operations/install.md) · [Keycloak quick start](docs/operations/quick-start-keycloak.md) · [Collector/client setup](docs/adapters/setup.md) |
 | Team workflow | [Console](docs/architecture/console.md) · [Code-change context](docs/architecture/code-change-context.md) · [Overlap notices](docs/architecture/overlap-notices.md) |
 | Architecture | [Backend and identity](docs/architecture/backend.md) · [Private capture](docs/architecture/private-capture-journal.md) · [MCP](docs/architecture/remote-mcp.md) · [Schemas](docs/architecture/schemas/README.md) |
 | Evidence and assessment | [Evidence connectors](docs/architecture/evidence-connectors.md) · [Advisory decision layer](docs/architecture/jev-decisions.md) |

@@ -37,6 +37,10 @@ services:
       # Only for an identity provider behind a private CA: mount the PEM bundle read-only (for
       # example with a compose override) and set this to its in-container path.
       WK_OIDC_CA_FILE: ${WK_OIDC_CA_FILE:-}
+      # Remote MCP and `wk-mcp login`: the public HTTPS origin (no trailing slash), which must also
+      # be the API audience, and the public client that `wk-mcp login` signs in with.
+      WK_MCP_RESOURCE: ${WK_MCP_RESOURCE:-}
+      WK_MCP_CLIENT_ID: ${WK_MCP_CLIENT_ID:-}
       WK_BIND: 0.0.0.0:8080
       WK_CONSOLE_ORIGIN: ${WK_CONSOLE_ORIGIN:?Set exact HTTPS console origin}
       WK_POOL_MAX: '${WK_POOL_MAX:-10}'

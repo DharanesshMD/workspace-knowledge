@@ -6,10 +6,21 @@ license.workspace=true
 [dependencies]
 serde.workspace=true
 serde_json.workspace=true
+sha2.workspace=true
 rmcp={version="3.5",features=["transport-io"]}
-tokio={version="1",features=["macros","rt-multi-thread","io-std"]}
+tokio={version="1",features=["macros","rt-multi-thread","io-std","sync","time"]}
 reqwest={version="0.12",default-features=false,features=["json","rustls-tls"]}
 uuid="1"
+clap={version="4",features=["derive","env"]}
+keyring={version="3.6",features=["apple-native","windows-native","sync-secret-service","crypto-rust"]}
+zeroize="1"
+base64="0.22"
 
 wk-contracts={path="../contracts"}
+wk-login={path="../login"}
 wk-summarize={path="../summarize"}
+[dev-dependencies]
+wk-login={path="../login",features=["test-support"]}
+axum="0.8"
+jsonwebtoken={version="10",features=["aws_lc_rs"]}
+tempfile.workspace=true

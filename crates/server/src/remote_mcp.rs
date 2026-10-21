@@ -47,7 +47,13 @@ fn output(v: Value) -> Result<CallToolResult, ErrorData> {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Record {
+    #[schemars(schema_with = "card_schema")]
     card: Value,
+}
+/// A summary card is a JSON object. An explicit schema keeps the tool list valid for clients that
+/// cannot read the boolean schema an untyped value produces.
+fn card_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": "object", "description": "Structured summary card"})
 }
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -450,12 +456,82 @@ fn resource(api: &crate::Api) -> Result<String, ()> {
     }
     Ok(configured)
 }
+/// The public sign-in client for `wk-mcp login`, if the operator registered one. It is only
+/// advertised: tokens are still verified against the single configured audience.
+fn client_id() -> Option<String> {
+    let id = std::env::var("WK_MCP_CLIENT_ID").ok()?;
+    (!id.is_empty() && id.len() <= 256 && id.bytes().all(|b| b.is_ascii_graphic())).then_some(id)
+}
+fn metadata_document(resource: &str, issuer: &str, client_id: Option<&str>) -> Value {
+    let mut document = json!({"resource":resource,"authorization_servers":[issuer],"bearer_methods_supported":["header"]});
+    if let Some(id) = client_id {
+        document["wk_mcp_client_id"] = json!(id);
+    }
+    document
+}
 pub(crate) async fn metadata(
     axum::extract::State(api): axum::extract::State<crate::Api>,
 ) -> Result<axum::Json<Value>, crate::Failure> {
     let resource = resource(&api)
         .map_err(|_| crate::Failure(axum::http::StatusCode::NOT_FOUND, "not_found"))?;
-    Ok(axum::Json(
-        json!({"resource":resource,"authorization_servers":[api.oidc.as_ref().unwrap().issuer()],"bearer_methods_supported":["header"]}),
-    ))
+    Ok(axum::Json(metadata_document(
+        &resource,
+        api.oidc.as_ref().unwrap().issuer(),
+        client_id().as_deref(),
+    )))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn metadata_advertises_the_sign_in_client_only_when_registered() {
+        let plain = metadata_document("https://wk.example", "https://idp.example/realms/wk", None);
+        assert_eq!(
+            plain,
+            json!({"resource":"https://wk.example","authorization_servers":["https://idp.example/realms/wk"],"bearer_methods_supported":["header"]})
+        );
+        let with_client = metadata_document(
+            "https://wk.example",
+            "https://idp.example/realms/wk",
+            Some("wk-mcp"),
+        );
+        assert_eq!(with_client["wk_mcp_client_id"], "wk-mcp");
+    }
+    /// Some MCP clients (Claude Code 2.1.15) reject a tool list where any property schema is the
+    /// boolean `true`, which is what an untyped `serde_json::Value` field generates.
+    #[test]
+    fn every_tool_property_has_an_object_schema() {
+        let tools = KnowledgeMcp::tool_router().list_all();
+        assert!(tools.len() >= 10);
+        for tool in tools {
+            let properties = tool
+                .input_schema
+                .get("properties")
+                .and_then(|p| p.as_object());
+            for (name, schema) in properties.into_iter().flatten() {
+                assert!(
+                    schema.is_object(),
+                    "{}.{name} has schema {schema}",
+                    tool.name
+                );
+            }
+        }
+    }
+    #[test]
+    fn the_advertised_client_id_is_a_short_printable_token() {
+        for (value, ok) in [
+            ("wk-mcp", true),
+            ("", false),
+            ("has space", false),
+            ("tab\t", false),
+            ("é", false),
+        ] {
+            std::env::set_var("WK_MCP_CLIENT_ID", value);
+            assert_eq!(client_id().is_some(), ok, "{value:?}");
+        }
+        std::env::set_var("WK_MCP_CLIENT_ID", "x".repeat(257));
+        assert!(client_id().is_none());
+        std::env::remove_var("WK_MCP_CLIENT_ID");
+        assert!(client_id().is_none());
+    }
 }

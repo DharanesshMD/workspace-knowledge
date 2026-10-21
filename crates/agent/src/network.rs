@@ -6,23 +6,12 @@ pub const SERVER_CA_FILE: &str = "server-ca.pem";
 pub fn client(seconds: u64) -> Result<reqwest::Client, String> {
     client_trusting(None, seconds)
 }
-/// A client for the hosted server and its identity provider. With a bundle it replaces the
-/// public roots; without one the public roots apply. Nothing else changes the trust set.
+/// A client for the hosted server and its identity provider; see [`wk_login::client_trusting`].
 pub fn client_trusting(
     ca: Option<&[reqwest::Certificate]>,
     seconds: u64,
 ) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(seconds));
-    if let Some(certificates) = ca {
-        builder = builder.tls_built_in_root_certs(false);
-        for certificate in certificates {
-            builder = builder.add_root_certificate(certificate.clone());
-        }
-    }
-    builder.build().map_err(|_| "network unavailable".into())
+    wk_login::client_trusting(ca, seconds)
 }
 /// The CA bundle approved when this device was connected, if any. A stored bundle that is
 /// unreadable, a symlink or invalid is an error, never a fall back to public roots.

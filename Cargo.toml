@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/contracts", "crates/scope", "crates/local", "crates/capture", "crates/cli", "crates/knowledge", "crates/server", "crates/mcp", "crates/adapters", "crates/summarize", "crates/agent", "crates/environments", "crates/postgres"]
+members = ["crates/contracts", "crates/scope", "crates/local", "crates/capture", "crates/cli", "crates/knowledge", "crates/server", "crates/mcp", "crates/login", "crates/adapters", "crates/summarize", "crates/agent", "crates/environments", "crates/postgres"]
 resolver = "2"
 [workspace.package]
 version = "0.1.0"

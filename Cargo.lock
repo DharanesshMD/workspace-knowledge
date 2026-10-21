@@ -3987,19 +3987,18 @@ dependencies = [
  "libc",
  "openidconnect",
  "rand 0.8.8",
- "rcgen",
  "reqwest",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "tokio",
- "tokio-rustls",
  "uuid",
  "wk-adapters",
  "wk-capture",
  "wk-contracts",
  "wk-local",
+ "wk-login",
  "wk-scope",
  "wk-summarize",
  "zeroize",
@@ -4095,17 +4094,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "wk-login"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "jsonwebtoken",
+ "openidconnect",
+ "rcgen",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+ "wk-summarize",
+ "zeroize",
+]
+
+[[package]]
 name = "wk-mcp"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "clap",
+ "jsonwebtoken",
+ "keyring",
  "reqwest",
  "rmcp",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "tokio",
  "uuid",
  "wk-contracts",
+ "wk-login",
  "wk-summarize",
+ "zeroize",
 ]
 
 [[package]]
