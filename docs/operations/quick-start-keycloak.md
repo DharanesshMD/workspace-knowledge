@@ -81,16 +81,17 @@ Then connect capture: [Join a team server](install.md#join-a-team-server).
 
 ## Optional: native remote MCP, no bridge
 
-Claude Code and the Cursor agent CLI can sign in to `https://knowledge.example/mcp/PRODUCT` themselves. They register themselves with Keycloak (dynamic client registration), which Keycloak refuses until you run the one-time setup below. It lets only clients with loopback (and the listed) redirect URIs register, makes every such client's token carry exactly the MCP audience, and keeps Keycloak's consent screen:
+Claude Code, the Cursor agent CLI and VS Code can sign in to `https://knowledge.example/mcp/PRODUCT` themselves. They register themselves with Keycloak (dynamic client registration), which Keycloak refuses until you run the one-time setup below. It lets only clients with loopback (and the listed) redirect URIs register, makes every such client's token carry exactly the MCP audience, and keeps Keycloak's consent screen:
 
 ```sh
 KC_ADMIN_PASSWORD=<keycloak admin password> python3 deploy/keycloak/enable-remote-mcp-signin.py \
   --keycloak https://sso.example:8443 --audience https://knowledge.example --ca-file /path/to/private-ca.pem \
-  --trusted-host localhost --trusted-host 127.0.0.1 --trusted-host www.cursor.com --trusted-host anysphere.cursor-mcp
+  --trusted-host localhost --trusted-host 127.0.0.1 --trusted-host www.cursor.com --trusted-host anysphere.cursor-mcp \
+  --trusted-host vscode.dev --trusted-host insiders.vscode.dev --trusted-host code.visualstudio.com
 claude mcp add --transport http workspace-knowledge https://knowledge.example/mcp/PRODUCT   # then /mcp, Authenticate
 ```
 
-Claude Code needs `NODE_EXTRA_CA_CERTS=/path/to/private-ca.pem` in its environment for a private CA. Anyone who can reach Keycloak can then register a loopback client, but the user still has to sign in and consent, and the server still requires an explicit membership. Registrations accumulate in the realm (Keycloak caps anonymous registrations at 200). Per-client results, including what was not tested (VS Code, the Cursor editor), are in the [real-client sign-in results](../reviews/2026-10-19-remote-mcp-signin-results.md). Use the bridge when a client cannot complete this flow.
+Claude Code needs `NODE_EXTRA_CA_CERTS=/path/to/private-ca.pem` in its environment for a private CA. Anyone who can reach Keycloak can then register a loopback client, but the user still has to sign in and consent, and the server still requires an explicit membership. For VS Code, also set the realm's Access Token Lifespan above 5 minutes (the starter realm uses exactly 5, and VS Code then fires dozens of refreshes after each sign-in; the script warns about it). Registrations accumulate in the realm (Keycloak caps anonymous registrations at 200). Per-client results, including what was not tested (a model calling a tool, the Cursor editor beyond one run), are in the [real-client sign-in results](../reviews/2026-10-19-remote-mcp-signin-results.md). Use the bridge when a client cannot complete this flow.
 
 ## If it does not work
 

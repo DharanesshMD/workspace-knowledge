@@ -15,6 +15,7 @@ What it changes in the realm (all idempotent; see docs/operations/quick-start-ke
   4. lets registrations name the plain `openid` scope, and stops the provider advertising the
      `roles` and `service_account` scopes (VS Code asks for all advertised scopes; Keycloak refuses
      those two for an ordinary client).
+It also warns (and changes nothing) when the realm's access-token lifespan is 300 s or less, which makes VS Code fire bursts of refreshes.
 Keycloak's own "Consent Required", "Full Scope Disabled" and "Max Clients" anonymous policies stay.
 It does not touch clients you already created, and it never prints credentials.
 
@@ -151,6 +152,11 @@ def main(argv=None):
     admin.login(args.admin_user, password)
     done = enable(admin, args.audience, args.hosts or ["localhost", "127.0.0.1"], args.require_trusted_source)
     print("\n".join(done) if done else "nothing to change; the realm is already set up")
+    lifespan = admin.call("GET", admin.realm_path("")).get("accessTokenLifespan", 300)
+    if lifespan <= 300:
+        print(f"warning: the realm's access token lifespan is {lifespan} s. VS Code refreshes any token with under 300 s left and re-checks after every refresh,\n"
+              "so with 300 s or less it fires a burst of refreshes after each sign-in (an endless loop at much shorter lifespans). It still works; Claude Code and Cursor are unaffected. Set the realm's Access Token Lifespan above 5 minutes\n"
+              "(for example 10) if VS Code users will sign in; this script does not change it.")
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ class FakeKeycloak:
                        "config": {"host-sending-registration-request-must-match": ["true"], "trusted-hosts": [], "client-uris-must-match": ["true"]}}
         self.scopes_policy = {"id": "p2", "providerId": "allowed-client-templates", "subType": "anonymous", "config": {"allow-default-scopes": ["true"]}}
         self.log = []
+        self.lifespan = 300
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -50,6 +51,8 @@ class FakeKeycloak:
                     return self.reply({"access_token": "t"} if b"password=pw" in body else {"error": "bad"}, 200 if b"password=pw" in body else 401)
                 if self.headers.get("Authorization") != "Bearer t":
                     return self.reply(None, 401)
+                if path.endswith("/admin/realms/wk") and method == "GET":
+                    return self.reply({"realm": "wk", "accessTokenLifespan": fake.lifespan})
                 if path.endswith("/client-scopes") and method == "GET":
                     return self.reply(fake.scopes)
                 if path.endswith("/client-scopes") and method == "POST":
@@ -102,7 +105,9 @@ class EnableRemoteMcpSigninTests(unittest.TestCase):
 
     def run_script(self, *extra, password="pw"):
         args = ["--keycloak", self.fake.url, "--audience", "https://knowledge.example", *extra]
-        with mock.patch.dict(os.environ, {"KC_ADMIN_PASSWORD": password}), contextlib.redirect_stdout(io.StringIO()):
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"KC_ADMIN_PASSWORD": password}), contextlib.redirect_stdout(out):
+            self.last_output = out
             return enable_signin.main(args)
 
     def test_realm_gets_the_audience_scope_without_roles_and_a_loopback_only_policy(self):
@@ -123,6 +128,13 @@ class EnableRemoteMcpSigninTests(unittest.TestCase):
         self.assertIsNone(hidden["basic"], "other scopes are left alone")
         # A client that asks for the plain `openid` scope when registering must not be refused for it.
         self.assertEqual(self.fake.scopes_policy["config"], {"allow-default-scopes": ["true"], "allowed-client-scopes": ["openid"]})
+
+    def test_it_warns_about_an_access_token_lifespan_that_sends_vs_code_into_a_refresh_burst(self):
+        self.run_script()
+        self.assertIn("burst of refreshes", self.last_output.getvalue())
+        self.fake.lifespan = 600
+        self.run_script()
+        self.assertNotIn("burst of refreshes", self.last_output.getvalue())
 
     def test_running_twice_changes_nothing_more(self):
         self.run_script()
