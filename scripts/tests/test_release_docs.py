@@ -57,6 +57,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
             "docs/operations/v0.1-release.md",
             "docs/operations/production-readiness.md",
             "docs/operations/oidc-keycloak.md",
+            "docs/operations/alpha4-release.md",
             "docs/operations/quick-start-keycloak.md",
             "docs/adapters/setup.md",
             "docs/architecture/remote-mcp.md",
