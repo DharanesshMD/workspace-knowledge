@@ -57,6 +57,28 @@ fn card_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
 }
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct ShareSession {
+    /// Service the work belongs to. Needed only when you hold more than one service in this product; the error lists them.
+    #[serde(default)]
+    service: Option<String>,
+    /// Short title of the work (at most 256 characters).
+    title: String,
+    /// The goal: what the developer set out to do.
+    intent: String,
+    /// Why the work went the way it did.
+    rationale: String,
+    /// Decisions made, each with the reason.
+    #[serde(default)]
+    decisions: Vec<String>,
+    /// Constraints that shaped the work.
+    #[serde(default)]
+    constraints: Vec<String>,
+    /// Questions still open.
+    #[serde(default)]
+    open_questions: Vec<String>,
+}
+#[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Feedback {
     card_id: String,
     revision: i64,
@@ -197,6 +219,51 @@ impl KnowledgeMcp {
             )
             .await?,
         )
+    }
+    #[tool(
+        name = "knowledge.share_session",
+        description = "Share a summary of the current work with your team. Call this ONLY when the developer has asked you to share or track this session or project. Write it from what actually happened: goal, decisions and why, constraints, open questions. Never include secrets, credentials, personal data, customer data, raw conversation or hidden reasoning. The summary is screened and, when the team has publishing enabled, is visible to teammates immediately; the developer can withdraw it later."
+    )]
+    async fn share_session(
+        &self,
+        Parameters(args): Parameters<ShareSession>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use wk_knowledge::share::ShareError;
+        let request = wk_knowledge::share::ShareRequest {
+            service: args.service,
+            title: args.title,
+            intent: args.intent,
+            rationale: args.rationale,
+            decisions: args.decisions,
+            constraints: args.constraints,
+            open_questions: args.open_questions,
+        };
+        let outcome = self
+            .api
+            .knowledge
+            .share_session(&self.actor, &self.product, request)
+            .await
+            .map_err(|e| match e {
+                ShareError::ServiceRequired(services) => ErrorData::invalid_params(
+                    format!(
+                        "service_required: you hold several services here; call again with service set to one of {}",
+                        services.join(", ")
+                    ),
+                    Some(json!({"error":"service_required","services":services})),
+                ),
+                ShareError::Sensitive => error("summary requires private review"),
+                ShareError::Failed(wk_knowledge::Error::Denied) => {
+                    error("share denied: you do not hold that service in this product")
+                }
+                ShareError::Failed(wk_knowledge::Error::Invalid) => {
+                    error("invalid summary: title and intent are required, and the summary must stay under 64 KiB")
+                }
+                ShareError::Failed(wk_knowledge::Error::Conflict) => error(
+                    "conflict: an identical summary was already shared and withdrawn, or your access just changed; change the text or try again",
+                ),
+                ShareError::Failed(_) => error("sharing is unavailable; try again later"),
+            })?;
+        output(crate::share_outcome(&outcome))
     }
     #[tool(
         name = "knowledge.feedback",
@@ -502,7 +569,7 @@ mod tests {
     #[test]
     fn every_tool_property_has_an_object_schema() {
         let tools = KnowledgeMcp::tool_router().list_all();
-        assert!(tools.len() >= 10);
+        assert_eq!(tools.len(), 11);
         for tool in tools {
             let properties = tool
                 .input_schema

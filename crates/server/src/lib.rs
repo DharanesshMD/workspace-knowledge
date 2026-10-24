@@ -183,6 +183,71 @@ async fn submit(
         .await?;
     Ok(Json(json!({"card":card})))
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Share {
+    product: String,
+    #[serde(default)]
+    service: Option<String>,
+    title: String,
+    intent: String,
+    rationale: String,
+    #[serde(default)]
+    decisions: Vec<String>,
+    #[serde(default)]
+    constraints: Vec<String>,
+    #[serde(default)]
+    open_questions: Vec<String>,
+}
+/// What a successful share tells the caller, over HTTP and from the hosted MCP tool alike.
+fn share_outcome(o: &wk_knowledge::share::ShareOutcome) -> Value {
+    json!({
+        "card_id": o.card_id,
+        "revision": o.revision,
+        "published": o.published,
+        "status": o.status,
+        "withdraw": format!("Open the card in the portal (My context, Withdraw knowledge) or POST /v1/cards/{}/withdraw", o.card_id),
+    })
+}
+fn share_failure(e: wk_knowledge::share::ShareError) -> Response {
+    use wk_knowledge::share::ShareError;
+    match e {
+        ShareError::ServiceRequired(services) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error":"service_required","services":services})),
+        )
+            .into_response(),
+        ShareError::Sensitive => {
+            Failure(StatusCode::UNPROCESSABLE_ENTITY, "sensitive_summary").into_response()
+        }
+        ShareError::Failed(e) => Failure::from(e).into_response(),
+    }
+}
+/// Share a session summary with only the developer's own sign-in: the server builds the card
+/// (assistant-written, partial, no evidence) and applies the publish-on-submit rules.
+async fn share(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    body: Result<Json<Share>, JsonRejection>,
+) -> Result<Response, Failure> {
+    let who = actor(&api, &headers).await?;
+    let r = parse(body)?;
+    let request = wk_knowledge::share::ShareRequest {
+        service: r.service,
+        title: r.title,
+        intent: r.intent,
+        rationale: r.rationale,
+        decisions: r.decisions,
+        constraints: r.constraints,
+        open_questions: r.open_questions,
+    };
+    Ok(
+        match api.knowledge.share_session(&who, &r.product, request).await {
+            Ok(outcome) => Json(share_outcome(&outcome)).into_response(),
+            Err(e) => share_failure(e),
+        },
+    )
+}
 async fn publish(
     State(api): State<Api>,
     headers: HeaderMap,
@@ -532,6 +597,7 @@ pub fn portal_router_with_embeddings(
         .route("/v1/policy", get(policy))
         .route("/v1/workspace-bindings", post(binding))
         .route("/v1/cards", post(submit))
+        .route("/v1/share", post(share))
         .route("/v1/cards/{id}/publish", post(publish))
         .route("/v1/cards/{id}/correct", post(correct))
         .route("/v1/cards/{id}/withdraw", post(withdraw))

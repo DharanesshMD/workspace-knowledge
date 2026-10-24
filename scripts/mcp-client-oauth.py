@@ -348,7 +348,7 @@ def cursor_agent(stack, binary, ledger):
         rest = login.communicate(timeout=60)[0]
         ledger.check(f"cursor agent {version}: sign-in completes", "login successful" in rest, rest[-200:])
         listed = run("mcp", "list-tools", "wk")
-        ledger.check(f"cursor agent {version}: lists the 10 server tools with the new token", "Tools for wk (10)" in listed.stdout, listed.stdout[-200:] + listed.stderr[-200:])
+        ledger.check(f"cursor agent {version}: lists the 11 server tools with the new token", "Tools for wk (11)" in listed.stdout, listed.stdout[-200:] + listed.stderr[-200:])
         auth_file = next(Path(home).glob(".cursor/projects/*/mcp-auth.json"))
         entry = json.loads(auth_file.read_text())["wk"]
         token_claims = claims(entry["tokens"]["access_token"])
@@ -359,7 +359,7 @@ def cursor_agent(stack, binary, ledger):
         again = run("mcp", "list-tools", "wk")
         after = claims(json.loads(auth_file.read_text())["wk"]["tokens"]["access_token"])["iat"]
         ledger.check(f"cursor agent {version}: renews an expired access token without asking the user",
-                     "Tools for wk (10)" in again.stdout and after > before, again.stdout[-200:] + again.stderr[-200:])
+                     "Tools for wk (11)" in again.stdout and after > before, again.stdout[-200:] + again.stderr[-200:])
         mode = auth_file.stat().st_mode & 0o777
         ledger.note(f"cursor agent {version}: its credential file (mcp-auth.json, holding the tokens) has mode {oct(mode)}"
                     + ("" if mode & 0o077 else " (private)"))
@@ -545,14 +545,14 @@ def vscode(stack, binary, ledger, lifespan):
         stack.browser(url)
 
         def tools_logged():
-            return any("Discovered 10 tools" in f.read_text(errors="replace") for f in (root / "data/logs").rglob("mcpServer*.log"))
+            return any("Discovered 11 tools" in f.read_text(errors="replace") for f in (root / "data/logs").rglob("mcpServer*.log"))
 
         end = time.time() + 60
         while time.time() < end and not tools_logged():
             time.sleep(1)
         signed_in = time.time()
         traffic = [row for row in stack.server_traffic()[seen:] if row[3]]
-        ledger.check(f"{name}: sign-in completes and VS Code lists the 10 server tools", tools_logged(), "no 'Discovered 10 tools' in its MCP log")
+        ledger.check(f"{name}: sign-in completes and VS Code lists the 11 server tools", tools_logged(), "no 'Discovered 11 tools' in its MCP log")
         ledger.check(f"{name}: the server answered initialize, the initialized notification and tools/list with the new token (200, 202, 200)",
                      [row[2] for row in traffic if row[0] == "POST"][:3] == [200, 202, 200], str(traffic))
         events = new_events()

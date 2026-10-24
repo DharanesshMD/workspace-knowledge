@@ -238,6 +238,19 @@ With the local stdio bridge (`wk-mcp`), your agent can ask you to approve the pr
 - `workspace.request_approval` (optionally naming a subset of the candidate services) opens a one-time page on `127.0.0.1` in your browser. It shows the exact folder, the product, the service subfolders and what approving means, with **Approve** and **Decline** buttons. **Only your click writes the approval**; the agent cannot approve for you, and the tool returns `waiting_for_user` straight away so it can tell you what to click. The page works once, expires after 10 minutes and is served only to your computer.
 - After you approve, `workspace.folder` reports the folder as approved and the page shows the exact `wk-agent device connect --binding ... --service ... --server ... --yes` command for each service. Connecting the collector (a browser sign-in) is still a separate step, and capture, activity and publishing only happen inside approved service subfolders, as before.
 
+**After that, it is automatic.** Approval is a one-time act per project folder. Whenever an agent starts in that folder (or a folder inside it), the bridge reads the saved approval, with no network call, and gives the agent instructions that say so: at the start of work, pull in what teammates have recorded (`knowledge.context`, and `knowledge.overlaps` for files it will edit); when you say the task is done, or ask it to share or track the work, send a summary with `knowledge.share_session`. In a folder that is not approved, the instructions tell the agent to ask you to approve it and not to share anything. Agents follow instructions with varying reliability, so treat this as "usually happens", not as guaranteed capture.
+
+### Share a session summary from your agent
+
+`knowledge.share_session` lets your agent share a summary of the work (title, goal, rationale, decisions, constraints, open questions) with your team, using only your own sign-in: no collector, hooks or device are involved.
+
+- **The MCP never sees your conversation.** The agent writes the summary from what happened and sends only that. Raw chat text is not uploaded.
+- **Screening and publishing.** The summary is screened for credentials and personal data (on your machine and again on the server). If the team's publishing is on for the product (the default; `WK_AUTO_PUBLISH_PRODUCTS`), teammates' agents can find it immediately; otherwise it waits for a reviewer. The result says which happened and how to withdraw it.
+- **Where it works.** The local bridge only shares from an approved project folder and only into the services you approved for it (name one with `service` if you approved several). The hosted `/mcp/{product}` endpoint has the same tool for clients that sign in directly; it cannot see your folder, so there the limit is your server membership.
+- **Agents are told to call it only when you ask** to share or track the work (or when the approved folder's instructions say sharing is on). The tool description says the same, and your client's tool-permission prompt is a further check unless you have allow-listed the tool.
+
+Teammates retrieve it with `knowledge.search` or `knowledge.context`. Keyword search matches cards containing any of your significant words and ranks cards with more matches first, so a natural sentence works.
+
 The approval is written under `WK_CONSENT_DIR` (default `$HOME/.local/share/workspace-knowledge/consent`), the same place and format as `wk workspace approve`, which still works. A folder has one approval: approving it for another product replaces the earlier one, and the page says so. The bridge tells agents to check the folder before relying on team knowledge and not to claim approval until `workspace.folder` says so.
 
 ## VS Code and GitHub Copilot MCP
