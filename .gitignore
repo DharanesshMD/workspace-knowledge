@@ -11,6 +11,8 @@
 /web/test-results/
 /web/playwright-report/
 *.pem
+# A public synthetic test CA certificate (no key) that crates/server/tests/oidc.rs embeds at compile time.
+!crates/server/tests/fixtures/synthetic-ca.pem
 *.key
 
 __pycache__/
