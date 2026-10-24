@@ -1,12 +1,14 @@
 # v0.1.0-alpha.4: draft release notes and owner checklist
 
-**Status: draft. No tag or GitHub release exists for alpha.4.** The latest published release is the source-only `v0.1.0-alpha.3` prerelease. Cut alpha.4 from the final commit only after the checklist below; the notes must then be updated with that commit's SHA. Nothing here makes the project production-supported: see the [production readiness ledger](production-readiness.md).
+**Status: draft. No tag or GitHub release exists for alpha.4.** The latest published release is the source-only `v0.1.0-alpha.3` prerelease. Cut alpha.4 only after the checklist below. The code was verified locally at commit `b5e72f7`; the tag goes on the documentation-only commit that records that SHA here, so the tagged tree differs from `b5e72f7` by this file alone. Nothing here makes the project production-supported: see the [production readiness ledger](production-readiness.md).
 
 ## Draft release notes
 
 **Workspace Knowledge v0.1.0-alpha.4: source-only evaluation prerelease**
 
-A self-hostable alpha for small teams: a Linux Docker server (PostgreSQL, an OIDC provider, an HTTPS reverse proxy) and macOS developer machines. Built from source; no binaries are attached and nothing is signed or notarized. Not production-certified. Use disposable or synthetic data. Automatic publication is off: everything a developer captures stays private until they review and submit it.
+A self-hostable alpha for small teams: a Linux Docker server (PostgreSQL, an OIDC provider, an HTTPS reverse proxy) and macOS developer machines. Built from source; no binaries are attached and nothing is signed or notarized. Not production-certified. Use disposable or synthetic data. Nothing leaves a developer's machine except summaries that pass screening (a rule draft or hook capture always waits for review).
+
+**Verified commit:** `b5e72f7`. On a pristine checkout of it (2026-10-24): `cargo fmt`, strict Clippy and 715 Rust tests, including the database-backed ones, against PostgreSQL 17 with pgvector; and a Gitleaks scan of all 278 commits on branches and tags (no leaks). On the same code before it was committed: the web build and tests (42), the Keycloak acceptance run (85 checks), the integration and demo scripts, and a real-browser run of the folder-approval page. GitHub Actions had not run (see Known limits).
 
 ### What changed since alpha.3
 
