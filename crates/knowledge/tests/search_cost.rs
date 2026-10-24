@@ -108,6 +108,19 @@ async fn rare_term_search_over_large_cards_is_not_proportional_to_tokenizing_the
         elapsed < Duration::from_millis(250),
         "searching {CARDS} large cards for an absent term took {elapsed:?}"
     );
+    // A natural-language query ORs its words but still only matches the stored vector.
+    let began = Instant::now();
+    assert!(runtime
+        .search(&reader, PRODUCT, "absentlexeme and absentother words", 8)
+        .await
+        .unwrap()
+        .is_empty());
+    let elapsed = began.elapsed();
+    eprintln!("absent OR search over {CARDS} cards: {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_millis(250),
+        "an OR query over {CARDS} large cards took {elapsed:?}"
+    );
     // The stored vector must follow later edits to every searchable field.
     for (field, term) in [
         ("title", "zebratitle"),

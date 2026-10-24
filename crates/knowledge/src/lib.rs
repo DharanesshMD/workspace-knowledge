@@ -13,6 +13,7 @@ pub mod collector_epoch;
 pub mod devices;
 pub mod evidence;
 pub mod graph;
+mod lexical;
 pub mod lifecycle;
 pub mod personal;
 mod pool;
@@ -425,7 +426,8 @@ impl Knowledge {
         if query.trim().is_empty() || query.len() > 1024 || limit == 0 || limit > 20 {
             return Err(Error::Invalid);
         }
-        let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND ($6::text[] IS NULL OR $6::text[] @> c.services) AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND c.search_vector @@ plainto_tsquery('simple',$4) ORDER BY c.id LIMIT $5").bind(&actor.user).bind(&actor.org).bind(product).bind(query).bind(i64::from(limit)).bind(self.device_guard.as_ref().map(|g|g.services.clone())).fetch_all(&mut *tx).await.map_err(db)?;
+        let (text, or) = lexical::bind(query);
+        let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 CROSS JOIN (SELECT CASE WHEN $7 THEN to_tsquery('simple',$4) ELSE plainto_tsquery('simple',$4) END AS tsq) q WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND ($6::text[] IS NULL OR $6::text[] @> c.services) AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND c.search_vector @@ q.tsq ORDER BY ts_rank(c.search_vector,q.tsq) DESC,c.id LIMIT $5").bind(&actor.user).bind(&actor.org).bind(product).bind(&text).bind(i64::from(limit)).bind(self.device_guard.as_ref().map(|g|g.services.clone())).bind(or).fetch_all(&mut *tx).await.map_err(db)?;
         rows.into_iter().map(decode).collect()
     }
 }

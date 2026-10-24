@@ -289,8 +289,9 @@ impl Knowledge {
         let mut tx = self.read_tx(a, p).await?;
         let services = self.semantic_services(&mut tx, a, p).await?;
         let semantic = vector_candidates(&mut tx, a, p, &services, ns, &encoded, 20).await?;
-        let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND $4::text[] @> c.services AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND c.search_vector @@ plainto_tsquery('simple',$5) ORDER BY ts_rank_cd(c.search_vector,plainto_tsquery('simple',$5)) DESC,c.id LIMIT 20")
-            .bind(&a.user).bind(&a.org).bind(p).bind(&services).bind(query).fetch_all(&mut *tx).await.map_err(db)?;
+        let (text, or) = crate::lexical::bind(query);
+        let rows=sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 CROSS JOIN (SELECT CASE WHEN $6 THEN to_tsquery('simple',$5) ELSE plainto_tsquery('simple',$5) END AS tsq) q WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND $4::text[] @> c.services AND c.published AND NOT c.withdrawn AND c.body->>'lifecycle' NOT IN ('superseded','deprecated') AND c.search_vector @@ q.tsq ORDER BY ts_rank(c.search_vector,q.tsq) DESC,c.id LIMIT 20")
+            .bind(&a.user).bind(&a.org).bind(p).bind(&services).bind(&text).bind(or).fetch_all(&mut *tx).await.map_err(db)?;
         let lexical = rows
             .into_iter()
             .map(decode)
