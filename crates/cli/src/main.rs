@@ -6,7 +6,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-use wk_scope::enrollment::Binding;
+use wk_scope::consent::{binding_file, read_binding, resolve_prefix, save_binding, state_dir};
 #[derive(Parser)]
 #[command(
     name = "wk",
@@ -216,92 +216,6 @@ fn limited(path: &Path, max: u64) -> Result<String, String> {
     }
     Ok(s)
 }
-fn binding_file(state: &Path, root: &Path) -> Result<PathBuf, String> {
-    let root = root.canonicalize().map_err(|_| "workspace unavailable")?;
-    Ok(state.join(format!(
-        "{:x}.json",
-        Sha256::digest(root.as_os_str().to_string_lossy().as_bytes())
-    )))
-}
-/// `path` with its longest existing prefix canonicalized, resolved before making any directories.
-/// A dangling symlink counts as existing, so it fails to resolve instead of being created through.
-fn resolve_prefix(path: &Path, what: &str) -> Result<PathBuf, String> {
-    let mut ancestor = path;
-    let mut suffix = Vec::new();
-    while fs::symlink_metadata(ancestor).is_err() {
-        suffix.push(ancestor.file_name().ok_or(format!("invalid {what}"))?);
-        ancestor = ancestor.parent().ok_or(format!("invalid {what}"))?;
-    }
-    let mut resolved = ancestor
-        .canonicalize()
-        .map_err(|_| format!("{what} unavailable"))?;
-    for part in suffix.iter().rev() {
-        resolved.push(part);
-    }
-    Ok(resolved)
-}
-fn state_dir(state: Option<&Path>, root: &Path, create: bool) -> Result<PathBuf, String> {
-    let state = state.ok_or("--state-dir is required for local consent")?;
-    if !state.is_absolute()
-        || state
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err("state directory must be an absolute path without parent traversal".into());
-    }
-    let root = root.canonicalize().map_err(|_| "workspace unavailable")?;
-    let resolved = resolve_prefix(state, "state directory")?;
-    if resolved.starts_with(&root) {
-        return Err("state directory must be outside product folder".into());
-    }
-    if !state.exists() {
-        if !create {
-            return Err("state directory unavailable".into());
-        }
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder
-            .create(&resolved)
-            .map_err(|_| "cannot create private state directory")?;
-    }
-    if !resolved.is_dir() {
-        return Err("state directory unavailable".into());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if fs::metadata(&resolved)
-            .map_err(|_| "state directory unavailable")?
-            .permissions()
-            .mode()
-            & 0o077
-            != 0
-        {
-            return Err("existing state directory must be private (mode 0700); permissions were not changed".into());
-        }
-    }
-    Ok(resolved)
-}
-fn read_binding(state: &Path, root: &Path) -> Result<Binding, String> {
-    serde_json::from_str(&limited(&binding_file(state, root)?, 65536)?)
-        .map_err(|_| "invalid workspace binding".into())
-}
-fn save_binding(state: &Path, binding: &Binding) -> Result<(), String> {
-    let mut file = tempfile::NamedTempFile::new_in(state).map_err(|_| "cannot save consent")?;
-    let bytes = serde_json::to_vec_pretty(binding).map_err(|_| "invalid binding")?;
-    file.write_all(&bytes).map_err(|_| "cannot save consent")?;
-    file.as_file()
-        .sync_all()
-        .map_err(|_| "cannot sync consent")?;
-    file.persist(binding_file(state, &binding.root)?)
-        .map_err(|_| "cannot commit consent")?;
-    Ok(())
-}
 fn run(cli: Cli) -> Result<Value, String> {
     match cli.command {
         Command::CursorHistory {
@@ -362,12 +276,13 @@ fn run(cli: Cli) -> Result<Value, String> {
                             .into(),
                     );
                 }
-                let b = Binding::approve(&root, &product, services)?;
-                let state = state_dir(cli.state_dir.as_deref(), &root, true)?;
-                save_binding(&state, &b)?;
-                Ok(
-                    json!({"local_approved":true,"binding_file":binding_file(&state, &b.root)?,"root":b.root,"services":b.services,"team_authorized":false,"live_capture_enabled":false}),
-                )
+                let approved = wk_scope::consent::approve(
+                    cli.state_dir.as_deref(),
+                    &root,
+                    &product,
+                    services,
+                )?;
+                Ok(approved.summary())
             }
             Workspace::Status { root } => {
                 let state = state_dir(cli.state_dir.as_deref(), &root, false)?;

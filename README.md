@@ -303,6 +303,7 @@ Agents can retrieve authorized shared knowledge through `wk-mcp` over stdio (sig
 | `knowledge.overlaps` | Check scoped activity and related work |
 | `knowledge.record` / `knowledge.feedback` | Submit structured knowledge or revision-specific feedback through the permitted workflow |
 | `knowledge.assess` | Request optional advisory decision assessment when its approved endpoint is configured |
+| `workspace.folder` / `workspace.request_approval` | Stdio bridge only: check whether the project folder is approved and, with your click in a local browser page, approve it from inside the agent ([setup](docs/adapters/setup.md#approve-a-project-folder-from-your-agent)) |
 
 An example project rule for a cooperative agent:
 

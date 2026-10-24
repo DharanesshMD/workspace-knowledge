@@ -4129,6 +4129,7 @@ dependencies = [
  "uuid",
  "wk-contracts",
  "wk-login",
+ "wk-scope",
  "wk-summarize",
  "zeroize",
 ]

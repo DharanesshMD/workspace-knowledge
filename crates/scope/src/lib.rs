@@ -90,4 +90,5 @@ pub fn approved(root: &Path, candidate: &Path, services: &[String]) -> bool {
     })
 }
 
+pub mod consent;
 pub mod enrollment;

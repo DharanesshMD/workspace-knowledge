@@ -66,10 +66,12 @@ impl Binding {
         b.policy_hash = b.fingerprint()?;
         Ok(b)
     }
+    /// Enabled, and the recorded fingerprint still matches the root, product and services.
+    pub fn intact(&self) -> bool {
+        self.enabled && self.fingerprint().is_ok_and(|h| h == self.policy_hash)
+    }
     pub fn eligible(&self, path: &Path) -> bool {
-        self.enabled
-            && self.fingerprint().is_ok_and(|h| h == self.policy_hash)
-            && super::approved(&self.root, path, &self.services)
+        self.intact() && super::approved(&self.root, path, &self.services)
     }
     pub fn pause(&mut self) {
         self.enabled = false;
