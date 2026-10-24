@@ -246,7 +246,7 @@ fn dropped(input: &str, record: &Value) -> usize {
     given.saturating_sub(kept)
 }
 
-fn quote(s: &str) -> String {
+pub(crate) fn quote(s: &str) -> String {
     if !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || "/._-:@%+=".contains(c))
@@ -281,7 +281,14 @@ pub(crate) async fn run(dir: &std::path::Path, client: &str, input: &str) -> Res
     let (key, record) = build(input, &c.service, revision, &b.policy_hash, client)?;
     let mut store = crate::state::store(dir)?;
     let id = store_draft(&mut store, &key, &record, crate::daemon::now()?)?;
-    Ok(result(&id, dir, dropped(input, &record)))
+    let mut out = result(&id, dir, dropped(input, &record));
+    // Only with the developer's local opt-in; any failure leaves the draft for `submit`.
+    match crate::auto_publish::attempt(dir, &c, &b, &token, &policy, &mut store, &id).await {
+        None => {}
+        Some(Ok(card_id)) => crate::auto_publish::mark_published(&mut out, card_id),
+        Some(Err(reason)) => out["auto_publish"] = json!({"published": false, "reason": reason}),
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

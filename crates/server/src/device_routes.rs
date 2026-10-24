@@ -328,7 +328,7 @@ async fn collect(
             if r.product != e.product {
                 return Err(invalid());
             }
-            json!({"card":k.submit(&who,&e.product,r.card).await?})
+            json!({"card":k.submit_publishing(&who,&e.product,r.card,r.publish_on_submit).await?})
         }
         "personal" => {
             json!({"summary":k.personal_put(&who,&e.product,serde_json::from_value(e.request).map_err(|_|invalid())?).await?})

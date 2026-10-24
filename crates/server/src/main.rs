@@ -200,6 +200,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let limits = wk_server::runtime::Limits::from_env()?;
+    let auto_publish = wk_server::runtime::auto_publish_products(|key| std::env::var(key).ok())?;
     let (knowledge, tokens, oidc, address) = match mode.as_str() {
         "--production" => {
             let oidc = wk_server::auth::Oidc::load(
@@ -277,6 +278,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => return Err("unknown mode".into()),
     };
+    let knowledge = knowledge
+        .with_auto_publish_products(auto_publish)
+        .map_err(|_| "invalid WK_AUTO_PUBLISH_PRODUCTS")?;
     let browser = if let Ok(client_id) = std::env::var("WK_BROWSER_CLIENT_ID") {
         let browser_origin = origin
             .clone()

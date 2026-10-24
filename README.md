@@ -334,7 +334,7 @@ The architecture uses explicit scope and separate permissions throughout:
 - **Local approval controls capture.** Hosted settings cannot approve an unapproved folder or redirect local inference.
 - **Raw messages stay out of the knowledge service.** The portal, shared search and MCP expose authorized summaries and references, not raw conversation messages.
 - **Secure storage is required.** Persistent collector credentials use the native credential store; private capture and drafts are encrypted. Missing required secure storage blocks persistence.
-- **Sharing is explicit.** Owner sync and activity are opt-in. Publication requires review; automatic policy publication remains disabled.
+- **Sharing is explicit.** Owner sync and activity are opt-in. New collectors publish their developer's own assistant-written cards without a reviewer, after screening, unless the operator sets `WK_AUTO_PUBLISH_PRODUCTS=none` or the developer connects with `--no-auto-publish` or runs `wk-agent auto-publish disable`; collectors set up earlier stay off until their developer runs `auto-publish enable --yes` ([setup](docs/adapters/setup.md#publishing-without-review-on-by-default-for-new-setups)). Everything else still requires review.
 - **Identity and membership are enforced.** Browser sign-in uses configured OIDC, cookie sessions and CSRF protection. API access, administration and collector audiences have distinct boundaries.
 - **Secrets use a separate path.** Environment schemas contain metadata; OpenBao value access requires independently authorized credentials.
 

@@ -12,11 +12,11 @@ fn quote(s: &str) -> String {
     }
 }
 
-const BODY: &str = "Summarise this working session for my team as one knowledge card. Use only what actually happened in this session.\n\nWrite a JSON object with exactly these fields:\n- title: short, specific (under 120 characters)\n- intent: what we were trying to achieve, 1-2 sentences\n- rationale: why the code ended up this way, including approaches that failed\n- decisions: array of short strings\n- constraints: array of short strings (things a future change must respect)\n- open_questions: array of short strings\n\nRules: never include secrets, credentials, tokens, personal data or customer data; do not paste code, file contents or raw conversation text; describe in your own words. Leave an array empty rather than guessing.\n\nThen run this command, with the JSON between the two marker lines, and show me the result:\n\n{CMD} draft --client {CLIENT} <<'WK_JSON'\n{ ...the JSON object... }\nWK_JSON\n\nNever include the text WK_JSON in the content. If the command refuses the card, tell me why instead of rewording it to get past the screening.\n\nThe draft stays private on my machine until I review and submit it. Do not publish anything.\n";
+const BODY: &str = "Summarise this working session for my team as one knowledge card. Use only what actually happened in this session.\n\nWrite a JSON object with exactly these fields:\n- title: short, specific (under 120 characters)\n- intent: what we were trying to achieve, 1-2 sentences\n- rationale: why the code ended up this way, including approaches that failed\n- decisions: array of short strings\n- constraints: array of short strings (things a future change must respect)\n- open_questions: array of short strings\n\nRules: never include secrets, credentials, tokens, personal data or customer data; do not paste code, file contents or raw conversation text; describe in your own words. Leave an array empty rather than guessing.\n\nThen run this command, with the JSON between the two marker lines, and show me the result:\n\n{CMD} draft --client {CLIENT} <<'WK_JSON'\n{ ...the JSON object... }\nWK_JSON\n\nNever include the text WK_JSON in the content. If the command refuses the card, tell me why instead of rewording it to get past the screening.\n\nThe card is a private draft on my machine that I review and submit, unless my collector has auto-publish on and my team's server allows it, in which case the command above publishes it right away and says so in its result. Do not run any other command to publish it.\n";
 
 const CODEX_GATE: &str = "When I ask you to summarise this session for Workspace Knowledge (wk-summarize), do the following. Otherwise ignore this section.\n\n";
 
-const DESCRIPTION: &str = "Summarise this session as a private Workspace Knowledge draft";
+const DESCRIPTION: &str = "Summarise this session as a Workspace Knowledge draft card";
 
 pub(crate) fn text(client: &str, exe: &str, state: &str) -> Result<String, String> {
     if exe.chars().chain(state.chars()).any(char::is_control) {
@@ -152,6 +152,18 @@ mod tests {
             assert!(t.contains(
                 "If the command refuses the card, tell me why instead of rewording it to get past the screening."
             ));
+        }
+    }
+
+    #[test]
+    fn each_text_says_the_card_is_a_private_draft_unless_auto_publish_is_on() {
+        for client in ["claude-code", "copilot", "codex"] {
+            let t = text(client, "/x", "/y").unwrap();
+            assert!(t.contains(
+                "The card is a private draft on my machine that I review and submit, unless my collector has auto-publish on and my team's server allows it, in which case the command above publishes it right away"
+            ), "{client}");
+            assert!(t.ends_with("Do not run any other command to publish it.\n"));
+            assert!(!t.contains("Do not publish anything."));
         }
     }
 

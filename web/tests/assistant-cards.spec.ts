@@ -21,7 +21,7 @@ test('an assistant-written card can be published and says who wrote it',async({p
  await expect(row).toContainText('Assistant-written');
  await expect(row).not.toContainText(/partial capture/i);
  await row.click();
- await expect(page.getByText('Written by the author’s assistant; submitted after the author’s review')).toBeVisible();
+ await expect(page.getByText('Written by the author’s assistant; submitted by the author, who reviewed it first unless they chose to publish without review')).toBeVisible();
  await expect(page.getByRole('note')).toContainText('Publishing makes it searchable');
  await expect(page.getByRole('note')).toHaveAttribute('id','assistant-note');
  await expect(page.getByText('Capture coverage')).toHaveCount(0);
@@ -44,7 +44,7 @@ test('an already published assistant card shows its label but no publish notice'
  const row=page.getByRole('button').filter({hasText:'Live assistant summary'});
  await expect(row).toContainText('Assistant-written');
  await row.click();
- await expect(page.getByText('Written by the author’s assistant; submitted after the author’s review')).toBeVisible();
+ await expect(page.getByText('Written by the author’s assistant; submitted by the author, who reviewed it first unless they chose to publish without review')).toBeVisible();
  await expect(page.getByRole('note')).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Publish summary'})).toHaveCount(0);
 });

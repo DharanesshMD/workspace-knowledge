@@ -75,13 +75,14 @@ impl Knowledge {
         for r in rows {
             let product: String = r.try_get("product").map_err(db)?;
             let restrictions = Self::product_restrictions(&mut tx, actor, &product).await?;
+            let features = self.policy_features(&product);
             result.push(lifecycle::Policy {
                 product,
                 services: r.try_get("services").map_err(db)?,
                 can_review: r.try_get("can_review").map_err(db)?,
                 policy_revision: r.try_get("policy_revision").map_err(db)?,
                 restrictions,
-                features: lifecycle::policy_features(),
+                features,
             });
         }
         Ok(result)

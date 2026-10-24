@@ -12,6 +12,7 @@ A self-hostable alpha for small teams: a Linux Docker server (PostgreSQL, an OID
 
 - **Log in once to the hosted MCP.** `wk-mcp login` signs a developer in (authorization code with PKCE) and renews tokens silently from the OS credential store, so no access token has to be copied. A prefilled Keycloak realm and a [quick start](quick-start-keycloak.md) cover the server side. Claude Code and the Cursor agent CLI sign in to the server's MCP endpoint themselves once the realm allows it; the Cursor editor and VS Code 1.142.0 also passed sign-in and silent renewal ([results](../reviews/2026-10-19-remote-mcp-signin-results.md)); VS Code needs a realm access-token lifespan above 5 minutes. No client was tested with a real model calling a tool.
 - **Identity providers behind a private CA.** `WK_OIDC_CA_FILE` for the server and `--ca-file` for `wk-agent device connect` and `wk-mcp login`. Keycloak 26.4 is the one provider qualified so far ([guide](oidc-keycloak.md)).
+- **Publish without review, on by default for new setups.** A developer's own assistant-written cards go live right after `wk-agent draft`, with no reviewer, once they pass screening. New collectors have it on (`--no-auto-publish` opts out), the server enables every product (`WK_AUTO_PUBLISH_PRODUCTS=none` turns it off), and collectors set up before alpha.4 stay off until the developer runs `wk-agent auto-publish enable --yes`. Cards can be withdrawn and each publication is audited ([setup](../adapters/setup.md#publishing-without-review-on-by-default-for-new-setups)). This is a change from alpha.3, where every card waited for a reviewer.
 - **Better default summaries.** The assistant-written flow (`/wk-summarize`) is the recommended path and a reviewer can publish such cards. Rules-mode drafts are the zero-setup fallback and now avoid greetings and pasted traces as titles.
 - **Faster search.** Schema migration 18 stores the card search vector and adds a missing graph index. Five-developer search p95 fell from about 0.9 s to 34 ms in a local synthetic test ([measurements and limits](../reviews/2026-10-21-capacity-and-search.md)).
 - **One capture support table.** [`docs/adapters/support.md`](../adapters/support.md) lists tested client versions, what is captured and what is held. Unsupported versions are refused with a message that points to it.
@@ -19,6 +20,7 @@ A self-hostable alpha for small teams: a Linux Docker server (PostgreSQL, an OID
 
 ### Upgrading from alpha.3
 
+- **Review before publish is no longer the default for new setups.** If you want a reviewer on every card, set `WK_AUTO_PUBLISH_PRODUCTS=none` on the server before onboarding developers. Existing collectors keep their old behavior.
 - The server now needs **schema 18**. Run `wk-server migrate` with the operator connection before starting the new binary.
 - Backup snapshots taken at schema 17 are refused by the schema-18 restore script; follow the offline upgrade in the [restore guide](restore.md) and take a new snapshot after migrating.
 - New collectors default to `rules` summaries. Existing `local` configurations are unchanged, but a `rules` configuration cannot be read by older binaries.

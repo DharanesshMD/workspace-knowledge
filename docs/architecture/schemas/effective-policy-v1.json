@@ -42,7 +42,7 @@
       "type": "boolean"
     },
     "features": {
-      "description": "Server capabilities a collector may rely on. `card_provenance`: accepts `provenance` on card submissions and lets a reviewer publish an `assistant_written` partial card.",
+      "description": "Server capabilities a collector may rely on. `card_provenance`: accepts `provenance` on card submissions and lets a reviewer publish an `assistant_written` partial card. `publish_on_submit`: the operator enabled it for this product, so an `assistant_written` card submitted with `publish_on_submit: true` by its author is published at once.",
       "items": {
         "type": "string"
       },

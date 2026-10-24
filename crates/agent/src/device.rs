@@ -379,6 +379,10 @@ pub struct ConnectArgs {
     pub yes: bool,
     #[arg(long)]
     pub no_browser: bool,
+    /// Do not turn on publish-on-submit for this new collector. By default it is on (it still
+    /// needs the server operator to enable it); `auto-publish disable` turns it off later.
+    #[arg(long)]
+    pub no_auto_publish: bool,
     /// Explicit synthetic loopback token fixture; unavailable for HTTPS deployments.
     #[arg(long)]
     pub test_token: bool,
@@ -463,6 +467,23 @@ fn install_ca(dir: &std::path::Path, pem: Option<&[u8]>) -> Result<(), String> {
     f.as_file().sync_all().map_err(|_| "state sync failed")?;
     f.persist(path).map_err(|_| "state commit failed")?;
     Ok(())
+}
+/// The files that mark a NEW collector as configured, written last. Publish-on-submit is on by
+/// default for a new collector unless the developer passed `--no-auto-publish`; the choice is written
+/// before `agent.json`, so a failure leaves the directory unconfigured and connect can be retried.
+fn write_new_state(
+    dir: &std::path::Path,
+    c: &state::Config,
+    b: &wk_scope::enrollment::Binding,
+    remote: &Remote,
+    no_auto_publish: bool,
+) -> Result<Value, String> {
+    state::save(&dir.join("activity-paused"), &json!({"paused":true}))?;
+    let auto_publish = crate::auto_publish::initial(dir, c, b, no_auto_publish)?;
+    state::save(&dir.join("agent.json"), c)?;
+    save_receipt(c, b)?;
+    state::save(&dir.join("device-controls.json"), remote)?;
+    Ok(auto_publish)
 }
 pub async fn connect(dir: &std::path::Path, args: ConnectArgs) -> Result<Value, String> {
     let result = connect_with_ca(dir, args).await;
@@ -568,12 +589,9 @@ async fn connect_with_ca(dir: &std::path::Path, args: ConnectArgs) -> Result<Val
         .set_secret(seed.as_slice())
         .map_err(|_| "native device key storage failed")?;
     persist_auth(dir, &credential)?;
-    state::save(&dir.join("activity-paused"), &json!({"paused":true}))?;
-    state::save(&dir.join("agent.json"), &c)?;
-    save_receipt(&c, &b)?;
-    state::save(&dir.join("device-controls.json"), &remote)?;
+    let auto_publish = write_new_state(dir, &c, &b, &remote, args.no_auto_publish)?;
     Ok(
-        json!({"connected":true,"device_id":c.device_id,"owner_sync":false,"activity_permission":false,"capture_coverage":"unknown","automatic_publication":false,"next":"Install and verify hooks locally; enable sharing only after reviewing local and hosted settings."}),
+        json!({"connected":true,"device_id":c.device_id,"owner_sync":false,"activity_permission":false,"capture_coverage":"unknown","automatic_publication":auto_publish["enabled"],"auto_publish":auto_publish,"next":"Install and verify hooks locally; enable sharing only after reviewing local and hosted settings."}),
     )
 }
 pub async fn run(dir: &std::path::Path, action: Action) -> Result<Value, String> {
@@ -706,6 +724,7 @@ mod tests {
             yes: true,
             no_browser: true,
             test_token: false,
+            no_auto_publish: false,
             ca_file: None,
         };
         let e = connect(&fresh, args(Some(state::Summarizer::Local), None))
@@ -723,6 +742,76 @@ mod tests {
         .unwrap_err();
         assert!(e.contains("cannot be combined"), "{e}");
         assert!(!fresh.join("agent.json").exists());
+    }
+    fn new_collector_dir(
+        dir: &tempfile::TempDir,
+        c: &state::Config,
+    ) -> (std::path::PathBuf, state::Config) {
+        let fresh = dir.path().join("new-collector");
+        std::fs::create_dir(&fresh).unwrap();
+        let mut c = c.clone();
+        c.device = Some(Connection {
+            state_dir: fresh.clone(),
+        });
+        (fresh, c)
+    }
+    #[test]
+    fn a_new_collector_gets_publish_on_submit_on_unless_opted_out() {
+        let remote = Remote {
+            revision: 1,
+            settings: DeviceSettings::default(),
+        };
+        let (dir, c, b) = fixture();
+        let (fresh, c_on) = new_collector_dir(&dir, &c);
+        let out = write_new_state(&fresh, &c_on, &b, &remote, false).unwrap();
+        assert_eq!(out["enabled"], true);
+        assert_eq!(out["meaning"], crate::auto_publish::MEANING);
+        assert!(out["turn_off"]
+            .as_str()
+            .unwrap()
+            .ends_with(" auto-publish disable"));
+        assert!(fresh.join("agent.json").exists() && fresh.join("device-receipt.json").exists());
+        assert!(crate::auto_publish::enabled(&fresh, &c_on, &b));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(fresh.join("auto-publish.json"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        let (dir, c, b) = fixture();
+        let (fresh, c_off) = new_collector_dir(&dir, &c);
+        let out = write_new_state(&fresh, &c_off, &b, &remote, true).unwrap();
+        assert_eq!(out["enabled"], false);
+        assert!(out["how"]
+            .as_str()
+            .unwrap()
+            .contains("auto-publish enable --yes"));
+        assert!(fresh.join("agent.json").exists());
+        assert!(!fresh.join("auto-publish.json").exists());
+        assert!(!crate::auto_publish::enabled(&fresh, &c_off, &b));
+    }
+    #[test]
+    fn connect_writes_its_state_through_the_one_helper_with_the_flag() {
+        let code = include_str!("device.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(code.contains("= write_new_state(dir, &c, &b, &remote, args.no_auto_publish)?"));
+        assert_eq!(
+            code.matches("write_new_state(").count(),
+            2,
+            "definition and one call"
+        );
+        assert_eq!(
+            code.matches("state::save(&dir.join(\"agent.json\")")
+                .count(),
+            1,
+            "only the helper marks the collector configured"
+        );
     }
     #[test]
     fn status_names_the_server_trust_in_use() {
@@ -753,6 +842,7 @@ mod tests {
             yes: true,
             no_browser: true,
             test_token: false,
+            no_auto_publish: false,
             ca_file,
         };
         let write = |name: &str, bytes: &[u8]| {

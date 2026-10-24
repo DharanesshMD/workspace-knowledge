@@ -86,6 +86,7 @@ Configure secrets through your deployment secret manager. The required variables
 | `WK_DATABASE_URL` | Runtime connection using the restricted `wk_app` role, never `wk_owner` |
 | `WK_OIDC_ISSUER`, `WK_OIDC_AUDIENCE`, `WK_OIDC_JWKS_URL` | Fixed upstream HTTPS issuer, API audience and verification keys |
 | `WK_OIDC_CA_FILE` | Optional PEM bundle for an identity provider behind a private CA; replaces public roots for provider requests only. Collectors take the bundle with `device connect --ca-file`. See [Keycloak setup](oidc-keycloak.md) |
+| `WK_AUTO_PUBLISH_PRODUCTS` | Optional. Unset or empty (the default): every product lets a developer's collector publish their own assistant-written cards without a reviewer, if that collector has it on. `none` turns it off server-wide; a comma-separated list of product IDs enables only those. Any other value stops startup. See [publishing without review](../adapters/setup.md#publishing-without-review-on-by-default-for-new-setups). |
 | `WK_MCP_RESOURCE`, `WK_MCP_CLIENT_ID` | Optional, for remote MCP and `wk-mcp login`: the server's public HTTPS origin with no trailing slash (it must equal `WK_OIDC_AUDIENCE`) and the public sign-in client. See the [Keycloak quick start](quick-start-keycloak.md) and [remote MCP](../architecture/remote-mcp.md) |
 | `WK_BROWSER_CLIENT_ID` | Registered portal authorization-code client |
 | `WK_BROWSER_CLIENT_SECRET` | Optional secret for a confidential browser client; omit for a public client |

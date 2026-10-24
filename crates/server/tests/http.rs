@@ -131,7 +131,11 @@ async fn policy_advertises_card_provenance() {
     use http_body_util::BodyExt;
     let url = std::env::var("WK_TEST_DATABASE_URL").unwrap();
     assert!(url.ends_with("/wk_test"));
-    let k = wk_knowledge::Knowledge::connect(&url).await.unwrap();
+    let k = wk_knowledge::Knowledge::connect(&url)
+        .await
+        .unwrap()
+        .with_auto_publish_products(wk_knowledge::AutoPublish::Off)
+        .unwrap();
     let actor = wk_knowledge::Actor {
         org: uuid::Uuid::new_v4().to_string(),
         user: "owner".into(),

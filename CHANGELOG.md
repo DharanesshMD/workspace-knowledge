@@ -6,6 +6,7 @@
 
 Changes since `v0.1.0-alpha.3`.
 
+- Publish without review, on by default for new setups: a developer's own assistant-written cards (from `wk-agent draft`) are published at once after screening instead of waiting for a reviewer. The server enables every product unless `WK_AUTO_PUBLISH_PRODUCTS=none` (or a list of product IDs narrows it); new collectors (`device connect`, `init`) turn it on unless `--no-auto-publish`; collectors set up earlier stay off until `wk-agent auto-publish enable --yes`. No schema change, recorded in the audit log as `publish_on_submit`, withdrawable. **Behavior change for the alpha.3 default of review-before-publish.** Rule drafts, hook captures, imports, owner sync and `knowledge.record` are never published this way. The portal's source line for assistant cards no longer says they were reviewed.
 - Dependencies: `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.11 (fixes for RUSTSEC-2026-0382 and RUSTSEC-2026-0381, published after the previous audit); `cargo audit` now reports zero vulnerabilities and five informational advisories (see [SECURITY](SECURITY.md)).
 
 - No local model is required: rules-mode drafts are marked partial and `[auto-drafted]`, quote bounded conversation text, are screened, and remain private until reviewed. An optional local model remains available. See [setup without a local model](docs/adapters/setup.md#set-up-without-a-local-model).

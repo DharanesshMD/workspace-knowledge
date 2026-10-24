@@ -229,6 +229,18 @@ pub(crate) async fn post_draft(
     v: &Value,
     owner_only: bool,
 ) -> Result<Value, String> {
+    post_draft_as(dir, c, b, t, v, owner_only, false).await
+}
+/// `publish` adds the request to publish on submit; only the assistant `draft` flow sets it.
+async fn post_draft_as(
+    dir: &Path,
+    c: &state::Config,
+    b: &wk_scope::enrollment::Binding,
+    t: &str,
+    v: &Value,
+    owner_only: bool,
+    publish: bool,
+) -> Result<Value, String> {
     if owner_only {
         let revision = v["card"]["policy_revision"]
             .as_u64()
@@ -238,18 +250,21 @@ pub(crate) async fn post_draft(
         }
         return crate::personal_sync::send(c, &b.product, t, &v["card"]).await;
     }
-    network::post(
-        c,
-        t,
-        "/v1/cards",
-        &json!({"product":b.product,"card":v["card"]}),
-    )
-    .await
+    let mut body = json!({"product":b.product,"card":v["card"]});
+    if publish {
+        body["publish_on_submit"] = json!(true);
+    }
+    network::post(c, t, "/v1/cards", &body).await
 }
-async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String> {
+/// A capture gap blocks every delivery until the developer resets into a clean session.
+pub(crate) fn check_gap(dir: &Path) -> Result<(), String> {
     if dir.join("capture-gap.json").exists() {
         return Err("capture gap requires clean-session reset".into());
     }
+    Ok(())
+}
+async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String> {
+    check_gap(dir)?;
     if !id.starts_with("draft:") || id.len() != 70 {
         return Err("invalid draft ID".into());
     }
@@ -258,22 +273,43 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
     let t = state::token(dir, "server-token")?;
     let p = network::policy(&c, &b, &t).await?;
     let mut s = state::store(dir)?;
+    deliver_loaded(dir, &c, &b, &t, &p, &mut s, id, owner_only, false).await
+}
+/// Deliver one stored draft with the approval, token and policy already loaded.
+/// `publish` (the assistant `draft` flow with local auto-publish on) asks the server to publish it;
+/// it is refused for every other kind of draft, and the draft is consumed only if the server says
+/// it published, so anything else stays for the normal review.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn deliver_loaded(
+    dir: &Path,
+    c: &state::Config,
+    b: &wk_scope::enrollment::Binding,
+    t: &str,
+    p: &Value,
+    s: &mut wk_local::LocalStore,
+    id: &str,
+    owner_only: bool,
+    publish: bool,
+) -> Result<Value, String> {
     let bytes = s
         .read_record(id, daemon::now()?)?
         .ok_or("draft expired or unavailable")?;
     let mut v: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid private draft")?;
+    if publish && (owner_only || v.get("assistant").is_none() || v.get("memory").is_some()) {
+        return Err("only an assistant-written card is published on submit".into());
+    }
     if owner_only {
         crate::personal_sync::payload(&v["card"])?;
     }
     if v.get("memory").is_some() {
-        crate::memory_import::check_submit(&mut s, id, &v, &b.policy_hash, &p["policy_revision"])?;
-        let response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
-        return crate::memory_import::finish_submit(dir, &mut s, id, &v, response, owner_only);
+        crate::memory_import::check_submit(s, id, &v, &b.policy_hash, &p["policy_revision"])?;
+        let response = post_draft(dir, c, b, t, &v, owner_only).await?;
+        return crate::memory_import::finish_submit(dir, s, id, &v, response, owner_only);
     }
     if v.get("assistant").is_some() {
         use crate::assistant_draft::Readiness;
         match crate::assistant_draft::settle_assistant(
-            &mut s,
+            s,
             id,
             &v,
             &b.policy_hash,
@@ -288,13 +324,21 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
             }
             Readiness::Ready => {}
         }
-        let note = crate::assistant_draft::adapt_to_server(&mut v, &p);
-        let mut response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
+        let note = crate::assistant_draft::adapt_to_server(&mut v, p);
+        let mut response = post_draft_as(dir, c, b, t, &v, owner_only, publish).await?;
         if let (Some(note), Some(obj)) = (note, response.as_object_mut()) {
             obj.insert("note".into(), json!(note));
         }
-        if !owner_only {
-            s.ack(id)?;
+        // A publish request is consumed only once the server says it published; otherwise the
+        // draft stays for the usual review (the server dedupes a later submit by idempotency key).
+        if !owner_only && (!publish || response["card"]["published"] == true) {
+            match s.ack(id) {
+                Err(e) if !publish => return Err(e),
+                Err(_) => {
+                    response["note"] = json!("published; the private draft will expire on its own");
+                }
+                Ok(()) => {}
+            }
         }
         return Ok(response);
     }
@@ -303,7 +347,7 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
         if wk_summarize::sensitive(&v["card"].to_string()) {
             return Err("sensitive_summary".into());
         }
-        let result = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
+        let result = post_draft(dir, c, b, t, &v, owner_only).await?;
         if !owner_only {
             s.ack(id)?;
         }
@@ -313,10 +357,10 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
         let key = v["source_id"].as_str().ok_or("missing_source")?;
         crate::cursor_capture::reconcile_one(dir, key).await?;
         let source =
-            crate::cursor_capture::read(&s, key, daemon::now()?)?.ok_or("source_expired")?;
-        let latest = state::binding(&c)?;
+            crate::cursor_capture::read(s, key, daemon::now()?)?.ok_or("source_expired")?;
+        let latest = state::binding(c)?;
         let consent = crate::cursor_source::load(dir)?;
-        let policy = network::policy(&c, &latest, &t).await?;
+        let policy = network::policy(c, &latest, t).await?;
         if consent.policy_hash != latest.policy_hash
             || !native_matches(
                 &v,
@@ -333,7 +377,7 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
         if wk_summarize::sensitive(&v["card"].to_string()) {
             return Err("sensitive_summary".into());
         }
-        let response = post_draft(dir, &c, &latest, &t, &v, owner_only).await?;
+        let response = post_draft(dir, c, &latest, t, &v, owner_only).await?;
         if !owner_only {
             s.ack(id)?;
         }
@@ -370,7 +414,7 @@ async fn deliver(dir: &Path, id: &str, owner_only: bool) -> Result<Value, String
     if wk_summarize::sensitive(&v["card"].to_string()) {
         return Err("draft requires sensitive-content review".into());
     }
-    let response = post_draft(dir, &c, &b, &t, &v, owner_only).await?;
+    let response = post_draft(dir, c, b, t, &v, owner_only).await?;
     if !owner_only {
         s.ack(id)?;
     }

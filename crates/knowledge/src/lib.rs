@@ -51,6 +51,17 @@ pub struct Card {
 pub struct Knowledge {
     pool: PgPool,
     device_guard: Option<devices::DeviceGuard>,
+    /// Where operators let an author's `assistant_written` cards publish on submit.
+    auto_publish: AutoPublish,
+}
+/// Deployment setting for publish on submit (`WK_AUTO_PUBLISH_PRODUCTS`). On for every
+/// product unless the operator turns it off or narrows it; the collector still has to ask.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum AutoPublish {
+    #[default]
+    All,
+    Off,
+    Only(Vec<String>),
 }
 fn validate_shared_body(body: &serde_json::Value) -> Result<(), Error> {
     if wk_summarize::sensitive(&body.to_string()) {
@@ -120,6 +131,24 @@ impl Knowledge {
         Self {
             pool,
             device_guard: None,
+            auto_publish: Default::default(),
+        }
+    }
+    /// Deployment configuration only (`WK_AUTO_PUBLISH_PRODUCTS`); no API can change it.
+    pub fn with_auto_publish_products(mut self, setting: AutoPublish) -> Result<Self, Error> {
+        if let AutoPublish::Only(products) = &setting {
+            if products.iter().any(|p| !wk_contracts::valid_id(p)) {
+                return Err(Error::Invalid);
+            }
+        }
+        self.auto_publish = setting;
+        Ok(self)
+    }
+    pub(crate) fn auto_publish_enabled(&self, product: &str) -> bool {
+        match &self.auto_publish {
+            AutoPublish::All => true,
+            AutoPublish::Off => false,
+            AutoPublish::Only(products) => products.iter().any(|p| p == product),
         }
     }
     pub async fn connect(url: &str) -> Result<Self, Error> {
@@ -132,6 +161,7 @@ impl Knowledge {
         let result = Self {
             pool,
             device_guard: None,
+            auto_publish: Default::default(),
         };
         result.migrate().await?;
         Ok(result)
@@ -143,6 +173,7 @@ impl Knowledge {
     pub async fn open_with_config(url: &str, config: PoolConfig) -> Result<Self, Error> {
         Ok(Self {
             device_guard: None,
+            auto_publish: Default::default(),
             pool: config.connect(url).await?,
         })
     }
@@ -302,23 +333,58 @@ impl Knowledge {
         sqlx::query("INSERT INTO card_revisions(org,product,card_id,revision,body,changed_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING").bind(&actor.org).bind(product).bind(result.id).bind(result.revision).bind(&value).bind(&actor.user).execute(&mut **tx).await.map_err(db)?;
         Ok(result)
     }
+    /// Submit, then (only when the operator enabled the product and the card is
+    /// `assistant_written`) publish it as its author in the same transaction. Anything else
+    /// is stored as an ordinary review copy; the returned card's `published` says which.
+    pub async fn submit_publishing(
+        &self,
+        actor: &Actor,
+        product: &str,
+        body: CardSubmission,
+        publish_on_submit: bool,
+    ) -> Result<Card, Error> {
+        self.device_scope(product, &body.service_ids)?;
+        let publish = publish_on_submit
+            && self.auto_publish_enabled(product)
+            && body.provenance == Some(wk_contracts::Provenance::AssistantWritten);
+        let mut tx = self.code_tx(actor, product).await?;
+        let mut result = Self::submit_in_transaction(&mut tx, actor, product, body).await?;
+        if publish && !result.published {
+            Self::publish_in_transaction(&mut tx, actor, product, result.id, true).await?;
+            result.published = true;
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(result)
+    }
     pub async fn publish(&self, actor: &Actor, product: &str, id: uuid::Uuid) -> Result<(), Error> {
         let mut tx = self.code_tx(actor, product).await?;
-        let row = sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$4 WHERE c.id=$1 AND c.org=$2 AND c.product=$3 AND NOT c.withdrawn AND (c.body->>'capture_completeness'='complete' OR (c.body->>'capture_completeness'='partial' AND c.body->>'provenance'='assistant_written')) AND m.can_review AND m.services @> c.services AND m.policy_revision=(c.body->>'policy_revision')::bigint FOR UPDATE OF c FOR SHARE OF m")
-            .bind(id).bind(&actor.org).bind(product).bind(&actor.user)
-            .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(Error::Denied)?;
+        Self::publish_in_transaction(&mut tx, actor, product, id, false).await?;
+        tx.commit().await.map_err(db)
+    }
+    /// `as_author` is the publish-on-submit path: the author, not a reviewer, publishes an
+    /// `assistant_written` card, with every other guard unchanged.
+    async fn publish_in_transaction(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        actor: &Actor,
+        product: &str,
+        id: uuid::Uuid,
+        as_author: bool,
+    ) -> Result<(), Error> {
+        let row = sqlx::query("SELECT c.id,c.body,c.revision,c.published FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$4 WHERE c.id=$1 AND c.org=$2 AND c.product=$3 AND NOT c.withdrawn AND (c.body->>'capture_completeness'='complete' OR (c.body->>'capture_completeness'='partial' AND c.body->>'provenance'='assistant_written')) AND CASE WHEN $5 THEN c.author=$4 AND c.body->>'provenance'='assistant_written' ELSE m.can_review END AND m.services @> c.services AND m.policy_revision=(c.body->>'policy_revision')::bigint FOR UPDATE OF c FOR SHARE OF m")
+            .bind(id).bind(&actor.org).bind(product).bind(&actor.user).bind(as_author)
+            .fetch_optional(&mut **tx).await.map_err(db)?.ok_or(Error::Denied)?;
         let body: serde_json::Value = row.try_get("body").map_err(db)?;
         validate_shared_body(&body)?;
         let mut card = decode(row)?;
         sqlx::query("UPDATE cards SET published=TRUE WHERE id=$1 AND revision=$2")
             .bind(id)
             .bind(card.revision)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(db)?;
         card.published = true;
         Self::write_graph(
-            &mut tx,
+            tx,
             actor,
             product,
             id,
@@ -337,7 +403,9 @@ impl Knowledge {
             },
         )
         .await?;
-        tx.commit().await.map_err(db)?;
+        if as_author {
+            sqlx::query("INSERT INTO audit_events(org,product,user_id,action,entity_id) VALUES($1,$2,$3,'publish_on_submit',$4)").bind(&actor.org).bind(product).bind(&actor.user).bind(id).execute(&mut **tx).await.map_err(db)?;
+        }
         Ok(())
     }
     pub async fn get(&self, actor: &Actor, product: &str, id: uuid::Uuid) -> Result<Card, Error> {

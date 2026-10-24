@@ -122,6 +122,16 @@ struct Search {
 struct Submission {
     product: String,
     card: wk_contracts::CardSubmission,
+    /// Honored only for an `assistant_written` card in a product the operator enabled;
+    /// otherwise the card is stored unpublished and the response says so.
+    #[serde(default)]
+    publish_on_submit: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Correction {
+    product: String,
+    card: wk_contracts::CardSubmission,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -164,7 +174,12 @@ async fn submit(
     }
     let card = api
         .knowledge
-        .submit(&who, &request.product, request.card)
+        .submit_publishing(
+            &who,
+            &request.product,
+            request.card,
+            request.publish_on_submit,
+        )
         .await?;
     Ok(Json(json!({"card":card})))
 }
@@ -249,7 +264,7 @@ async fn correct(
     State(api): State<Api>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    body: Result<Json<Submission>, JsonRejection>,
+    body: Result<Json<Correction>, JsonRejection>,
 ) -> Result<Json<Value>, Failure> {
     let a = actor(&api, &headers).await?;
     let r = parse(body)?;

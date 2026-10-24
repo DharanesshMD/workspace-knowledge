@@ -7,14 +7,18 @@ pub struct Policy {
     pub can_review: bool,
     pub policy_revision: i64,
     pub restrictions: admin::ProductPolicy,
-    /// Server capabilities a collector may rely on. `card_provenance`: accepts `provenance` on card submissions and lets a reviewer publish an `assistant_written` partial card.
+    /// Server capabilities a collector may rely on. `card_provenance`: accepts `provenance` on card submissions and lets a reviewer publish an `assistant_written` partial card. `publish_on_submit`: the operator enabled it for this product, so an `assistant_written` card submitted with `publish_on_submit: true` by its author is published at once.
     pub features: Vec<String>,
 }
-/// Capabilities every policy response advertises to collectors.
-pub(crate) fn policy_features() -> Vec<String> {
-    vec!["card_provenance".into()]
-}
 impl Knowledge {
+    /// Capabilities a policy response advertises to collectors for one product.
+    pub(crate) fn policy_features(&self, product: &str) -> Vec<String> {
+        let mut features = vec!["card_provenance".into()];
+        if self.auto_publish_enabled(product) {
+            features.push("publish_on_submit".into());
+        }
+        features
+    }
     pub async fn policy(&self, a: &Actor, product: &str) -> Result<Policy, Error> {
         self.device_scope(product, &[])?;
         let mut tx = self.actor_tx(a).await?;
@@ -23,7 +27,7 @@ impl Knowledge {
         Ok(Policy {
             product: product.into(),
             restrictions,
-            features: policy_features(),
+            features: self.policy_features(product),
             services: if let Some(g) = &self.device_guard {
                 g.services.clone()
             } else {

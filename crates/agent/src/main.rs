@@ -1,5 +1,6 @@
 mod assistant_draft;
 mod assistant_prompt;
+mod auto_publish;
 mod chat;
 mod compliance;
 mod cursor_capture;
@@ -66,6 +67,10 @@ enum Command {
         port: u16,
         #[arg(long)]
         yes: bool,
+        /// Do not turn on publish-on-submit for this new collector (it is on by default and still
+        /// needs the server operator to enable it).
+        #[arg(long)]
+        no_auto_publish: bool,
     },
     Serve,
     /// Connect a hosted collector through upstream sign-in and a bound installation key.
@@ -115,6 +120,13 @@ enum Command {
     },
     Doctor,
     Auth,
+    /// Publish your assistant-written cards on `draft`, without the submit review step (off by default).
+    AutoPublish {
+        /// enable | disable | status
+        action: String,
+        #[arg(long)]
+        yes: bool,
+    },
     /// Pause, resume or show sharing of your live activity ("who is working on what").
     Activity {
         /// pause | resume | status
@@ -281,6 +293,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
             model,
             port,
             yes,
+            no_auto_publish,
         } => {
             if !yes {
                 return Err(
@@ -341,9 +354,10 @@ async fn run(cli: Cli) -> Result<Value, String> {
             state::entry(&state, "server-token")?
                 .set_secret(token.as_bytes())
                 .map_err(|_| "native key storage failed")?;
+            let auto_publish = auto_publish::initial(&state, &c, &b, no_auto_publish)?;
             state::save(&state.join("agent.json"), &c)?;
             Ok(
-                json!({"enrolled":true,"capture_enabled":false,"next":"wk-agent serve","automatic_publication":false}),
+                json!({"enrolled":true,"capture_enabled":false,"next":"wk-agent serve","automatic_publication":auto_publish["enabled"],"auto_publish":auto_publish}),
             )
         }
         Command::CursorEnroll { yes } => {
@@ -448,6 +462,7 @@ async fn run(cli: Cli) -> Result<Value, String> {
             Ok(json!({"credential_updated":true}))
         }
         Command::Activity { action } => team::activity(&state, &action).await,
+        Command::AutoPublish { action, yes } => auto_publish::command(&state, &action, yes).await,
         Command::RepositoryEnroll {
             repository_id,
             git_dir,
@@ -504,8 +519,11 @@ async fn run(cli: Cli) -> Result<Value, String> {
             let daemon = daemon::health(&state)
                 .await
                 .unwrap_or(json!({"available":false}));
+            let auto_publish = b
+                .as_ref()
+                .is_ok_and(|b| auto_publish::enabled(&state, &c, b));
             Ok(
-                json!({"native_clients":native_capture::status(&state).unwrap_or(json!({"unavailable":true})),"native_cursor":cursor_capture::status(&state).unwrap_or(json!({"unavailable":true})),"code_change_protection":protection::status(&state),"summarizer":summarizer_status(&c),"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","publication":"review_required"}),
+                json!({"native_clients":native_capture::status(&state).unwrap_or(json!({"unavailable":true})),"native_cursor":cursor_capture::status(&state).unwrap_or(json!({"unavailable":true})),"code_change_protection":protection::status(&state),"summarizer":summarizer_status(&c),"scope_approved":b.is_ok(),"native_key_available":secure,"membership_current":member,"collector":daemon,"clients":wk_adapters::capabilities(),"mcp_handshake":"not_checked","auto_publish":auto_publish,"publication":if auto_publish {"assistant_cards_without_review"} else {"review_required"}}),
             )
         }
         Command::Config { client } => wk_adapters::config(
@@ -674,6 +692,51 @@ mod cli_tests {
     }
 
     #[test]
+    fn new_collectors_can_opt_out_of_auto_publish_at_connect_and_init() {
+        let connect = |extra: &[&str]| {
+            let mut args = vec![
+                "wk-agent",
+                "--state-dir",
+                "/s",
+                "device",
+                "connect",
+                "--binding",
+                "/b",
+                "--service",
+                "backend",
+                "--server",
+                "https://team.example",
+            ];
+            args.extend_from_slice(extra);
+            Cli::try_parse_from(args).unwrap().command
+        };
+        assert!(matches!(connect(&[]), Command::Device {
+            action: crate::device::Action::Connect(a) } if !a.no_auto_publish));
+        assert!(matches!(connect(&["--no-auto-publish"]), Command::Device {
+            action: crate::device::Action::Connect(a) } if a.no_auto_publish));
+        let init = |extra: &[&str]| {
+            let mut args = vec![
+                "wk-agent",
+                "--state-dir",
+                "/s",
+                "init",
+                "--binding",
+                "/b",
+                "--service",
+                "backend",
+                "--server",
+                "http://127.0.0.1:4318",
+                "--yes",
+            ];
+            args.extend_from_slice(extra);
+            Cli::try_parse_from(args).unwrap().command
+        };
+        assert!(matches!(init(&[]), Command::Init { no_auto_publish, .. } if !no_auto_publish));
+        assert!(matches!(init(&["--no-auto-publish"]),
+            Command::Init { no_auto_publish, .. } if no_auto_publish));
+    }
+
+    #[test]
     fn doctor_names_the_summarizer() {
         let mut c: crate::state::Config = serde_json::from_str(r#"{"root":"/w","binding_file":"/b.json","service":"backend","server":"http://127.0.0.1:4318","model":"m","inference":"http://127.0.0.1:11434/v1/chat/completions","port":4319,"account":"workspace","device_id":"d"}"#).unwrap();
         assert_eq!(super::summarizer_status(&c), "local");
@@ -720,6 +783,20 @@ mod cli_tests {
         assert!(
             matches!(parse(&["--client", "codex"]), Command::Draft { client } if client == "codex")
         );
+    }
+
+    #[test]
+    fn auto_publish_command_takes_an_action_and_an_optional_yes() {
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["wk-agent", "--state-dir", "/private/wk", "auto-publish"];
+            args.extend_from_slice(extra);
+            Cli::try_parse_from(args)
+        };
+        assert!(matches!(parse(&["enable", "--yes"]).unwrap().command,
+            Command::AutoPublish { action, yes } if action == "enable" && yes));
+        assert!(matches!(parse(&["status"]).unwrap().command,
+            Command::AutoPublish { action, yes } if action == "status" && !yes));
+        assert!(parse(&[]).is_err());
     }
 
     #[test]
