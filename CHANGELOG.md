@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased (changes since `v0.1.0-alpha.3`)
+## Unreleased
+
+## v0.1.0-alpha.4 — source-only prerelease (draft; not tagged or published yet)
+
+Changes since `v0.1.0-alpha.3`.
+
+- Dependencies: `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.11 (fixes for RUSTSEC-2026-0382 and RUSTSEC-2026-0381, published after the previous audit); `cargo audit` now reports zero vulnerabilities and five informational advisories (see [SECURITY](SECURITY.md)).
 
 - No local model is required: rules-mode drafts are marked partial and `[auto-drafted]`, quote bounded conversation text, are screened, and remain private until reviewed. An optional local model remains available. See [setup without a local model](docs/adapters/setup.md#set-up-without-a-local-model).
 - `wk-agent prompt --client claude-code|copilot|codex` creates `/wk-summarize` instructions for assistant-written cards; `wk-agent draft` validates and stores them as private drafts for 24 hours. Nothing reaches the team server before review, and a reviewer can then publish them: cards carry a new optional `provenance` (`assistant_written`), the policy advertises `card_provenance`, and `knowledge.record` refuses the field. Upgrade the server before collectors; an older server receives a plain partial draft. Rule drafts, hook partials, imports and truncated cards remain unpublishable. See [Summarize with your assistant](docs/adapters/setup.md#summarize-with-your-assistant-wk-summarize).

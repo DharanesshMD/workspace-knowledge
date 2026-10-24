@@ -1,6 +1,6 @@
 # v0.1.0-alpha.4: draft release notes and owner checklist
 
-**Status: draft. No tag or GitHub release exists for alpha.4.** The latest published release is the source-only `v0.1.0-alpha.3` prerelease. Cut alpha.4 from the final commit only after the checklist below; the notes must then be updated with that commit's SHA and the VS Code result. Nothing here makes the project production-supported: see the [production readiness ledger](production-readiness.md).
+**Status: draft. No tag or GitHub release exists for alpha.4.** The latest published release is the source-only `v0.1.0-alpha.3` prerelease. Cut alpha.4 from the final commit only after the checklist below; the notes must then be updated with that commit's SHA. Nothing here makes the project production-supported: see the [production readiness ledger](production-readiness.md).
 
 ## Draft release notes
 
@@ -15,7 +15,7 @@ A self-hostable alpha for small teams: a Linux Docker server (PostgreSQL, an OID
 - **Better default summaries.** The assistant-written flow (`/wk-summarize`) is the recommended path and a reviewer can publish such cards. Rules-mode drafts are the zero-setup fallback and now avoid greetings and pasted traces as titles.
 - **Faster search.** Schema migration 18 stores the card search vector and adds a missing graph index. Five-developer search p95 fell from about 0.9 s to 34 ms in a local synthetic test ([measurements and limits](../reviews/2026-10-21-capacity-and-search.md)).
 - **One capture support table.** [`docs/adapters/support.md`](../adapters/support.md) lists tested client versions, what is captured and what is held. Unsupported versions are refused with a message that points to it.
-- **Fixes.** `knowledge.record` no longer shows Claude Code an unusable tool schema; contact-detail screening no longer flags UUIDs and dates as phone numbers.
+- **Fixes.** `knowledge.record` no longer shows Claude Code an unusable tool schema; contact-detail screening no longer flags UUIDs and dates as phone numbers; `rustls-webpki` and `webpki-roots` are updated for two certificate-trust advisories (RUSTSEC-2026-0382 and RUSTSEC-2026-0381).
 
 ### Upgrading from alpha.3
 
@@ -27,7 +27,7 @@ A self-hostable alpha for small teams: a Linux Docker server (PostgreSQL, an OID
 
 - Capture is partial and pinned to specific client versions; Codex and Antigravity are experimental and Windows is unsupported ([table](../adapters/support.md)).
 - No hosted or public-CA identity provider, real-team pilot, signed macOS binaries or independent security review yet. Capacity figures are from a local Docker VM with synthetic text and are not a forecast.
-- GitHub Actions had not run on the final commit when these notes were written (account billing block); local verification results are in the readiness ledger.
+- GitHub Actions had not run on the final commit when these notes were written (account billing block, still in effect on 2026-10-24); local verification results are in the [readiness ledger](production-readiness.md): the full local suite, web tests, `npm audit` and the 85-check Keycloak run passed on 2026-10-24, and `cargo audit` reports no vulnerabilities (five informational advisories). The Gitleaks history scan found no leaks on the pushed branches and tags after two exact-line allowlist entries for false positives were added to `.gitleaks.toml`.
 
 ## Owner checklist before publishing
 
@@ -36,7 +36,7 @@ Agents prepare; only the owner does these.
 1. **Billing and CI.** Resolve the GitHub billing block (or make the repository public, which gives free minutes), then run both workflows on the final commit and the weekly client-release check once by hand.
 2. **Security contact.** `SECURITY.md` currently says private vulnerability reporting is not enabled and names no channel, which is accurate while the repository is private. After going public, enable *Settings → Code security → Private vulnerability reporting*, confirm the "Report a vulnerability" button works, then replace the first paragraph's channel sentences in `SECURITY.md` with: "Report vulnerabilities privately with GitHub's *Report a vulnerability* button on the Security tab." Do not add an email address you do not monitor.
 3. **Git history.** About 94 commits carry a personal email address and earlier reviews noted local path metadata. Decide whether that is acceptable. Rewriting history would invalidate the existing alpha tags.
-4. **Final verification.** On the commit to tag: formatting, strict Clippy, the full Rust test suite against a disposable PostgreSQL with `--include-ignored`, the Python tests, `scripts/keycloak-acceptance.py`, the dependency audit and a secret scan of the published history. Record the SHA in the ledger.
+4. **Final verification.** Done locally on 2026-10-24 (see the ledger); repeat on the exact commit to tag, and let CI run once billing allows: formatting, strict Clippy, the full Rust test suite against a disposable PostgreSQL with `--include-ignored`, the Python tests, `scripts/keycloak-acceptance.py`, the dependency audit and a secret scan of the published history. Record the SHA in the ledger.
 5. **Cut the prerelease** (marked *pre-release*, source only):
 
    ```sh

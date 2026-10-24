@@ -435,7 +435,7 @@ The repository includes implementation and synthetic/local acceptance records. I
 | Knowledge completeness | Undocumented rationale and dependencies remain gaps; source-backed briefs cannot guarantee a safe change |
 | Identity/deployment | Production-provider OIDC/TLS acceptance and real-client remote OAuth certification remain |
 | Native distribution | Owned macOS source installation/Keychain/user-session startup passed; Apple signing/notarization and distributed installer acceptance remain |
-| Security | RSA runtime dependency removed; current local audit has zero vulnerability findings and four informational unmaintained-dependency advisories; six-sample local Qwen privacy corpus passes with deterministic contact holds, but broader privacy qualification and independent production security assessment remain |
+| Security | RSA runtime dependency removed; current local audit has zero vulnerability findings and five informational dependency advisories (four unmaintained crates and a tokio unsoundness notice); six-sample local Qwen privacy corpus passes with deterministic contact holds, but broader privacy qualification and independent production security assessment remain |
 | Capacity | Ten-minute local five-identity soak passed; target-server/team, long-duration capacity and protected-edit workload measurement remain |
 | Optional components | Hybrid retrieval requires explicit pgvector/local model configuration and indexing; representative quality/provider capacity remain unqualified. Advisory assessment needs an approved endpoint; Enterprise capture needs entitlement and live acceptance |
 

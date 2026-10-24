@@ -33,6 +33,24 @@ regexes = [
   '''^\s*\+?\s*const\ SECRET:\ \&str\ =\ "password=SYNTHETIC_SECRET_0123456789abcdefghij";\s*$''',
 ]
 
+[[rules.allowlists]]
+description = "Keycloak database host name in a JDBC URL (the password comes from the environment)"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^deploy/compose/keycloak\.yaml$''']
+regexes = [
+  '''^\s*\+?\s*KC_DB_URL:\ jdbc:postgresql://keycloak\-postgres:5432/keycloak\s*$''',
+]
+
+[[rules.allowlists]]
+description = "Reviewed synthetic idempotency key (a made-up UUID) in the privacy corpus"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^crates/summarize/tests/privacy\.rs$''']
+regexes = [
+  '''^\s*\+?\s*r\#"\{"idempotency_key":"3f2a9c1e\-1234\-5678\-90ab\-cdef01234567"\}"\#,\s*$''',
+]
+
 [[rules]]
 id = "curl-auth-user"
 
