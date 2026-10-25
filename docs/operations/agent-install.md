@@ -50,7 +50,7 @@ verification step. Stop and ask me before opening firewall ports, changing DNS, 
 
 ## Then each developer
 
-Trust `ca.pem` (not needed with a public CA), then follow steps 2 to 5 of the [two-developer test guide](local-docker-test.md) with the real MCP address. Adding a developer later is the same `stack.py up` command with another `--user`; list every existing user again, because `--user` replaces the default pair. `stack.py down` stops the stack and keeps data; `down --volumes` deletes it.
+Trust `ca.pem` (not needed with a public CA), then follow steps 2 to 5 of the [two-developer test guide](local-docker-test.md) with the real MCP address. Claude Desktop uses the `wk-mcp` bridge ([setup](local-docker-test.md#claude-desktop-the-chat-app-local-or-deployed)), which works against any server, including one behind a private CA; its cloud connector needs a public server and a public certificate. Adding a developer later is the same `stack.py up` command with another `--user`; list every existing user again, because `--user` replaces the default pair. `stack.py down` stops the stack and keeps data; `down --volumes` deletes it.
 
 ## Boundaries
 

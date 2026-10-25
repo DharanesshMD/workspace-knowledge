@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 REALM, DB = "wk", "workspace_knowledge"
 DEFAULT_USERS = ["anika:backend,frontend:review", "ravi:backend,frontend"]
-TRUSTED_HOSTS = ["localhost", "127.0.0.1", "www.cursor.com", "anysphere.cursor-mcp", "vscode.dev", "insiders.vscode.dev", "code.visualstudio.com"]
+TRUSTED_HOSTS = ["localhost", "127.0.0.1", "www.cursor.com", "anysphere.cursor-mcp", "vscode.dev", "insiders.vscode.dev", "code.visualstudio.com", "claude.ai", "claude.com"]
 
 
 def run(*args, input=None, check=True, env=None, quiet=False):
@@ -207,7 +207,7 @@ class Stack:
         for u in self.users:
             self.operator("provision", {"issuer": self.issuer, "subject": ids[u["name"]], "org": self.a.org, "user": u["name"],
                                         "product": self.a.product, "services": u["services"], "can_review": u["review"]})
-        say("enabling native MCP sign-in for Claude Code, Cursor and VS Code")
+        say("enabling native MCP sign-in for Claude Code, Cursor, VS Code and Claude connectors")
         hosts = [x for h in TRUSTED_HOSTS for x in ("--trusted-host", h)]
         run(sys.executable, str(ROOT / "deploy/keycloak/enable-remote-mcp-signin.py"), "--keycloak", self.kc_origin, "--audience", self.app_origin,
             "--ca-file", str(self.state / "certs/ca.pem"), *hosts, env=dict(os.environ, KC_ADMIN_PASSWORD=self.secrets["kc_admin"]), quiet=True)

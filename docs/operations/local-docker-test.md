@@ -44,7 +44,7 @@ Quit and reopen Cursor and the browser afterwards. Firefox uses its own store, s
 deploy/stack/make-demo-folders.sh
 ```
 
-This creates `~/wk-demo/anika-claude-code` and `~/wk-demo/ravi-cursor`, two clones of a tiny shop repo (`backend/retry.rs` retries a payment three times). Each has the MCP address configured (`.mcp.json` for Claude Code, `.cursor/mcp.json` for Cursor) and a short project rule that tells the agent to check for teammates' work before editing and to share what it did afterwards.
+This creates `~/wk-demo/anika-claude-code`, `~/wk-demo/anika-claude-desktop` and `~/wk-demo/ravi-cursor`, clones of a tiny shop repo (`backend/retry.rs` retries a payment three times). Each has the MCP address configured (`.mcp.json` for Claude Code, `.cursor/mcp.json` for Cursor) and a short project rule that tells the agent to check for teammates' work before editing and to share what it did afterwards.
 
 ## 4. Developer 1 (Anika) in Claude Code
 
@@ -77,6 +77,44 @@ cursor ~/wk-demo/ravi-cursor
 3. Expected: before editing, the agent calls `knowledge.overlaps` and tells you that **anika** already worked on this, what she decided (key per order, not per attempt) and the constraint she recorded. `knowledge.search` and `knowledge.context` return the card but not the author. The name comes from `knowledge.overlaps`, which is why the project rule asks for it.
 
 To confirm who is signed in, open `https://wk.localhost:8444` and look at the account name. The **Connect** page there shows the same MCP address.
+
+## Claude Desktop (the chat app), local or deployed
+
+Claude Desktop's **Add custom connector** is called from Anthropic's servers, so it cannot reach `wk.localhost` or any server behind a private CA ("Couldn't reach this address"). The `wk-mcp` bridge works everywhere: it runs on your Mac, signs in with your browser and talks to the server from there, so the same setup serves a local stack and a deployed one.
+
+1. Install the bridge (builds `wk-mcp` and puts it in `~/.local/bin`):
+
+   ```sh
+   ./scripts/cargo build --locked --release -p wk-mcp && install -m 755 target/release/wk-mcp ~/.local/bin/wk-mcp
+   ```
+
+2. Sign in once. A browser opens; sign in as `anika` (do this before Ravi's Cursor sign-in, or clear the `sso.localhost` cookies first, as in step 5):
+
+   ```sh
+   wk-mcp login --server https://wk.localhost:8444 --ca-file ~/.local/share/workspace-knowledge/stack/certs/ca.pem
+   ```
+
+   Only a refresh token is stored, in your macOS Keychain, one per server address. That is why the bridge is one developer per Mac user, and why Claude Code and Cursor (which keep their own tokens) are used for the second developer.
+3. Add it to `~/Library/Application Support/Claude/claude_desktop_config.json` under `mcpServers`. The shell wrapper starts the bridge in a project folder, which the bridge needs before it will share anything (`make-demo-folders.sh` creates `~/wk-demo/anika-claude-desktop`). Use absolute paths:
+
+   ```json
+   "workspace-knowledge": {
+     "command": "/bin/sh",
+     "args": ["-c", "cd /Users/YOU/wk-demo/anika-claude-desktop && exec /Users/YOU/.local/bin/wk-mcp"],
+     "env": {
+       "WK_SERVER_URL": "https://wk.localhost:8444",
+       "WK_PRODUCT": "demo",
+       "WK_SERVER_CA_FILE": "/Users/YOU/.local/share/workspace-knowledge/stack/certs/ca.pem"
+     }
+   }
+   ```
+
+4. Quit Claude Desktop completely (Cmd+Q) and reopen it. Reading team knowledge works at once. To **share** from Desktop, approve the folder once: ask "Check workspace.folder and, if it is not approved, request approval", then click **Approve** on the local page that opens. Only your click approves; the agent cannot.
+5. Try it: "Has anyone on the team worked on retry idempotency in the payment code? Use knowledge.overlaps." Or share: "I added an idempotency key per order to backend/retry.rs; share this with the team."
+
+**Against a deployed server** change only the three values: `WK_SERVER_URL` (for example `https://wk.example.com:8444`), the `--server` address in `wk-mcp login`, and `WK_SERVER_CA_FILE` (the server's `ca.pem` if it uses the script's private CA; remove the line and the `--ca-file` flag if it has a public certificate).
+
+**Cloud connector, public servers only.** If the server is reachable from the internet with a certificate from a public CA, Claude Desktop's custom connector can also use `https://wk.example.com:8444/mcp/demo`, and `stack.py up` allows Claude's callback hosts (`claude.ai`, `claude.com`) in Keycloak. This path has not been tested here, and it does not work for the local stack.
 
 ## If something is off
 

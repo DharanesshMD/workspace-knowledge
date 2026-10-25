@@ -1,5 +1,5 @@
 #!/bin/sh
-# Create two clones of a tiny demo repo, one per developer/tool, each wired to the stack's MCP address.
+# Create clones of a tiny demo repo, one per developer/tool (Claude Code, Claude Desktop, Cursor), each wired to the stack's MCP address.
 #   deploy/stack/make-demo-folders.sh [DIR] [MCP_URL]
 # Defaults: ~/wk-demo and https://wk.localhost:8444/mcp/demo. Existing folders are left alone.
 set -eu
@@ -35,7 +35,7 @@ EOF
   git -C "$DIR/origin" init -q && git -C "$DIR/origin" add -A \
     && git -C "$DIR/origin" -c user.name=demo -c user.email=demo@wk.invalid commit -qm "Initial shop demo"
 fi
-for pair in anika-claude-code ravi-cursor; do
+for pair in anika-claude-code anika-claude-desktop ravi-cursor; do
   [ -d "$DIR/$pair" ] || git clone -q "$DIR/origin" "$DIR/$pair"
 done
 printf '{\n  "mcpServers": {\n    "workspace-knowledge": { "type": "http", "url": "%s" }\n  }\n}\n' "$URL" > "$DIR/anika-claude-code/.mcp.json"
@@ -43,4 +43,4 @@ printf '%s\n' "$RULE" > "$DIR/anika-claude-code/CLAUDE.md"
 mkdir -p "$DIR/ravi-cursor/.cursor/rules"
 printf '{\n  "mcpServers": {\n    "workspace-knowledge": { "url": "%s" }\n  }\n}\n' "$URL" > "$DIR/ravi-cursor/.cursor/mcp.json"
 printf -- '---\ndescription: Check what teammates already did, then share the work\nalwaysApply: true\n---\n%s\n' "$RULE" > "$DIR/ravi-cursor/.cursor/rules/workspace-knowledge.mdc"
-echo "Demo folders ready in $DIR: anika-claude-code (Claude Code) and ravi-cursor (Cursor)"
+echo "Demo folders ready in $DIR: anika-claude-code (Claude Code), anika-claude-desktop (Claude Desktop bridge) and ravi-cursor (Cursor)"
