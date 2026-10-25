@@ -177,6 +177,9 @@ impl Knowledge {
             .execute(&mut *tx)
             .await
             .map_err(failure)?;
+        if remove {
+            Self::revoke_personal_tokens_in(&mut tx, &a.org, user, p).await?;
+        }
         tx.commit().await.map_err(db)
     }
     pub async fn admin_device_revoke(

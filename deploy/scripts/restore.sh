@@ -10,7 +10,7 @@ age -d -i "$1" -o "$work/backup.tar" "$2"
 # Extract only the single known data file, ignoring arbitrary archive paths.
 tar -xOf "$work/backup.tar" database.dump > "$work/database.dump"
 tar -xOf "$work/backup.tar" manifest.txt > "$work/manifest.txt"
-printf '%s\n' 'wk-backup-v2' 'schema_version=18' > "$work/expected.txt"
+printf '%s\n' 'wk-backup-v2' 'schema_version=19' > "$work/expected.txt"
 cmp -s "$work/manifest.txt" "$work/expected.txt" || { echo 'Incompatible backup version; use a version-specific offline migration' >&2; exit 1; }
 count=$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_tables WHERE schemaname='public'")
 [ "$count" = 0 ] || { echo 'Target is not empty' >&2; exit 1; }
@@ -30,6 +30,7 @@ UPDATE public.workspace_bindings SET revoked=true;
 UPDATE public.registered_devices SET revoked_at=COALESCE(revoked_at,now()),revision=revision+CASE WHEN revoked_at IS NULL THEN 1 ELSE 0 END;
 DELETE FROM public.code_preflights;
 DELETE FROM public.browser_sessions;
+DELETE FROM public.personal_tokens;
 DELETE FROM public.product_admins;
 DELETE FROM public.memberships;
 UPDATE public.cards SET withdrawn=true, published=false WHERE EXISTS

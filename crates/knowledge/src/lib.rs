@@ -16,6 +16,7 @@ pub mod graph;
 mod lexical;
 pub mod lifecycle;
 pub mod personal;
+pub mod personal_tokens;
 mod pool;
 pub mod preflight;
 pub use pool::PoolConfig;
@@ -185,7 +186,7 @@ impl Knowledge {
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db)?;
-        if versions != (1..=18).collect::<Vec<_>>() {
+        if versions != (1..=19).collect::<Vec<_>>() {
             return Err(Error::Storage);
         }
         Ok(())
@@ -222,6 +223,7 @@ impl Knowledge {
             (16, include_str!("../../../migrations/server/0016.sql")),
             (17, include_str!("../../../migrations/server/0017.sql")),
             (18, include_str!("../../../migrations/server/0018.sql")),
+            (19, include_str!("../../../migrations/server/0019.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
@@ -286,6 +288,7 @@ impl Knowledge {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
+        Self::revoke_personal_tokens_in(&mut tx, &actor.org, &actor.user, product).await?;
         sqlx::query("INSERT INTO audit_events(org,product,user_id,action,entity_id,target_user) VALUES($1,$2,current_user::text,'operator_member_remove','00000000-0000-0000-0000-000000000000',$3)").bind(&actor.org).bind(product).bind(&actor.user).execute(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)
     }

@@ -96,6 +96,15 @@ pub struct AdminAssignment {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TokenMint {
+    pub org: String,
+    pub user: String,
+    pub product: String,
+    pub label: String,
+    pub days: u32,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyBootstrap {
     pub org: String,
     pub user: String,

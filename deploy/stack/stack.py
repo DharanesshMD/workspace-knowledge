@@ -8,6 +8,7 @@ failure or to add users; secrets and certificates in the state directory are reu
 
   python3 deploy/stack/stack.py up                       # local: https://sso.localhost:8443, https://wk.localhost:8444
   python3 deploy/stack/stack.py up --domain wk.example.com --bind 0.0.0.0 --user alice:backend:review
+  python3 deploy/stack/stack.py token [--user NAME ...]  # mint a personal MCP token per user (written to state-dir/tokens/, never printed)
   python3 deploy/stack/stack.py status | down [--volumes]
 
 Without --tls-cert/--tls-key it creates a private CA (state-dir/certs/ca.pem) that clients must trust.
@@ -110,6 +111,7 @@ class Stack:
             "WK_POSTGRES_PASSWORD": s["db_owner"], "WK_DATABASE_URL": f"postgres://wk_app:{s['db_app']}@postgres:5432/{DB}",
             "WK_OIDC_ISSUER": self.issuer, "WK_OIDC_JWKS_URL": f"{self.issuer}/protocol/openid-connect/certs", "WK_OIDC_CA_FILE": "/etc/wk/ca.pem",
             "WK_OIDC_AUDIENCE": self.app_origin, "WK_MCP_RESOURCE": self.app_origin, "WK_CONSOLE_ORIGIN": self.app_origin,
+            "WK_PERSONAL_TOKENS": "1" if a.personal_tokens else "0", "WK_PERSONAL_TOKEN_MAX_DAYS": "90",
             "WK_COLLECTOR_AUDIENCE": "wk-collector", "WK_COLLECTOR_CLIENT_ID": "wk-collector", "WK_MCP_CLIENT_ID": "wk-mcp",
             "WK_BROWSER_CLIENT_ID": "wk-portal", "WK_BROWSER_CLIENT_SECRET": s["portal"],
             "WK_KEYCLOAK_ORIGIN": self.kc_origin, "WK_KEYCLOAK_CERT": str(certs / "leaf.pem"), "WK_KEYCLOAK_KEY": str(certs / "leaf.key"),
@@ -229,6 +231,30 @@ Stack is up.
   Users:         {', '.join(u['name'] + ' (' + ','.join(u['services']) + (', reviewer' if u['review'] else '') + ')' for u in self.users)}
 Product '{self.a.product}'. Add a user later by running `up` again with another --user.""")
 
+    def token(self):
+        """Mint one personal MCP token per user. The secrets go to state-dir/tokens/NAME.token (0600), never to the screen."""
+        self.prepare_env_only()
+        if not self.a.personal_tokens:
+            sys.exit("personal tokens are switched off for this stack (omit --no-personal-tokens and run `up` first)")
+        self.secrets = json.loads((self.state / "secrets.json").read_text())
+        folder = self.state / "tokens"
+        folder.mkdir(exist_ok=True)
+        folder.chmod(0o700)
+        for u in self.users:
+            made = self.operator("personal-token", {"org": self.a.org, "user": u["name"], "product": self.a.product,
+                                                    "label": self.a.label, "days": self.a.days})
+            reply = json.loads(made.stdout.strip().splitlines()[-1])
+            path = folder / f"{u['name']}.token"
+            path.write_text(reply["token"] + "\n")
+            path.chmod(0o600)
+            print(f"{u['name']}: token written to {path} (valid {self.a.days} days)")
+        print(f"""
+Use a token without a browser sign-in (example for the first user):
+  export WK_TOKEN=$(cat {folder / (self.users[0]['name'] + '.token')})
+  claude mcp add --transport http workspace-knowledge {self.app_origin}/mcp/{self.a.product} --header "Authorization: Bearer $WK_TOKEN"
+  Cursor: "headers": {{"Authorization": "Bearer ${{env:WK_TOKEN}}"}} in mcp.json, started from a shell that has WK_TOKEN set.
+Each user may hold 5 live tokens; revoke them in the portal's Connect page.""")
+
     def status(self):
         self.prepare_env_only()
         self.compose("ps")
@@ -249,7 +275,7 @@ Product '{self.a.product}'. Add a user later by running `up` again with another 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("command", choices=["up", "down", "status"])
+    p.add_argument("command", choices=["up", "down", "status", "token"])
     p.add_argument("--state-dir", default="~/.local/share/workspace-knowledge/stack", help="certificates, secrets, credentials.txt (outside the repo)")
     p.add_argument("--domain", default="localhost", help="sso.DOMAIN and wk.DOMAIN; the default works on a Mac without DNS or hosts-file edits")
     p.add_argument("--kc-port", default="8443")
@@ -262,8 +288,14 @@ def main():
     p.add_argument("--tls-cert", help="PEM chain for sso.DOMAIN and wk.DOMAIN (e.g. from your CA); with --tls-key. Otherwise a private CA is created")
     p.add_argument("--tls-key")
     p.add_argument("--ca-file", help="CA bundle for --tls-cert when it is a private CA (default: the cert itself)")
+    p.add_argument("--personal-tokens", action=argparse.BooleanOptionalAction, default=True,
+                   help="enable personal MCP tokens on the server (on for this evaluation stack; the server's own default is off)")
+    p.add_argument("--label", default="stack", help="token: the name shown in the portal")
+    p.add_argument("--days", type=int, default=30, help="token: lifetime in days (1 to 90)")
     p.add_argument("--volumes", action="store_true", help="down: also delete database and Keycloak data")
     args = p.parse_args()
+    if not 1 <= args.days <= 90:
+        p.error("--days must be between 1 and 90")
     if bool(args.tls_cert) != bool(args.tls_key):
         p.error("--tls-cert and --tls-key go together")
     getattr(Stack(args), args.command)()

@@ -41,3 +41,6 @@ GRANT UPDATE(revision) ON code_repositories,code_mappings,code_maintainers TO wk
 GRANT SELECT,INSERT,UPDATE ON code_preflights TO wk_app;
 GRANT EXECUTE ON FUNCTION wk_preflight_has_capacity(TEXT,TEXT,TEXT) TO wk_app;
 GRANT UPDATE(not_before) ON collector_security_epoch TO wk_app;
+
+-- Personal MCP tokens are authenticated by hash before an Actor exists, like browser_sessions.
+GRANT SELECT,INSERT,UPDATE,DELETE ON personal_tokens TO wk_app;

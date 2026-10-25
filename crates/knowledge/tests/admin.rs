@@ -683,3 +683,43 @@ async fn admin_policy_can_restrict_but_not_widen_privacy_or_destinations() {
         Error::Invalid
     );
 }
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn removing_a_member_revokes_their_personal_tokens_under_the_restricted_role() {
+    let (k, u, pool) = setup().await;
+    let (runtime, scoped, role) = restricted(&pool).await;
+    let hash = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    runtime
+        .create_personal_token(&u[2], "demo", "laptop", &hash, 30)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .personal_token_actor(&hash, "demo")
+            .await
+            .unwrap()
+            .user,
+        "alice"
+    );
+    runtime
+        .admin_member_remove(&u[0], "demo", "alice")
+        .await
+        .unwrap();
+    k.grant(&u[2], "demo", &["backend".into()], false)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .personal_token_actor(&hash, "demo")
+            .await
+            .err()
+            .unwrap(),
+        Error::Denied
+    );
+    scoped.close().await;
+    drop_role(&pool, &role).await;
+}

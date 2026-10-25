@@ -102,6 +102,34 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if mode == "personal-token" {
+        let m: wk_server::admin_cli::TokenMint =
+            wk_server::admin_cli::parse(std::io::stdin().lock())?;
+        let settings = wk_server::personal_tokens::config(|key| std::env::var(key).ok())?
+            .ok_or("WK_PERSONAL_TOKENS=1 is required to create a personal token")?;
+        if m.days == 0 || m.days > settings.max_days {
+            return Err("days must be between 1 and WK_PERSONAL_TOKEN_MAX_DAYS".into());
+        }
+        let (token, hash) = wk_server::personal_tokens::generate();
+        let created = Knowledge::open(&url)
+            .await?
+            .create_personal_token(
+                &Actor {
+                    org: m.org,
+                    user: m.user,
+                },
+                &m.product,
+                &m.label,
+                &hash,
+                m.days,
+            )
+            .await?;
+        println!(
+            "{}",
+            serde_json::json!({"token":token,"id":created.id,"expires_ms":created.expires_ms})
+        );
+        return Ok(());
+    }
     if mode == "retention-once" {
         let counts = Knowledge::open(&url).await?.retention_batch(1000).await?;
         println!("{}", serde_json::to_string(&counts)?);

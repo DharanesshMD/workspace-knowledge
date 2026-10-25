@@ -4,6 +4,8 @@ Keycloak (authorization code + PKCE, like a real client), have the first share a
 the hosted MCP endpoint, and check the second finds it with the first one's name.
 
   python3 deploy/stack/verify.py [--state-dir DIR] [--domain localhost] [--sharer anika] [--finder ravi] [--tools]
+  python3 deploy/stack/verify.py --tokens   # the same, with each user's personal token instead of a Keycloak sign-in
+  python3 deploy/stack/verify.py --portal   # sign in to the portal, create, use and revoke a personal token through /v1/tokens
 """
 import argparse, base64, hashlib, html, http.cookiejar, json, re, secrets, socket, ssl, sys, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
@@ -24,8 +26,8 @@ class Browser:
         self.open = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), urllib.request.HTTPCookieProcessor(self.jar),
                                                 NoRedirect, urllib.request.ProxyHandler({})).open
 
-    def call(self, url, data=None, headers=None):
-        req = urllib.request.Request(url, data=urllib.parse.urlencode(data).encode() if isinstance(data, dict) else data, headers=headers or {})
+    def call(self, url, data=None, headers=None, method=None):
+        req = urllib.request.Request(url, data=urllib.parse.urlencode(data).encode() if isinstance(data, dict) else data, headers=headers or {}, method=method)
         try:
             with self.open(req, timeout=30) as r:
                 return r.status, r.read().decode(), r.headers
@@ -82,6 +84,73 @@ class Mcp:
         return reply["result"]
 
 
+def portal_sign_in(ca, origin, user, password):
+    """Sign in to the portal the way a browser does (cookie session). Returns the browser and /v1/me."""
+    b, url, page = Browser(ca), f"{origin}/auth/login", ""
+    for _ in range(8):
+        status, page, headers = b.call(url)
+        if status in (301, 302, 303, 307) and headers.get("Location"):
+            url = urllib.parse.urljoin(url, headers["Location"])
+            continue
+        break
+    action = re.search(r'<form[^>]*id="kc-form-login"[^>]*action="([^"]+)"', page)
+    if not action:
+        sys.exit(f"{user}: the portal did not lead to a Keycloak login form (HTTP {status})")
+    status, _, headers = b.call(html.unescape(action.group(1)), {"username": user, "password": password, "credentialId": ""})
+    callback = headers.get("Location", "")
+    if not callback.startswith(f"{origin}/auth/callback"):
+        sys.exit(f"{user}: portal sign-in did not return to the callback (HTTP {status})")
+    b.call(callback)
+    status, body, _ = b.call(f"{origin}/v1/me")
+    if status != 200:
+        sys.exit(f"{user}: no portal session after sign-in (HTTP {status})")
+    return b, json.loads(body)
+
+
+def mcp_status(ca, url, token):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                                                                                        "clientInfo": {"name": "verify", "version": "0"}}}).encode()
+    return Browser(ca).call(url, body, {"Authorization": "Bearer " + token, "Content-Type": "application/json",
+                                        "Accept": "application/json, text/event-stream"})[0]
+
+
+def portal_check(ca, origin, product, user, password):
+    b, me = portal_sign_in(ca, origin, user, password)
+    limits = me.get("personal_tokens")
+    if not limits:
+        sys.exit("FAIL: the server has personal tokens switched off (run stack.py up without --no-personal-tokens)")
+    print(f"ok  {user} signed in to the portal; personal tokens allowed up to {limits['max_days']} days")
+    api = {"Origin": origin, "X-CSRF-Token": me["csrf_token"], "Content-Type": "application/json"}
+    created = json.dumps({"product": product, "label": "verify", "days": 1}).encode()
+    status, _, _ = b.call(f"{origin}/v1/tokens", created, {k: v for k, v in api.items() if k != "X-CSRF-Token"})
+    assert status == 403, f"creating a token without the CSRF token should be refused, got HTTP {status}"
+    print("ok  creating a token without the CSRF token is refused (403)")
+    status, body, headers = b.call(f"{origin}/v1/tokens", created, api)
+    made = json.loads(body)
+    assert status == 201 and re.fullmatch(r"wkpt_[0-9a-f]{64}", made.get("token", "")), f"create failed: HTTP {status} {body[:200]}"
+    assert headers.get("Cache-Control") == "no-store", "the token response must not be cached"
+    token, url = made["token"], f"{origin}/mcp/{product}"
+    print("ok  portal created a token (shown once, no-store)")
+    listed = b.call(f"{origin}/v1/tokens")[1]
+    assert made["id"] in listed and token not in listed, "the list must show the token's metadata and never its secret"
+    print("ok  the token list shows it without the secret")
+    assert mcp_status(ca, url, token) == 200, "the token should open the MCP endpoint"
+    print(f"ok  the token opens {url}")
+    for path in ("/v1/me", f"/v1/policy?product={product}"):
+        status = Browser(ca).call(origin + path, headers={"Authorization": "Bearer " + token})[0]
+        assert status == 401, f"{path} must reject a personal token, got HTTP {status}"
+    print("ok  the same token is rejected on the REST API (401)")
+    assert mcp_status(ca, f"{origin}/mcp/other-product", token) in (401, 403), "the token must not open another product"
+    print("ok  and on another product's MCP address")
+    assert Browser(ca).call(f"{origin}/v1/tokens", headers={"Authorization": "Bearer " + token})[0] == 401, "a token must not manage tokens"
+    print("ok  a token cannot list or mint tokens")
+    status = b.call(f"{origin}/v1/tokens/{made['id']}", headers=api, method="DELETE")[0]
+    assert status == 200, f"revoke failed: HTTP {status}"
+    assert mcp_status(ca, url, token) == 401, "a revoked token must stop working at once"
+    print("ok  revoking it stops it working at once (401)")
+    print("PASS: portal token lifecycle works end to end.")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--state-dir", default="~/.local/share/workspace-knowledge/stack")
@@ -93,6 +162,8 @@ def main():
     p.add_argument("--finder", default="ravi")
     p.add_argument("--keep", action="store_true", help="leave the test card published instead of withdrawing it")
     p.add_argument("--withdraw", action="append", default=[], metavar="CARD_ID", help="withdraw an earlier test card (as the sharer) and stop")
+    p.add_argument("--tokens", action="store_true", help="authenticate the MCP calls with each user's personal token (from `stack.py token`)")
+    p.add_argument("--portal", action="store_true", help="check the portal's token create/list/revoke routes as the sharer, then stop")
     p.add_argument("--tools", action="store_true", help="print the tool list and schemas, then stop")
     a = p.parse_args()
     state = Path(a.state_dir).expanduser()
@@ -100,15 +171,25 @@ def main():
     ca = str(state / "certs/ca.pem")
     origin = f"https://wk.{a.domain}:{a.app_port}"
     issuer = f"https://sso.{a.domain}:{a.kc_port}/realms/wk"
+    if a.portal:
+        return portal_check(ca, origin, a.product, a.sharer, secrets_["users"][a.sharer])
     mcp = {}
     for user in (a.sharer, a.finder):
-        mcp[user] = Mcp(ca, f"{origin}/mcp/{a.product}", sign_in(ca, issuer, origin, user, secrets_["users"][user]))
+        if a.tokens:
+            token_file = state / "tokens" / f"{user}.token"
+            if not token_file.exists():
+                sys.exit(f"no token for {user}: run `python3 deploy/stack/stack.py token` first")
+            mcp[user] = Mcp(ca, f"{origin}/mcp/{a.product}", token_file.read_text().strip())
+        else:
+            mcp[user] = Mcp(ca, f"{origin}/mcp/{a.product}", sign_in(ca, issuer, origin, user, secrets_["users"][user]))
         mcp[user].rpc("initialize", {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "verify", "version": "0"}})
-        print(f"ok  {user} signed in through Keycloak and the MCP endpoint accepted the token")
+        print(f"ok  {user} {'used a personal token' if a.tokens else 'signed in through Keycloak'} and the MCP endpoint accepted it")
     def withdraw(card_id):
+        # Withdrawing is a REST call, which a personal token deliberately cannot make: clean up as the signed-in user.
+        owner_token = sign_in(ca, issuer, origin, a.sharer, secrets_["users"][a.sharer]) if a.tokens else mcp[a.sharer].token
         status, text, _ = mcp[a.sharer].b.call(f"{origin}/v1/cards/{card_id}/withdraw",
                                               json.dumps({"product": a.product, "revision": 1}).encode(),
-                                              {"Authorization": "Bearer " + mcp[a.sharer].token, "Content-Type": "application/json"})
+                                              {"Authorization": "Bearer " + owner_token, "Content-Type": "application/json"})
         print(f"{'ok ' if status < 300 else 'FAIL'} withdraw {card_id}: HTTP {status}")
     if a.withdraw:
         return [withdraw(c) for c in a.withdraw] and None
@@ -133,7 +214,7 @@ def main():
         sys.exit(f"FAIL: {a.finder} was not told that {a.sharer} already did this")
     if not a.keep:
         withdraw(shared_id)
-    print(f"PASS: {a.finder}'s agent is told that {a.sharer} already did this.")
+    print(f"PASS: {a.finder}'s agent is told that {a.sharer} already did this" + (" (personal tokens only)." if a.tokens else "."))
 
 
 if __name__ == "__main__":

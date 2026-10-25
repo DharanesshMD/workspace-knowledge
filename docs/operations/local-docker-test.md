@@ -78,6 +78,50 @@ cursor ~/wk-demo/ravi-cursor
 
 To confirm who is signed in, open `https://wk.localhost:8444` and look at the account name. The **Connect** page there shows the same MCP address.
 
+## Personal tokens: no browser sign-in (and no shared-browser mix-up)
+
+The stack switches on personal MCP tokens (`--no-personal-tokens` turns them off; the server's own default is off). A token is a revocable credential that acts as one user on one product's MCP address only; it is not accepted by the REST API, and it cannot create tokens. Use it instead of steps 4 and 5's browser sign-in, which is the simplest way to be sure which developer each agent is.
+
+1. Create a token per user. They are written to `~/.local/share/workspace-knowledge/stack/tokens/NAME.token` (mode 0600) and never printed:
+
+   ```sh
+   python3 deploy/stack/stack.py token
+   ```
+
+   On a real deployment a developer creates their own in the portal instead: **Connect**, then **Personal access token** under their product. The token is shown once, with ready snippets.
+2. Claude Code (Anika):
+
+   ```sh
+   export WK_TOKEN=$(cat ~/.local/share/workspace-knowledge/stack/tokens/anika.token)
+   cd ~/wk-demo/anika-claude-code && NODE_EXTRA_CA_CERTS=$HOME/.local/share/workspace-knowledge/stack/certs/ca.pem claude mcp add --transport http workspace-knowledge https://wk.localhost:8444/mcp/demo --header "Authorization: Bearer $WK_TOKEN"
+   ```
+
+3. Cursor (Ravi): remove the browser-sign-in entry (`~/.cursor/mcp.json`, key `workspace-knowledge`) or give it these headers, and start Cursor from a shell that has the variable set:
+
+   ```json
+   "workspace-knowledge": {
+     "url": "https://wk.localhost:8444/mcp/demo",
+     "headers": { "Authorization": "Bearer ${env:WK_TOKEN}" }
+   }
+   ```
+
+   ```sh
+   export WK_TOKEN=$(cat ~/.local/share/workspace-knowledge/stack/tokens/ravi.token)
+   open -a Cursor ~/wk-demo/ravi-cursor
+   ```
+
+   (Quit Cursor first if it is running, because an app only reads the environment it was started with.) The configuration file holds no secret, so it is safe to commit.
+4. Check the server side without any agent, using only the two tokens:
+
+   ```sh
+   python3 deploy/stack/verify.py --tokens
+   python3 deploy/stack/verify.py --portal   # portal sign-in, create, use and revoke a token
+   ```
+
+Claude Desktop's `wk-mcp` bridge does not use these tokens: it calls the REST API, which rejects them by design, so it keeps its own browser sign-in (`wk-mcp login`, one developer per Mac user).
+
+Removing someone from a product revokes their tokens for it, for good. Disabling them in Keycloak does not, so remove the membership too.
+
 ## Claude Desktop (the chat app), local or deployed
 
 Claude Desktop's **Add custom connector** is called from Anthropic's servers, so it cannot reach `wk.localhost` or any server behind a private CA ("Couldn't reach this address"). The `wk-mcp` bridge works everywhere: it runs on your Mac, signs in with your browser and talks to the server from there, so the same setup serves a local stack and a deployed one.
@@ -122,7 +166,7 @@ Claude Desktop's **Add custom connector** is called from Anthropic's servers, so
 |---|---|
 | Browser warns about the certificate | The CA is not trusted yet (step 2), or you are using Firefox. |
 | Claude Code: "Failed to connect" or TLS error | Start it with `NODE_EXTRA_CA_CERTS=...` as above. |
-| Cursor's agent says the name is `anika` but you are `ravi` (or the other way round) | The browser reused the other developer's Keycloak session. Clear `sso.localhost` cookies and reconnect that client. |
+| Cursor's agent says the name is `anika` but you are `ravi` (or the other way round) | The browser reused the other developer's Keycloak session. Clear `sso.localhost` cookies and reconnect that client, or use a [personal token](#personal-tokens-no-browser-sign-in-and-no-shared-browser-mix-up) per developer, which has no browser step. |
 | The agent does not mention a teammate | Agents follow rules unevenly. Ask: "call knowledge.overlaps with a query describing this task". |
 | 401 or 403 from the MCP address | The user is not a member of product `demo` (re-run `stack.py up`), or the token has expired (reconnect). |
 | 403 "Host header is not allowed" | Server image older than this fix; rebuild `wk-server:local` and `stack.py up`. |

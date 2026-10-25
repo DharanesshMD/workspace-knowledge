@@ -223,7 +223,8 @@ async fn me(
         .collect();
     let token = session_cookie(&api, &headers)?.map(|s| csrf(&s));
     Ok(Json(
-        json!({"user":who.user,"org":who.org,"products":products,"csrf_token":token}),
+        json!({"user":who.user,"org":who.org,"products":products,"csrf_token":token,
+            "personal_tokens":api.personal_tokens.map(|c| json!({"max_days":c.max_days}))}),
     ))
 }
 async fn logout(State(api): State<Api>, headers: HeaderMap) -> Result<Response, Failure> {
