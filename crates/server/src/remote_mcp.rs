@@ -511,7 +511,7 @@ pub(crate) async fn transport(
         Err(never) => match never {},
     }
 }
-fn resource(api: &crate::Api) -> Result<String, ()> {
+pub(crate) fn resource(api: &crate::Api) -> Result<String, ()> {
     let configured = std::env::var("WK_MCP_RESOURCE").map_err(|_| ())?;
     let url = reqwest::Url::parse(&configured).map_err(|_| ())?;
     let oidc = api.oidc.as_ref().ok_or(())?;

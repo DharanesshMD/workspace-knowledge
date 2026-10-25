@@ -16,3 +16,11 @@ select{font:inherit;width:100%;max-width:100%;border:1px solid #aabbd0;border-ra
 .capture-notice{padding:1rem;margin:1rem 0;font-weight:400;max-width:75ch}.capture-notice h3{margin:0 0 .5rem}.capture-notice p{margin:0}.capture-notice details{margin-top:.75rem;padding:.75rem 0 0;border-color:#dbc998}.capture-notice ol{padding-left:1.4rem;margin-bottom:0}.capture-notice li+li{margin-top:.65rem}
 
 .code-context,.code-attribution{max-width:1000px}.code-context code,.attribution-record code{overflow-wrap:anywhere}.code-context .warning{display:block;margin:1rem 0}.code-context .warning ul{font-weight:400;margin-bottom:0}.attribution-record{border-top:1px solid #dce3ed;padding:1rem 0;overflow-wrap:anywhere}.attribution-record h4{margin:.2rem 0}.attribution-record blockquote{margin:1rem 0;padding:.7rem 1rem;border-left:3px solid #91aac7;background:#f5f7fb;white-space:pre-wrap;overflow-wrap:anywhere}.attribution-record form{margin:.8rem 0}.code-attribution .checkbox{align-items:flex-start}.code-attribution .checkbox input{margin-top:.3rem;flex:none}
+
+.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.connect-view{max-width:1000px}.connect-view .panel{margin-bottom:1.5rem}.connect-about h2,.connect-product h2{font-size:1.1rem}.connect-about ul{padding-left:1.2rem;margin-bottom:0}.connect-about li+li{margin-top:.4rem}
+.copy-row{display:flex;gap:.6rem;align-items:end;margin:1rem 0}.copy-row label{flex:1;min-width:0}.copy-row input{min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88rem;background:#f0f4f9}.copy-button{flex:none;min-width:5.5rem}
+.snippet{border-top:1px solid #e0e6ef;padding:.2rem 0 1.2rem}.snippet h3{margin-top:1.2rem;margin-bottom:.4rem}.snippet p{margin:.4rem 0;max-width:70ch}.snippet pre{margin:.7rem 0;padding:1rem;background:#e9eef6;white-space:pre-wrap;overflow-wrap:anywhere;font-size:.85rem}.snippet pre code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.connect-pointer{color:#48617e;max-width:70ch}
+@media(max-width:650px){.copy-row{flex-wrap:wrap}.copy-row label{flex-basis:100%}}
+@media(min-width:651px){.hosted-session .sidebar{padding-block:1.6rem;gap:1.2rem}.hosted-session .sidebar nav{gap:.2rem}}

@@ -217,6 +217,8 @@ Read the `show` output and do not export a session that still contains a secret,
 
 ## MCP sign-in: `wk-mcp login` and native remote clients
 
+**Get your MCP address from the portal.** After you sign in to the portal, open **Connect**: it lists the MCP URL for each product you belong to (`https://<server>/mcp/<product>`) with a Copy button, and copy-ready setup for Claude (custom connector: a name and the URL), Claude Code (`claude mcp add --transport http ...`), Cursor (`.cursor/mcp.json` with `url`) and VS Code (`.vscode/mcp.json` with `type: http` and `url`). The first time the agent connects you sign in once in your browser. The page shows an address only when the operator has set `WK_MCP_RESOURCE`; otherwise it says so. Claude's own connectors are connected from Anthropic's side, so they need a server reachable from the internet, and that path has not been tested here. Folder approval and sharing from a project folder need the local bridge below instead of the hosted URL.
+
 Two ways to give an agent MCP access to a team server. Both need the server's [remote MCP configuration](../architecture/remote-mcp.md) (`WK_MCP_RESOURCE`, normally set up with the [Keycloak quick start](../operations/quick-start-keycloak.md)).
 
 **Stdio bridge with one login (any client that can run a command).** Sign in once, then register `wk-mcp` with no token:

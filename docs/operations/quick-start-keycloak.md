@@ -81,6 +81,8 @@ Then connect capture: [Join a team server](install.md#join-a-team-server).
 
 ## Optional: native remote MCP, no bridge
 
+Developers do not need to build the URL themselves: once they sign in to the portal, the **Connect** page shows their MCP address and copy-ready setup for each client (it appears when `WK_MCP_RESOURCE` is set).
+
 Claude Code, the Cursor agent CLI and VS Code can sign in to `https://knowledge.example/mcp/PRODUCT` themselves. They register themselves with Keycloak (dynamic client registration), which Keycloak refuses until you run the one-time setup below. It lets only clients with loopback (and the listed) redirect URIs register, makes every such client's token carry exactly the MCP audience, and keeps Keycloak's consent screen:
 
 ```sh

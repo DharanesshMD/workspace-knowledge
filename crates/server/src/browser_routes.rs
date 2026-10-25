@@ -208,6 +208,19 @@ async fn me(
 ) -> Result<Json<serde_json::Value>, Failure> {
     let who = actor(&api, &headers).await?;
     let products = api.knowledge.products_for(&who).await?;
+    // The hosted MCP address for each product; null when remote MCP is not (validly) configured.
+    let resource = crate::remote_mcp::resource(&api).ok();
+    let products: Vec<_> = products
+        .iter()
+        .map(|p| {
+            let mut value = json!(p);
+            value["mcp_url"] = json!(resource
+                .as_ref()
+                .filter(|_| wk_contracts::valid_id(&p.product))
+                .map(|r| format!("{r}/mcp/{}", p.product)));
+            value
+        })
+        .collect();
     let token = session_cookie(&api, &headers)?.map(|s| csrf(&s));
     Ok(Json(
         json!({"user":who.user,"org":who.org,"products":products,"csrf_token":token}),
