@@ -78,6 +78,30 @@ cursor ~/wk-demo/ravi-cursor
 
 To confirm who is signed in, open `https://wk.localhost:8444` and look at the account name. The **Connect** page there shows the same MCP address.
 
+## Ask for a teammate's work, or a file or module's history
+
+Once developers are connected, any of them can ask their own agent about what teammates have shared. The agent calls `knowledge.team_work`, which resolves the name and the paths and returns who did what, when and why, with the files involved.
+
+Try these in Claude Code or Cursor, after another developer has shared some work:
+
+- "What did anika work on recently?" (a name; a lowercase or partial name is fine)
+- "What has anyone changed in `backend/payments` in the last week?" (a module, plus a time window)
+- "Who touched `backend/payments/retry.rs` and why?" (one file)
+- "What did sam decide about retries?" (a name plus keywords)
+
+How it behaves:
+
+- A wrong or ambiguous name does not fail: the reply lists the developers who have shared work, and the agent corrects itself or asks you.
+- `backend/pay` does not match `backend/payments`: a path matches that exact file, or anything under that directory.
+- You only see work in services you hold, and only what teammates published. An empty answer means nothing was shared, not that nothing happened.
+- The file lists come from each developer's agent (`files` when it called `knowledge.share_session`), so they are what the agent reported, not a diff. The demo project rules (`deploy/stack/make-demo-folders.sh`) already tell the agent to ask for this and to list its files when it shares.
+
+Check it from the command line, with two developers' tokens or sign-ins (`--tokens` for tokens):
+
+```sh
+python3 deploy/stack/verify.py --team-work --tokens
+```
+
 ## Add developers from the portal (the admin's job)
 
 `stack.py up` also creates an admin login, `owner` (password in `~/.local/share/workspace-knowledge/stack/credentials.txt`; use `--admin NAME` for another name, or `--admin none`). The admin adds developers in the portal; the developers themselves never sign in anywhere.

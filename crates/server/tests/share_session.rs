@@ -270,7 +270,7 @@ async fn hosted_tool_is_listed_with_its_guidance_and_shares_with_only_the_users_
     let app = router(&w).await;
     let listing = rpc(&app, "author-token", "tools/list", json!({})).await;
     let tools = listing["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 11);
+    assert_eq!(tools.len(), 12);
     let tool = tools
         .iter()
         .find(|t| t["name"] == "knowledge.share_session")
@@ -288,6 +288,7 @@ async fn hosted_tool_is_listed_with_its_guidance_and_shares_with_only_the_users_
         [
             "constraints",
             "decisions",
+            "files",
             "intent",
             "open_questions",
             "rationale",

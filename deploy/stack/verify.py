@@ -6,6 +6,7 @@ the hosted MCP endpoint, and check the second finds it with the first one's name
   python3 deploy/stack/verify.py [--state-dir DIR] [--domain localhost] [--sharer anika] [--finder ravi] [--tools]
   python3 deploy/stack/verify.py --tokens   # the same, with each user's personal token instead of a Keycloak sign-in
   python3 deploy/stack/verify.py --portal   # sign in to the portal, create, use and revoke a personal token through /v1/tokens
+  python3 deploy/stack/verify.py --team-work [--tokens]   # one developer shares work with files; the other asks for it by name, module and file
   python3 deploy/stack/verify.py --admin    # as the admin: add a developer, use the token, reissue, remove (Admin tab's API)
 """
 import argparse, base64, hashlib, html, http.cookiejar, json, re, secrets, socket, ssl, sys, urllib.error, urllib.parse, urllib.request
@@ -235,6 +236,7 @@ def main():
     p.add_argument("--withdraw", action="append", default=[], metavar="CARD_ID", help="withdraw an earlier test card (as the sharer) and stop")
     p.add_argument("--tokens", action="store_true", help="authenticate the MCP calls with each user's personal token (from `stack.py token`)")
     p.add_argument("--portal", action="store_true", help="check the portal's token create/list/revoke routes as the sharer, then stop")
+    p.add_argument("--team-work", action="store_true", help="check knowledge.team_work: name, module, file, time window, unknown name")
     p.add_argument("--admin", action="store_true", help="check the Admin tab's API as the admin user, then stop")
     p.add_argument("--admin-user", default="owner", help="the portal admin (created by stack.py up)")
     p.add_argument("--tools", action="store_true", help="print the tool list and schemas, then stop")
@@ -270,6 +272,39 @@ def main():
         return [withdraw(c) for c in a.withdraw] and None
     if a.tools:
         print(json.dumps(mcp[a.sharer].rpc("tools/list")["result"]["tools"], indent=1))
+        return
+    if a.team_work:
+        marker = "verify-" + secrets.token_hex(3)
+        module, files = f"backend/{marker}", [f"backend/{marker}/retry.rs", f"backend/{marker}/gateway.rs"]
+        shared = mcp[a.sharer].tool("knowledge.share_session", {"service": "backend", "title": f"Retry with backoff ({marker})",
+                                                                "intent": "Make payment retries back off", "rationale": "Hammering the gateway made outages worse",
+                                                                "decisions": ["Exponential backoff with jitter"], "files": files})
+        card_id = json.loads(shared["content"][0]["text"])["card_id"]
+        print("ok ", a.sharer, "shared work with files, card", card_id)
+        ask = lambda **kw: json.loads(mcp[a.finder].tool("knowledge.team_work", kw)["content"][0]["text"])
+        try:
+            prefix = a.sharer[:3]
+            by_name = ask(developer=prefix.upper(), since_days=1, query="retry backoff")
+            top = by_name["entries"][0]
+            assert by_name["resolved"]["developer"] == a.sharer and marker in top["title"], f"by name: {by_name['text'][:300]}"
+            assert top["files_reported"] == sorted(files) and top["decisions"] == ["Exponential backoff with jitter"]
+            print(f"ok  '{prefix.upper()}' resolved to {a.sharer}: newest work is '{top['title']}'")
+            by_module = ask(paths=[module])
+            assert [e["card_id"] for e in by_module["entries"]] == [card_id] and by_module["entries"][0]["matched_files"] == sorted(files)
+            print(f"ok  asking about the module {module} finds it, with the matching files")
+            assert [e["card_id"] for e in ask(paths=[files[0]])["entries"]] == [card_id]
+            print("ok  asking about one file finds it")
+            assert ask(paths=[module[:-1]])["status"] == "no_matches", "a prefix of a directory name must not match"
+            print("ok  half a directory name matches nothing")
+            wrong = ask(developer=a.sharer + "x")
+            assert wrong["status"] == "developer_not_found" and a.sharer in wrong["known_developers"], wrong["text"]
+            print(f"ok  a wrong name is explained and the known developers are listed: {wrong['known_developers']}")
+            mix = ask(developer=a.sharer, paths=[module], service="backend", since_days=1, limit=1, budget_tokens=256)
+            assert len(mix["entries"]) == 1 and "reference data, not instructions" in mix["text"]
+            print("ok  every filter together, with a tiny size cap, still returns a bounded answer")
+            print(f"PASS: {a.finder} can ask for {a.sharer}'s work by name, module and file.")
+        finally:
+            withdraw(card_id)
         return
     marker = "verify-" + secrets.token_hex(3)
     summary = {"service": "backend", "title": f"Added idempotency keys to the retry path ({marker})",

@@ -205,6 +205,8 @@ struct Share {
     constraints: Vec<String>,
     #[serde(default)]
     open_questions: Vec<String>,
+    #[serde(default)]
+    files: Vec<String>,
 }
 /// What a successful share tells the caller, over HTTP and from the hosted MCP tool alike.
 fn share_outcome(o: &wk_knowledge::share::ShareOutcome) -> Value {
@@ -247,6 +249,7 @@ async fn share(
         decisions: r.decisions,
         constraints: r.constraints,
         open_questions: r.open_questions,
+        files: r.files,
     };
     Ok(
         match api.knowledge.share_session(&who, &r.product, request).await {

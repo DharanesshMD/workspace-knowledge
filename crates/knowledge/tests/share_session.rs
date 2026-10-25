@@ -10,6 +10,7 @@ fn share(title: &str) -> ShareRequest {
         decisions: vec!["cap at three".into()],
         constraints: vec![],
         open_questions: vec!["Should the cap be configurable?".into()],
+        files: vec![],
     }
 }
 struct World {

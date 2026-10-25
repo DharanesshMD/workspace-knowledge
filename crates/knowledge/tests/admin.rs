@@ -808,3 +808,74 @@ async fn admin_created_accounts_work_under_the_restricted_application_role() {
     scoped.close().await;
     drop_role(&pool, &role).await;
 }
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn shared_files_and_team_work_run_under_the_restricted_application_role() {
+    let (_k, u, pool) = setup().await;
+    let (runtime, scoped, role) = restricted(&pool).await;
+    let share = |title: &str, files: &[&str]| wk_knowledge::share::ShareRequest {
+        service: Some("backend".into()),
+        title: title.into(),
+        intent: format!("Goal of {title}"),
+        rationale: "Because".into(),
+        files: files.iter().map(|f| f.to_string()).collect(),
+        ..Default::default()
+    };
+    let shared = runtime
+        .share_session(
+            &u[2],
+            "demo",
+            share("Retry with backoff", &["backend/payments/retry.rs"]),
+        )
+        .await
+        .unwrap();
+    assert!(shared.published);
+    let found = runtime
+        .team_work(
+            &u[3],
+            "demo",
+            wk_knowledge::team_work::TeamWorkQuery {
+                developer: Some("ali".into()),
+                paths: vec!["backend/payments".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(found["resolved"]["developer"], "alice");
+    assert_eq!(
+        found["entries"][0]["files_reported"],
+        serde_json::json!(["backend/payments/retry.rs"])
+    );
+    // Row-level security: another organization's member sees nothing of it.
+    let stranger = Actor {
+        org: uuid::Uuid::new_v4().to_string(),
+        user: "alice".into(),
+    };
+    assert_eq!(
+        runtime
+            .team_work(&stranger, "demo", Default::default())
+            .await
+            .unwrap_err(),
+        Error::Denied
+    );
+    let leaked: i64 = {
+        let mut tx = scoped.begin().await.unwrap();
+        sqlx::query("SELECT set_config('wk.org',$1,true),set_config('wk.user',$2,true)")
+            .bind(&stranger.org)
+            .bind(&stranger.user)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query_scalar("SELECT count(*) FROM card_files")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        leaked, 0,
+        "card_files rows are invisible outside the organization"
+    );
+    scoped.close().await;
+    drop_role(&pool, &role).await;
+}

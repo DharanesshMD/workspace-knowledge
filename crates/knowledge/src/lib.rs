@@ -26,6 +26,7 @@ pub mod semantic;
 pub mod share;
 pub mod signed_evidence;
 pub mod team;
+pub mod team_work;
 #[derive(Clone)]
 pub struct Actor {
     pub org: String,
@@ -187,7 +188,7 @@ impl Knowledge {
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db)?;
-        if versions != (1..=20).collect::<Vec<_>>() {
+        if versions != (1..=21).collect::<Vec<_>>() {
             return Err(Error::Storage);
         }
         Ok(())
@@ -226,6 +227,7 @@ impl Knowledge {
             (18, include_str!("../../../migrations/server/0018.sql")),
             (19, include_str!("../../../migrations/server/0019.sql")),
             (20, include_str!("../../../migrations/server/0020.sql")),
+            (21, include_str!("../../../migrations/server/0021.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",
