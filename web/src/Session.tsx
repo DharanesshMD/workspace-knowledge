@@ -1,6 +1,6 @@
 import {useEffect,useState,type ReactNode} from 'react';
 import {ApiError,request,setSessionCsrf} from './api';
-export type Membership={product:string;services:string[];can_review:boolean;policy_revision:number;mcp_url?:string|null};
+export type Membership={product:string;services:string[];can_review:boolean;policy_revision:number;mcp_url?:string|null;is_admin?:boolean};
 export type PersonalTokenSettings={max_days:number};
 type Me={user:string;org:string;products:Membership[];csrf_token?:string;personal_tokens?:PersonalTokenSettings|null};
 export function Session({development,render}:{development:ReactNode;render:(user:string,product:string,logout:()=>void,policy:Membership,products:Membership[],personalTokens:PersonalTokenSettings|null)=>ReactNode}) {

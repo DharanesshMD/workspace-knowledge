@@ -10,7 +10,7 @@ age -d -i "$1" -o "$work/backup.tar" "$2"
 # Extract only the single known data file, ignoring arbitrary archive paths.
 tar -xOf "$work/backup.tar" database.dump > "$work/database.dump"
 tar -xOf "$work/backup.tar" manifest.txt > "$work/manifest.txt"
-printf '%s\n' 'wk-backup-v2' 'schema_version=19' > "$work/expected.txt"
+printf '%s\n' 'wk-backup-v2' 'schema_version=20' > "$work/expected.txt"
 cmp -s "$work/manifest.txt" "$work/expected.txt" || { echo 'Incompatible backup version; use a version-specific offline migration' >&2; exit 1; }
 count=$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_tables WHERE schemaname='public'")
 [ "$count" = 0 ] || { echo 'Target is not empty' >&2; exit 1; }

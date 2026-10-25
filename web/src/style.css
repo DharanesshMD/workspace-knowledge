@@ -30,3 +30,10 @@ select{font:inherit;width:100%;max-width:100%;border:1px solid #aabbd0;border-ra
 .token-once{border:2px solid #b7791f;border-radius:6px;padding:1rem;margin:1rem 0;background:#fffaf0;min-width:0}.token-once pre{overflow-x:auto}
 .token-list{list-style:none;margin:0;padding:0;display:grid;gap:.6rem}.token-list li{display:flex;gap:1rem;justify-content:space-between;align-items:center;border:1px solid #d5deea;border-radius:6px;padding:.7rem .9rem;min-width:0;overflow-wrap:anywhere}
 @media(max-width:650px){.token-form label:nth-of-type(2){flex-basis:100%}.token-list li{flex-wrap:wrap}}
+.admin-view{max-width:1000px}.admin-view .panel{margin-bottom:1.5rem}.admin-view h2{font-size:1.1rem}
+.admin-form{display:grid;gap:1rem;max-width:34rem}.admin-form fieldset{border:1px solid #d5deea;border-radius:6px;padding:.6rem .9rem;margin:0}.admin-form legend{padding:0 .3rem}
+.admin-form .checkbox{display:flex;gap:.5rem;align-items:center}.admin-form .checkbox input{width:auto}.admin-form button{justify-self:start}
+.share-message{margin:.7rem 0;padding:1rem;background:#f1f4f9;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:26rem;overflow:auto}
+.member-actions{display:flex;gap:.5rem;flex-wrap:wrap;justify-content:flex-end}.member-list li{align-items:flex-start}
+.danger{background:#b3261e;border-color:#b3261e;color:#fff}
+@media(max-width:650px){.member-actions{justify-content:flex-start}}

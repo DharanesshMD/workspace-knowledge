@@ -1,5 +1,6 @@
 //! Authenticated shared knowledge HTTP API.
 pub mod admin_cli;
+mod admin_routes;
 pub mod auth;
 pub mod browser_auth;
 mod browser_routes;
@@ -587,6 +588,7 @@ pub fn portal_router_with_embeddings(
         .merge(browser_routes::routes())
         .merge(personal_routes::routes())
         .merge(personal_tokens::routes())
+        .merge(admin_routes::routes())
         .merge(team_routes::routes())
         .merge(change_routes::routes())
         .merge(device_routes::routes())

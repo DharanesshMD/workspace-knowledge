@@ -723,3 +723,88 @@ async fn removing_a_member_revokes_their_personal_tokens_under_the_restricted_ro
     scoped.close().await;
     drop_role(&pool, &role).await;
 }
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn admin_created_accounts_work_under_the_restricted_application_role() {
+    let (_k, u, pool) = setup().await;
+    let (runtime, scoped, role) = restricted(&pool).await;
+    let hash = || {
+        format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        )
+    };
+    let (first, second) = (hash(), hash());
+    let services = vec!["backend".to_string()];
+    assert!(runtime.is_product_admin(&u[0], "demo").await.unwrap());
+    assert!(!runtime.is_product_admin(&u[2], "demo").await.unwrap());
+    runtime
+        .admin_create_user(
+            &u[0], "demo", "newdev", &services, false, "first", &first, 30,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .personal_token_actor(&first, "demo")
+            .await
+            .unwrap()
+            .user,
+        "newdev"
+    );
+    let listing = runtime.admin_users(&u[0], "demo").await.unwrap();
+    assert!(listing
+        .users
+        .iter()
+        .any(|m| m.user == "newdev" && m.token_only && m.tokens.len() == 1));
+    runtime
+        .admin_reissue_token(&u[0], "demo", "newdev", "second", &second, 7)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .personal_token_actor(&first, "demo")
+            .await
+            .err()
+            .unwrap(),
+        Error::Denied
+    );
+    assert_eq!(
+        runtime
+            .admin_reissue_token(&u[0], "demo", "alice", "x", &hash(), 7)
+            .await
+            .unwrap_err(),
+        Error::Denied
+    );
+    assert_eq!(
+        runtime
+            .admin_create_user(
+                &u[2],
+                "demo",
+                "bysomeone",
+                &services,
+                false,
+                "x",
+                &hash(),
+                7
+            )
+            .await
+            .unwrap_err(),
+        Error::Denied
+    );
+    runtime
+        .admin_remove_user(&u[0], "demo", "newdev")
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .personal_token_actor(&second, "demo")
+            .await
+            .err()
+            .unwrap(),
+        Error::Denied
+    );
+    scoped.close().await;
+    drop_role(&pool, &role).await;
+}

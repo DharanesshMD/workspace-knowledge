@@ -78,6 +78,18 @@ cursor ~/wk-demo/ravi-cursor
 
 To confirm who is signed in, open `https://wk.localhost:8444` and look at the account name. The **Connect** page there shows the same MCP address.
 
+## Add developers from the portal (the admin's job)
+
+`stack.py up` also creates an admin login, `owner` (password in `~/.local/share/workspace-knowledge/stack/credentials.txt`; use `--admin NAME` for another name, or `--admin none`). The admin adds developers in the portal; the developers themselves never sign in anywhere.
+
+1. Open `https://wk.localhost:8444` (trust the local CA first, step 2) and sign in as `owner`. A product admin sees an **Admin** tab; nobody else does.
+2. **Add a developer**: a name (lowercase letters, digits, `.` `-` `_`, starting with a letter), the services they may use (only ones inside your own admin scope are offered), whether they may review, and how long the token lasts. Press **Create developer and token**.
+3. The portal shows, once, a **Send this to NAME** box: one message with the MCP URL, the token, the Claude Code command and the Cursor configuration. **Copy** it and send it to the developer over a channel you trust. The token is a secret and is not shown again.
+4. The developer pastes it into their agent (Claude Code or Cursor, as in the personal-token section below) and is connected as themselves.
+5. Later, in the same tab: **Reissue token** for a lost one (the old one stops working at once), or **Remove** a developer, which revokes their access and token immediately and frees the name.
+
+What an admin can and cannot do: they work only inside their own services scope; they can issue tokens only for accounts they created, never for a developer who signs in through Keycloak; a name already used by anyone is refused, so a new account can never take over an existing one. Every create, reissue and removal is written to the audit log. Check it from the command line with `python3 deploy/stack/verify.py --admin`.
+
 ## Personal tokens: no browser sign-in (and no shared-browser mix-up)
 
 The stack switches on personal MCP tokens (`--no-personal-tokens` turns them off; the server's own default is off). A token is a revocable credential that acts as one user on one product's MCP address only; it is not accepted by the REST API, and it cannot create tokens. Use it instead of steps 4 and 5's browser sign-in, which is the simplest way to be sure which developer each agent is.

@@ -90,7 +90,7 @@ pub(crate) fn routes() -> Router<Api> {
 /// Minting, listing and revoking need a signed-in portal session (cookie, with the origin and CSRF
 /// checks `protect` applies). A short-lived identity-provider token or a personal token must not be
 /// able to turn itself into a long-lived credential.
-async fn portal_actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
+pub(crate) async fn portal_actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
     if api.personal_tokens.is_none() {
         return Err(Failure(StatusCode::NOT_FOUND, "not_found"));
     }

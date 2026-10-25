@@ -2,11 +2,11 @@ import {useEffect,useRef,useState} from 'react';
 import {ApiError,request} from './api';
 import type {Membership,PersonalTokenSettings} from './Session';
 
-const NAME='workspace-knowledge';
+export const NAME='workspace-knowledge';
 // The server sends a validated https origin plus /mcp/{product}. Treat it as untrusted text anyway:
 // only an address with no whitespace, quotes or shell metacharacters is placed in a snippet.
-const usable=(url:unknown):url is string=>typeof url==='string'&&url.length<=400&&/^https:\/\/[A-Za-z0-9.:[\]-]+\/mcp\/[A-Za-z0-9_-]+$/.test(url);
-const json=(value:unknown)=>JSON.stringify(value,null,2);
+export const usable=(url:unknown):url is string=>typeof url==='string'&&url.length<=400&&/^https:\/\/[A-Za-z0-9.:[\]-]+\/mcp\/[A-Za-z0-9_-]+$/.test(url);
+export const json=(value:unknown)=>JSON.stringify(value,null,2);
 
 async function copyText(text:string):Promise<boolean> {
  try{if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return true;}}catch{/* fall back to the selection copy below */}
@@ -16,7 +16,7 @@ async function copyText(text:string):Promise<boolean> {
  try{return document.execCommand('copy');}catch{return false;}finally{area.remove();previous?.focus?.();}
 }
 
-function CopyButton({text,label,announce}:{text:string;label:string;announce:(message:string)=>void}) {
+export function CopyButton({text,label,announce}:{text:string;label:string;announce:(message:string)=>void}) {
  const [state,setState]=useState<'idle'|'copied'|'failed'>('idle');const timer=useRef<number|undefined>(undefined);
  useEffect(()=>()=>window.clearTimeout(timer.current),[]);
  const copy=async()=>{
@@ -35,9 +35,9 @@ function Snippet({id,title,product,text,announce,children}:{id:string;title:stri
 type Tok={id:string;product:string;label:string;created_ms:number;expires_ms:number;last_used_ms:number|null};
 type Made=Tok&{token:string};
 // A token is only ever put in a snippet when it has exactly the shape the server generates.
-const shaped=(value:unknown):value is string=>typeof value==='string'&&/^wkpt_[0-9a-f]{64}$/.test(value);
-const day=(ms:number)=>new Date(ms).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'});
-const lifetimes=(max:number)=>[...new Set([...[7,30,90].filter(d=>d<=max),max])].sort((a,b)=>a-b);
+export const shaped=(value:unknown):value is string=>typeof value==='string'&&/^wkpt_[0-9a-f]{64}$/.test(value);
+export const day=(ms:number)=>new Date(ms).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'});
+export const lifetimes=(max:number)=>[...new Set([...[7,30,90].filter(d=>d<=max),max])].sort((a,b)=>a-b);
 
 function Tokens({product,url,settings,announce}:{product:string;url:string;settings:PersonalTokenSettings;announce:(message:string)=>void}) {
  const base=`connect-${product}-tokens`;const choices=lifetimes(settings.max_days);

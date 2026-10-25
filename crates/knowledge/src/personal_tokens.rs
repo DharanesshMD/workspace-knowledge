@@ -14,16 +14,16 @@ pub struct PersonalToken {
     pub expires_ms: i64,
     pub last_used_ms: Option<i64>,
 }
-fn valid_hash(v: &str) -> bool {
+pub(crate) fn valid_hash(v: &str) -> bool {
     v.len() == 64
         && v.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn valid_label(v: &str) -> bool {
+pub(crate) fn valid_label(v: &str) -> bool {
     !v.is_empty() && v.chars().count() <= 64 && !v.chars().any(char::is_control)
 }
-const COLUMNS: &str = "id,product,label,(extract(epoch FROM created_at)*1000)::bigint AS created_ms,(extract(epoch FROM expires_at)*1000)::bigint AS expires_ms,(extract(epoch FROM last_used_at)*1000)::bigint AS last_used_ms";
-fn token(r: &sqlx::postgres::PgRow) -> Result<PersonalToken, Error> {
+pub(crate) const COLUMNS: &str = "id,product,label,(extract(epoch FROM created_at)*1000)::bigint AS created_ms,(extract(epoch FROM expires_at)*1000)::bigint AS expires_ms,(extract(epoch FROM last_used_at)*1000)::bigint AS last_used_ms";
+pub(crate) fn token(r: &sqlx::postgres::PgRow) -> Result<PersonalToken, Error> {
     Ok(PersonalToken {
         id: r.try_get("id").map_err(db)?,
         product: r.try_get("product").map_err(db)?,
@@ -64,22 +64,45 @@ impl Knowledge {
         if member.is_none() {
             return Err(Error::Denied);
         }
+        let created = Self::insert_personal_token(&mut tx, a, product, label, hash, days).await?;
+        Self::token_audit(
+            &mut tx,
+            a,
+            product,
+            created.id,
+            "personal_token_create",
+            None,
+        )
+        .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(created)
+    }
+    /// The caller has already authorized creating a token for `owner`. Serializes per owner so
+    /// concurrent requests cannot exceed the cap, purges long-dead rows, and inserts.
+    pub(crate) async fn insert_personal_token(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        a: &Actor,
+        product: &str,
+        label: &str,
+        hash: &str,
+        days: u32,
+    ) -> Result<PersonalToken, Error> {
         // Serialize per user so concurrent requests cannot exceed the cap.
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
             .bind(format!("wk-token:{}:{}:{}", a.org.len(), a.org, a.user))
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(db)?;
         sqlx::query("DELETE FROM personal_tokens WHERE org=$1 AND user_id=$2 AND (expires_at<=now()-interval '30 days' OR revoked_at<=now()-interval '30 days')")
             .bind(&a.org)
             .bind(&a.user)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(db)?;
         let live: i64 = sqlx::query_scalar("SELECT count(*) FROM personal_tokens WHERE org=$1 AND user_id=$2 AND revoked_at IS NULL AND expires_at>now()")
             .bind(&a.org)
             .bind(&a.user)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await
             .map_err(db)?;
         if live >= MAX_LIVE_PER_USER {
@@ -93,13 +116,10 @@ impl Knowledge {
             .bind(product)
             .bind(label)
             .bind(days as i32)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await
             .map_err(db)?;
-        let created = token(&row)?;
-        Self::token_audit(&mut tx, a, product, created.id, "personal_token_create").await?;
-        tx.commit().await.map_err(db)?;
-        Ok(created)
+        token(&row)
     }
     /// The owner of a live token for exactly this product. Unknown, expired, revoked and
     /// other-product tokens are indistinguishable. `last_used_at` is refreshed at most once a minute.
@@ -141,7 +161,7 @@ impl Knowledge {
             .await
             .map_err(db)?
             .ok_or(Error::NotFound)?;
-        Self::token_audit(&mut tx, a, &product, id, "personal_token_revoke").await?;
+        Self::token_audit(&mut tx, a, &product, id, "personal_token_revoke", None).await?;
         tx.commit().await.map_err(db)
     }
     /// Revoke every token a user holds for a product. Run whenever the membership is removed, so
@@ -161,24 +181,24 @@ impl Knowledge {
             .map_err(db)?;
         Ok(())
     }
-    async fn token_audit(
+    pub(crate) async fn token_audit(
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         a: &Actor,
         product: &str,
         id: uuid::Uuid,
         action: &str,
+        target: Option<&str>,
     ) -> Result<(), Error> {
-        sqlx::query(
-            "INSERT INTO audit_events(org,product,user_id,action,entity_id) VALUES($1,$2,$3,$4,$5)",
-        )
-        .bind(&a.org)
-        .bind(product)
-        .bind(&a.user)
-        .bind(action)
-        .bind(id)
-        .execute(&mut **tx)
-        .await
-        .map_err(db)?;
+        sqlx::query("INSERT INTO audit_events(org,product,user_id,action,entity_id,target_user) VALUES($1,$2,$3,$4,$5,$6)")
+            .bind(&a.org)
+            .bind(product)
+            .bind(&a.user)
+            .bind(action)
+            .bind(id)
+            .bind(target)
+            .execute(&mut **tx)
+            .await
+            .map_err(db)?;
         Ok(())
     }
 }

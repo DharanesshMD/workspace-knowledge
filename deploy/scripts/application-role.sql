@@ -44,3 +44,6 @@ GRANT UPDATE(not_before) ON collector_security_epoch TO wk_app;
 
 -- Personal MCP tokens are authenticated by hash before an Actor exists, like browser_sessions.
 GRANT SELECT,INSERT,UPDATE,DELETE ON personal_tokens TO wk_app;
+
+-- Admin-created token-only developer accounts: the restricted role cannot write identities itself.
+GRANT EXECUTE ON FUNCTION wk_is_admin(TEXT),wk_admin_users(TEXT),wk_admin_token_target(TEXT,TEXT),wk_admin_create_user(TEXT,TEXT,TEXT[],BOOLEAN),wk_admin_delete_user(TEXT,TEXT) TO wk_app;

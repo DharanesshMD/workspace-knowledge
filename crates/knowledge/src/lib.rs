@@ -5,6 +5,7 @@ use sqlx::{PgPool, Row};
 use wk_contracts::CardSubmission;
 pub mod activity;
 pub mod admin;
+pub mod admin_users;
 pub mod browser;
 pub mod change_context;
 mod code_anchors;
@@ -186,7 +187,7 @@ impl Knowledge {
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db)?;
-        if versions != (1..=19).collect::<Vec<_>>() {
+        if versions != (1..=20).collect::<Vec<_>>() {
             return Err(Error::Storage);
         }
         Ok(())
@@ -224,6 +225,7 @@ impl Knowledge {
             (17, include_str!("../../../migrations/server/0017.sql")),
             (18, include_str!("../../../migrations/server/0018.sql")),
             (19, include_str!("../../../migrations/server/0019.sql")),
+            (20, include_str!("../../../migrations/server/0020.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",

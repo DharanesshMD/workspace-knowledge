@@ -265,6 +265,79 @@ async fn a_personal_token_opens_only_its_own_products_mcp_endpoint() {
     let (status, _, _) = send(&off, get("/v1/tokens", &identity_token)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
+    // Admin routes: /v1/me says who is an admin, and no bearer credential reaches the routes at all.
+    k.admin_assign(&anika, "demo", &["backend".into()])
+        .await
+        .unwrap();
+    let ravi = Actor {
+        org: org.clone(),
+        user: "ravi".into(),
+    };
+    let ravi_subject = uuid::Uuid::new_v4().to_string();
+    k.provision_identity("https://issuer.example", &ravi_subject, &ravi)
+        .await
+        .unwrap();
+    k.grant(&ravi, "demo", &["backend".into()], false)
+        .await
+        .unwrap();
+    let (ravi_identity, _) = jwt(&ravi_subject);
+    let is_admin = |body: &Value, product: &str| {
+        body["products"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["product"] == product)
+            .unwrap()["is_admin"]
+            .clone()
+    };
+    let (_, _, me) = send(&on, get("/v1/me", &identity_token)).await;
+    assert_eq!(
+        (is_admin(&me, "demo"), is_admin(&me, "other")),
+        (json!(true), json!(false))
+    );
+    let (_, _, me) = send(&on, get("/v1/me", &ravi_identity)).await;
+    assert_eq!(is_admin(&me, "demo"), json!(false));
+    let admin_path = "/v1/admin/products/demo/users";
+    let body = json!({"user":"newdev","services":["backend"],"days":30}).to_string();
+    for bearer in [
+        identity_token.as_str(),
+        token.as_str(),
+        ravi_identity.as_str(),
+    ] {
+        let with = |method: &str, uri: &str| {
+            Request::builder()
+                .method(method)
+                .uri(uri.to_string())
+                .header("authorization", format!("Bearer {bearer}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap()
+        };
+        for request in [
+            with("GET", admin_path),
+            with("POST", admin_path),
+            with("POST", &format!("{admin_path}/newdev/token")),
+            with("DELETE", &format!("{admin_path}/newdev")),
+        ] {
+            let (status, _, reply) = send(&on, request).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{reply}");
+            assert_eq!(reply["error"], "session_required");
+        }
+    }
+    // With the feature off the routes do not exist.
+    assert_eq!(
+        send(&off, get(admin_path, &identity_token)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    // Nothing was created by any of those attempts.
+    assert!(k
+        .admin_users(&anika, "demo")
+        .await
+        .unwrap()
+        .users
+        .iter()
+        .all(|u| u.user != "newdev"));
+
     // Revocation takes effect on the next request.
     k.revoke_personal_token(&anika, made.id).await.unwrap();
     let (status, _, _) = send(&on, mcp("demo", &token, search())).await;

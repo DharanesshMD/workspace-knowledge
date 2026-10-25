@@ -6,6 +6,7 @@ the hosted MCP endpoint, and check the second finds it with the first one's name
   python3 deploy/stack/verify.py [--state-dir DIR] [--domain localhost] [--sharer anika] [--finder ravi] [--tools]
   python3 deploy/stack/verify.py --tokens   # the same, with each user's personal token instead of a Keycloak sign-in
   python3 deploy/stack/verify.py --portal   # sign in to the portal, create, use and revoke a personal token through /v1/tokens
+  python3 deploy/stack/verify.py --admin    # as the admin: add a developer, use the token, reissue, remove (Admin tab's API)
 """
 import argparse, base64, hashlib, html, http.cookiejar, json, re, secrets, socket, ssl, sys, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
@@ -151,6 +152,76 @@ def portal_check(ca, origin, product, user, password):
     print("PASS: portal token lifecycle works end to end.")
 
 
+def admin_check(ca, origin, issuer, product, admin_user, passwords, other_user):
+    b, me = portal_sign_in(ca, origin, admin_user, passwords[admin_user])
+    mine = next((p for p in me["products"] if p["product"] == product), {})
+    assert mine.get("is_admin") is True, f"{admin_user} is not an admin of {product} (run stack.py up, which creates the admin)"
+    assert me.get("personal_tokens"), "personal tokens are switched off on the server"
+    print(f"ok  {admin_user} signed in to the portal and /v1/me says is_admin")
+    api = {"Origin": origin, "X-CSRF-Token": me["csrf_token"], "Content-Type": "application/json"}
+    base = f"{origin}/v1/admin/products/{product}/users"
+    mcp_url = f"{origin}/mcp/{product}"
+    name = "verify-" + secrets.token_hex(3)
+
+    def post(path, body):
+        status, text, headers = b.call(path, json.dumps(body).encode(), api)
+        return status, (json.loads(text) if text[:1] == "{" else {}), headers
+    status, text, _ = b.call(base)
+    listing = json.loads(text)
+    assert status == 200 and listing["services"] and listing["mcp_url"] == mcp_url, f"list failed: HTTP {status} {text[:200]}"
+    services = listing["services"][:1]
+    print(f"ok  the Admin list works; the admin may grant {', '.join(listing['services'])}")
+
+    status, made, headers = post(base, {"user": name, "services": services, "can_review": False, "days": 1})
+    assert status == 201 and re.fullmatch(r"wkpt_[0-9a-f]{64}", made.get("token", "")), f"create failed: HTTP {status} {made}"
+    assert made["mcp_url"] == mcp_url and headers.get("Cache-Control") == "no-store"
+    token = made["token"]
+    print(f"ok  created {name}: token and MCP URL returned once (no-store)")
+    status, text, _ = b.call(base)
+    row = next(u for u in json.loads(text)["users"] if u["user"] == name)
+    assert row["token_only"] and len(row["tokens"]) == 1 and token not in text, "the list must show the new account without any secret"
+    print("ok  the list shows the new account as token-only, with token metadata and no secret")
+
+    assert mcp_status(ca, mcp_url, token) == 200, "the new developer's token should open the MCP endpoint"
+    reply = Mcp(ca, mcp_url, token)
+    reply.rpc("initialize", {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "verify", "version": "0"}})
+    reply.tool("knowledge.search", {"query": "anything"})
+    print(f"ok  {name}'s token works on the MCP address, as {name}")
+    assert Browser(ca).call(f"{origin}/v1/me", headers={"Authorization": "Bearer " + token})[0] == 401
+    assert Browser(ca).call(base, headers={"Authorization": "Bearer " + token})[0] == 401, "a token must not reach the Admin API"
+    print("ok  the token is refused on the REST API and the Admin API")
+
+    assert post(base, {"user": name, "services": services, "days": 1})[0] == 409
+    assert post(base, {"user": other_user, "services": services, "days": 1})[0] == 409, "an existing signed-in developer's name must be refused"
+    assert post(base, {"user": "Bad Name", "services": services, "days": 1})[0] == 422
+    assert post(base, {"user": name + "x", "services": ["not-a-service"], "days": 1})[0] == 403
+    assert post(base, {"user": name + "y", "services": services, "days": 9999})[0] == 422
+    print("ok  a taken name, another developer's name, a bad name, a service outside the admin's scope and a too-long lifetime are all refused")
+
+    status, again, _ = post(f"{base}/{name}/token", {"days": 1})
+    assert status == 200 and again["token"] != token and mcp_status(ca, mcp_url, again["token"]) == 200
+    assert mcp_status(ca, mcp_url, token) == 401, "reissuing must revoke the old token"
+    status, _, _ = post(f"{base}/{other_user}/token", {"days": 1})
+    assert status == 403, "an admin must not mint a token for a signed-in developer"
+    print("ok  reissue replaces the token (old one 401); minting for a signed-in developer is refused")
+
+    rb, rme = portal_sign_in(ca, origin, other_user, passwords[other_user])
+    assert next(p for p in rme["products"] if p["product"] == product)["is_admin"] is False
+    rapi = {"Origin": origin, "X-CSRF-Token": rme["csrf_token"], "Content-Type": "application/json"}
+    assert rb.call(base)[0] == 403
+    assert rb.call(base, json.dumps({"user": "sneaky", "services": services, "days": 1}).encode(), rapi)[0] == 403
+    print(f"ok  {other_user} (not an admin) cannot list or create")
+
+    assert b.call(f"{base}/{name}", headers=api, method="DELETE")[0] == 200
+    assert mcp_status(ca, mcp_url, again["token"]) == 401, "removal must revoke the token at once"
+    status, reborn, _ = post(base, {"user": name, "services": services, "days": 1})
+    assert status == 201, "the name should be free again after removal"
+    assert mcp_status(ca, mcp_url, again["token"]) == 401 and mcp_status(ca, mcp_url, token) == 401, "a recreated name inherits no old token"
+    assert b.call(f"{base}/{name}", headers=api, method="DELETE")[0] == 200
+    print("ok  removal revokes the token, frees the name, and a recreated name inherits nothing")
+    print("PASS: the admin can add, hand over, reissue and remove developers end to end.")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--state-dir", default="~/.local/share/workspace-knowledge/stack")
@@ -164,6 +235,8 @@ def main():
     p.add_argument("--withdraw", action="append", default=[], metavar="CARD_ID", help="withdraw an earlier test card (as the sharer) and stop")
     p.add_argument("--tokens", action="store_true", help="authenticate the MCP calls with each user's personal token (from `stack.py token`)")
     p.add_argument("--portal", action="store_true", help="check the portal's token create/list/revoke routes as the sharer, then stop")
+    p.add_argument("--admin", action="store_true", help="check the Admin tab's API as the admin user, then stop")
+    p.add_argument("--admin-user", default="owner", help="the portal admin (created by stack.py up)")
     p.add_argument("--tools", action="store_true", help="print the tool list and schemas, then stop")
     a = p.parse_args()
     state = Path(a.state_dir).expanduser()
@@ -171,6 +244,8 @@ def main():
     ca = str(state / "certs/ca.pem")
     origin = f"https://wk.{a.domain}:{a.app_port}"
     issuer = f"https://sso.{a.domain}:{a.kc_port}/realms/wk"
+    if a.admin:
+        return admin_check(ca, origin, issuer, a.product, a.admin_user, secrets_["users"], a.finder)
     if a.portal:
         return portal_check(ca, origin, a.product, a.sharer, secrets_["users"][a.sharer])
     mcp = {}

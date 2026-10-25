@@ -50,6 +50,15 @@ class Stack:
         self.app_origin = f"https://wk.{args.domain}:{args.app_port}"
         self.issuer = f"{self.kc_origin}/realms/{REALM}"
         self.users = [self.parse_user(u) for u in (args.user or DEFAULT_USERS)]
+        # The admin signs in to the portal's Admin tab to add token-only developers. A new admin gets every
+        # service in scope; naming one of the --user accounts makes that account the admin instead.
+        every = sorted({svc for u in self.users for svc in u["services"]} | {"backend", "frontend"})
+        named = [u for u in self.users if u["name"] == args.admin]
+        if args.admin.lower() == "none":
+            self.admin = None
+        else:
+            self.admin = named[0] if named else self.parse_user(f"{args.admin}:{','.join(every)}:review")
+        self.accounts = self.users + ([self.admin] if self.admin and not named else [])
 
     @staticmethod
     def parse_user(spec):
@@ -93,7 +102,7 @@ class Stack:
         s.setdefault("kc_admin", secrets.token_urlsafe(18))
         s.setdefault("portal", secrets.token_urlsafe(24))
         s.setdefault("users", {})
-        for u in self.users:
+        for u in self.accounts:
             s["users"].setdefault(u["name"], secrets.token_urlsafe(15))
         path.write_text(json.dumps(s, indent=1))
         path.chmod(0o600)
@@ -103,7 +112,7 @@ class Stack:
             f"https://wk.{a.domain}:{a.app_port} {{\n  tls /certs/leaf.pem /certs/leaf.key\n  reverse_proxy app:8080\n}}\n")
         (self.state / "Caddyfile").chmod(0o644)
         cred = [f"Keycloak admin: {self.kc_origin}  user admin  password {s['kc_admin']}", f"Portal / MCP server: {self.app_origin}", ""]
-        cred += [f"{u['name']}  password {s['users'][u['name']]}" for u in self.users]
+        cred += [f"{u['name']}  password {s['users'][u['name']]}" + ("  (admin: Admin tab in the portal)" if u is self.admin else "") for u in self.accounts]
         (self.state / "credentials.txt").write_text("\n".join(cred) + "\n")
         (self.state / "credentials.txt").chmod(0o600)
         env = {
@@ -177,7 +186,7 @@ class Stack:
                                form={"grant_type": "password", "client_id": "admin-cli", "username": "admin", "password": self.secrets["kc_admin"]})
         token = tok["access_token"]
         ids = {}
-        for u in self.users:
+        for u in self.accounts:
             admin = f"{self.kc_origin}/admin/realms/{REALM}/users"
             found = self.https("GET", f"{admin}?username={u['name']}&exact=true", token=token)[1]
             if not found:
@@ -206,9 +215,11 @@ class Stack:
                  f"ALTER ROLE wk_app PASSWORD '{self.secrets['db_app']}';\n" + (ROOT / "deploy/scripts/application-role.sql").read_text())
         say("creating Keycloak users and provisioning their memberships")
         ids = self.keycloak_users()
-        for u in self.users:
+        for u in self.accounts:
             self.operator("provision", {"issuer": self.issuer, "subject": ids[u["name"]], "org": self.a.org, "user": u["name"],
                                         "product": self.a.product, "services": u["services"], "can_review": u["review"]})
+        if self.admin:
+            self.operator("admin-assign", {"org": self.a.org, "user": self.admin["name"], "product": self.a.product, "services": self.admin["services"]})
         say("enabling native MCP sign-in for Claude Code, Cursor, VS Code and Claude connectors")
         hosts = [x for h in TRUSTED_HOSTS for x in ("--trusted-host", h)]
         run(sys.executable, str(ROOT / "deploy/keycloak/enable-remote-mcp-signin.py"), "--keycloak", self.kc_origin, "--audience", self.app_origin,
@@ -229,6 +240,7 @@ Stack is up.
   Private CA:    {ca}  (trust it in your OS/browser, and give Claude Code NODE_EXTRA_CA_CERTS={ca})
   Credentials:   {self.state / 'credentials.txt'}
   Users:         {', '.join(u['name'] + ' (' + ','.join(u['services']) + (', reviewer' if u['review'] else '') + ')' for u in self.users)}
+  Admin:         {self.admin['name'] + ' signs in at ' + self.app_origin + ' and uses the Admin tab to add developers' if self.admin else 'none (--admin none)'}
 Product '{self.a.product}'. Add a user later by running `up` again with another --user.""")
 
     def token(self):
@@ -283,6 +295,7 @@ def main():
     p.add_argument("--bind", default="127.0.0.1", help="host address for the published ports; 0.0.0.0 for a server other people reach")
     p.add_argument("--product", default="demo")
     p.add_argument("--org", default="local")
+    p.add_argument("--admin", default="owner", metavar="NAME", help="portal admin who can add token-only developers in the Admin tab; 'none' to skip")
     p.add_argument("--user", action="append", metavar="NAME[:svc,svc[:review]]", help=f"repeatable; default {' '.join(DEFAULT_USERS)}")
     p.add_argument("--image", default="wk-server:local", help="built from deploy/Dockerfile when missing")
     p.add_argument("--tls-cert", help="PEM chain for sso.DOMAIN and wk.DOMAIN (e.g. from your CA); with --tls-key. Otherwise a private CA is created")
