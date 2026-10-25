@@ -490,12 +490,19 @@ pub(crate) async fn transport(
     if api.knowledge.policy(&actor, &product).await.is_err() {
         return crate::Failure(axum::http::StatusCode::FORBIDDEN, "forbidden").into_response();
     }
+    let public_host = resource(&api)
+        .ok()
+        .and_then(|r| reqwest::Url::parse(&r).ok())
+        .and_then(|u| u.host_str().map(str::to_string));
     let handler = KnowledgeMcp {
         api,
         actor,
         product,
     };
     let mut config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default();
+    // The SDK's DNS-rebinding guard accepts only loopback Host names by default; the operator's
+    // validated public hostname must pass it too, or every non-localhost deployment answers 403.
+    config.allowed_hosts.extend(public_host);
     config.legacy_session_mode = false;
     config.json_response = true;
     config.max_request_body_bytes = 65536;

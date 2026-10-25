@@ -1,0 +1,29 @@
+# Single-host stack: layered over deploy/compose/compose.yaml and deploy/compose/keycloak.yaml by
+# deploy/stack/stack.py. It adds what those templates leave to the operator: the private CA for the
+# server's calls to Keycloak, the HTTPS reverse proxy, and network aliases so that containers and
+# browsers use the same https://sso.DOMAIN and https://wk.DOMAIN addresses.
+name: wk-stack
+services:
+  app:
+    image: ${WK_IMAGE:-wk-server:local}
+    volumes:
+      - ${WK_STACK_DIR:?}/certs/ca.pem:/etc/wk/ca.pem:ro
+  keycloak:
+    networks:
+      default:
+        aliases: ['sso.${WK_DOMAIN:?}']
+  caddy:
+    image: caddy:2-alpine
+    volumes:
+      - ${WK_STACK_DIR:?}/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${WK_STACK_DIR:?}/certs/leaf.pem:/certs/leaf.pem:ro
+      - ${WK_STACK_DIR:?}/certs/leaf.key:/certs/leaf.key:ro
+    ports: ['${WK_PROXY_BIND:-127.0.0.1}:${WK_APP_PORT:-8444}:${WK_APP_PORT:-8444}']
+    networks:
+      default:
+        aliases: ['wk.${WK_DOMAIN:?}']
+    depends_on: [app]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ['no-new-privileges:true']
+    restart: unless-stopped

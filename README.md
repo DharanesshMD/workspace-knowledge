@@ -252,7 +252,7 @@ The server container includes both the API and portal. The deployment template s
 4. Use the protected operator connection for migrations, runtime-role grants and initial provisioning.
 5. Start the restricted application, then verify sign-in, membership isolation, readiness, retention and backup/restore in your deployment.
 
-Start with [the complete server setup](docs/operations/install.md#host-a-team-server) and [Compose template](deploy/compose/compose.yaml). For Keycloak, a prefilled realm and a one-login MCP bridge, follow the [Keycloak quick start](docs/operations/quick-start-keycloak.md). Starting Compose alone does not provision identity or database roles. Production configuration has no browser token-paste fallback.
+Start with [the complete server setup](docs/operations/install.md#host-a-team-server) and [Compose template](deploy/compose/compose.yaml). For Keycloak, a prefilled realm and a one-login MCP bridge, follow the [Keycloak quick start](docs/operations/quick-start-keycloak.md). To try it with two developers in Claude Code and Cursor on one machine, see [local Docker test](docs/operations/local-docker-test.md); to have an AI agent set a server up over SSH, see [agent install](docs/operations/agent-install.md). Starting Compose alone does not provision identity or database roles. Production configuration has no browser token-paste fallback.
 
 ## Code-change context
 

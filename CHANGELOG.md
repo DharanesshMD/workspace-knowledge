@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed: the hosted MCP endpoint (`/mcp/{product}`) answered `403 Host header is not allowed` for every request unless the server was reached as `localhost`, because the MCP SDK's DNS-rebinding guard accepts only loopback names by default. The host of the configured `WK_MCP_RESOURCE` is now allowed as well, so deployments on a real hostname work.
+- New `deploy/stack/`: `stack.py up|down|status` brings up PostgreSQL, Keycloak, the server and an HTTPS proxy on one Docker host with migrations, the restricted role, Keycloak users, memberships and native MCP sign-in, and is safe to repeat; `verify.py` checks two users end to end through the hosted MCP endpoint; `make-demo-folders.sh` creates one demo project per tool. Guides: [two-developer local test](docs/operations/local-docker-test.md) and [setup by an AI agent over SSH](docs/operations/agent-install.md).
+
 ## v0.1.0-alpha.4 — source-only prerelease (draft; not tagged or published yet)
 
 Changes since `v0.1.0-alpha.3`.
