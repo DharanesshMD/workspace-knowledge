@@ -203,7 +203,7 @@ pub fn client(id: &str, mcp_url: &str, auto_share: bool) -> Option<ClientSetup> 
             name: "Cursor",
             summary: "A project file that reads the token from an environment variable.".into(),
             steps: vec![
-                format!("Export the token, then start Cursor from that shell so it sees it (an app opened from the Dock does not): export {TOKEN_ENV}=<your token>; open -a Cursor ."),
+                format!("Quit Cursor completely first (a running Cursor ignores a new environment), then start it from a shell that has the token (an app opened from the Dock does not see it): export {TOKEN_ENV}=<your token>; open -a Cursor ."),
                 "Save .cursor/mcp.json (safe to commit: no secret) and the rule file below.".into(),
                 "In Cursor, open Settings, Tools & MCP, and check the server shows its tools.".into(),
             ],

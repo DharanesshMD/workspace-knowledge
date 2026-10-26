@@ -61,7 +61,7 @@ and save `AGENTS.md` at the project root. The variable must be set in the shell 
 
 ### Cursor
 
-Start Cursor from a shell where `WK_TOKEN` is exported (`open -a Cursor .`); an app opened from the Dock does not see your shell's variables. Save `.cursor/mcp.json` and the rule file, then check Settings, Tools & MCP shows the server's tools. If Cursor sends the literal text `${env:WK_TOKEN}` instead of the token (a bug some versions had with remote servers), put the header value in your user-level `~/.cursor/mcp.json` and keep that file private.
+Quit Cursor completely, then start it from a shell where `WK_TOKEN` is exported (`open -a Cursor .`). A Cursor that is already running ignores a new environment, and an app opened from the Dock does not see your shell's variables. Save `.cursor/mcp.json` and the rule file, then check Settings, Tools & MCP shows the server's tools. If Cursor sends the literal text `${env:WK_TOKEN}` instead of the token (a bug some versions had with remote servers), put the header value in your user-level `~/.cursor/mcp.json` and keep that file private.
 
 ### VS Code (GitHub Copilot)
 

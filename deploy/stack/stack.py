@@ -9,6 +9,7 @@ failure or to add users; secrets and certificates in the state directory are reu
   python3 deploy/stack/stack.py up                       # local: https://sso.localhost:8443, https://wk.localhost:8444
   python3 deploy/stack/stack.py up --domain wk.example.com --bind 0.0.0.0 --user alice:backend:review
   python3 deploy/stack/stack.py token [--user NAME ...]  # mint a personal MCP token per user (written to state-dir/tokens/, never printed)
+  python3 deploy/stack/stack.py desktop-config [--user NAME]   # point Claude Desktop at the stack as NAME (wk-mcp proxy + that user's token)
   python3 deploy/stack/stack.py status | down [--volumes]
 
 Without --tls-cert/--tls-key it creates a private CA (state-dir/certs/ca.pem) that clients must trust.
@@ -267,6 +268,38 @@ Use a token without a browser sign-in (example for the first user):
   Cursor: "headers": {{"Authorization": "Bearer ${{env:WK_TOKEN}}"}} in mcp.json, started from a shell that has WK_TOKEN set.
 Each user may hold 5 live tokens; revoke them in the portal's Connect page.""")
 
+    def desktop_config(self):
+        """Add (or replace) the `workspace-knowledge` entry in Claude Desktop's settings so it runs `wk-mcp proxy` with this
+        user's token and the stack's CA. Claude Desktop starts local helpers without a shell, so the token has to live in
+        this file; it is made private (0600) and the previous file is kept beside it as .wk-backup."""
+        self.prepare_env_only()
+        name = self.users[0]["name"]
+        token_file = self.state / "tokens" / f"{name}.token"
+        if not token_file.exists():
+            sys.exit(f"no token for {name}: run `python3 deploy/stack/stack.py token --user {name}` first")
+        binary = shutil.which("wk-mcp") or str(Path.home() / ".local/bin/wk-mcp")
+        probe = run(binary, "proxy", "--help", check=False, quiet=True)
+        if probe.returncode:
+            sys.exit(f"{binary} has no `proxy` command. Install the current build: install -m 755 target/release/wk-mcp ~/.local/bin/wk-mcp")
+        path = Path(self.a.config or "~/Library/Application Support/Claude/claude_desktop_config.json").expanduser()
+        entry = {"command": binary, "args": ["proxy", "--url", f"{self.app_origin}/mcp/{self.a.product}"],
+                 "env": {"WK_TOKEN": token_file.read_text().strip(), "WK_SERVER_CA_FILE": str(self.state / "certs/ca.pem")}}
+        shown = json.dumps({**entry, "env": {**entry["env"], "WK_TOKEN": "(" + name + "'s token, not shown)"}}, indent=2)
+        if self.a.print_only:
+            print(f"Would set mcpServers.workspace-knowledge in {path}:\n{shown}")
+            return
+        config = json.loads(path.read_text()) if path.exists() else {}
+        backup = path.with_name(path.name + ".wk-backup")
+        if path.exists() and not backup.exists():
+            shutil.copy2(path, backup)
+            backup.chmod(0o600)
+        config.setdefault("mcpServers", {})["workspace-knowledge"] = entry
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n")
+        path.chmod(0o600)
+        say(f"Claude Desktop will connect as {name}. Other servers in the file were kept; the file is now private (0600).")
+        print(f"{path}\n{shown}\nQuit Claude Desktop completely (Cmd+Q) and reopen it.")
+
     def status(self):
         self.prepare_env_only()
         self.compose("ps")
@@ -287,7 +320,7 @@ Each user may hold 5 live tokens; revoke them in the portal's Connect page.""")
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("command", choices=["up", "down", "status", "token"])
+    p.add_argument("command", choices=["up", "down", "status", "token", "desktop-config"])
     p.add_argument("--state-dir", default="~/.local/share/workspace-knowledge/stack", help="certificates, secrets, credentials.txt (outside the repo)")
     p.add_argument("--domain", default="localhost", help="sso.DOMAIN and wk.DOMAIN; the default works on a Mac without DNS or hosts-file edits")
     p.add_argument("--kc-port", default="8443")
@@ -303,6 +336,8 @@ def main():
     p.add_argument("--ca-file", help="CA bundle for --tls-cert when it is a private CA (default: the cert itself)")
     p.add_argument("--personal-tokens", action=argparse.BooleanOptionalAction, default=True,
                    help="enable personal MCP tokens on the server (on for this evaluation stack; the server's own default is off)")
+    p.add_argument("--config", help="desktop-config: the Claude Desktop settings file (default: the macOS location)")
+    p.add_argument("--print", dest="print_only", action="store_true", help="desktop-config: show what would change, write nothing")
     p.add_argument("--label", default="stack", help="token: the name shown in the portal")
     p.add_argument("--days", type=int, default=30, help="token: lifetime in days (1 to 90)")
     p.add_argument("--volumes", action="store_true", help="down: also delete database and Keycloak data")
@@ -311,7 +346,7 @@ def main():
         p.error("--days must be between 1 and 90")
     if bool(args.tls_cert) != bool(args.tls_key):
         p.error("--tls-cert and --tls-key go together")
-    getattr(Stack(args), args.command)()
+    getattr(Stack(args), args.command.replace("-", "_"))()
 
 
 if __name__ == "__main__":

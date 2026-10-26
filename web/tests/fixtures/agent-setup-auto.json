@@ -128,7 +128,7 @@
         "If Cursor sends the text ${env:WK_TOKEN} instead of the token (a bug some versions had), put the header value in your user-level ~/.cursor/mcp.json as a literal and keep that file private."
       ],
       "steps": [
-        "Export the token, then start Cursor from that shell so it sees it (an app opened from the Dock does not): export WK_TOKEN=<your token>; open -a Cursor .",
+        "Quit Cursor completely first (a running Cursor ignores a new environment), then start it from a shell that has the token (an app opened from the Dock does not see it): export WK_TOKEN=<your token>; open -a Cursor .",
         "Save .cursor/mcp.json (safe to commit: no secret) and the rule file below.",
         "In Cursor, open Settings, Tools & MCP, and check the server shows its tools."
       ],
