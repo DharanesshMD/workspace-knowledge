@@ -1,4 +1,6 @@
 import {test,expect,type Page,type Route} from '@playwright/test';
+import {readFileSync} from 'node:fs';
+const fixture=(name:string)=>JSON.parse(readFileSync(new URL(`./fixtures/${name}`,import.meta.url),'utf8'));
 const url='https://wk.example/mcp/alpha';
 const secret=`wkpt_${'cd34'.repeat(16)}`;
 const secret2=`wkpt_${'ef56'.repeat(16)}`;
@@ -17,6 +19,7 @@ async function setup(page:Page,o:Opts={}){
  await page.route('**/v1/me',r=>r.fulfill({json:{user:'owner',org:'team',csrf_token:'csrf-9',personal_tokens:o.settings===undefined?{max_days:90}:o.settings,
   products:[{product:'alpha',services:['backend','frontend'],can_review:true,policy_revision:1,mcp_url:url,is_admin:admin}]}}));
  await page.route('**/personal',r=>r.fulfill({json:{summaries:[],next_cursor:null}}));
+ await page.route('**/v1/products/alpha/agent-setup**',r=>r.fulfill({json:fixture(r.request().url().includes('auto_share=true')?'agent-setup-auto.json':'agent-setup.json')}));
  await page.route('**/v1/tokens**',r=>r.fulfill({json:{tokens:[]}}));
  await page.route('**/v1/admin/products/alpha/users**',async r=>{
   const req=r.request();const path=new URL(req.url()).pathname;
@@ -74,10 +77,19 @@ test('creating a developer sends the right request and shows a one-time message 
  const share=page.getByRole('region',{name:'Share with developer'});
  await expect(share.getByRole('heading',{name:'Send this to jo'})).toBeVisible();
  await expect(share).toContainText('shown only once');
- const shown=await share.locator('.share-message code').innerText();
- for(const line of [`MCP URL: ${url}`,`export WK_TOKEN=${secret}`,`claude mcp add --transport http workspace-knowledge ${url} --header "Authorization: Bearer $WK_TOKEN"`,'.cursor/mcp.json','Bearer ${env:WK_TOKEN}'])expect(shown).toContain(line);
- // The Cursor configuration inside the message is valid JSON and holds no secret.
- const jsonPart=shown.slice(shown.indexOf('{'),shown.lastIndexOf('}')+1);
+ // The message is built for the agent the developer will use; Claude Code is the default.
+ const message=share.locator('.share-message code');
+ await expect(share.getByRole('radio',{name:'Claude Code'})).toBeChecked();
+ let shown=await message.innerText();
+ for(const line of [`MCP URL: ${url}`,`export WK_TOKEN=${secret}`,`claude mcp add --transport http workspace-knowledge ${url} --header "Authorization: Bearer $WK_TOKEN"`,'save as .mcp.json','save as CLAUDE.md','knowledge.team_work','Check it works'])expect(shown).toContain(line);
+ expect(shown).not.toContain('<your token>');
+ // Choosing Cursor rebuilds it for Cursor: its files, its header form, and still the real token.
+ await share.getByRole('radio',{name:'Cursor'}).check();
+ shown=await message.innerText();
+ for(const line of ['save as .cursor/mcp.json','save as .cursor/rules/workspace-knowledge.mdc','Bearer ${env:WK_TOKEN}',`export WK_TOKEN=${secret}`])expect(shown).toContain(line);
+ expect(shown).not.toContain('save as .mcp.json');
+ // The configuration inside it is valid JSON and holds no secret; the secret is only in the token lines.
+ const jsonPart=shown.slice(shown.indexOf('{\n  "mcpServers"'),shown.indexOf('}\n}\n')+3);
  expect(JSON.parse(jsonPart)).toEqual({mcpServers:{'workspace-knowledge':{url,headers:{Authorization:'Bearer ${env:WK_TOKEN}'}}}});
  expect(jsonPart).not.toContain(secret);
  // One button copies exactly what is shown; the pieces copy separately.

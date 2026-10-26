@@ -38,11 +38,15 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
 
 Quit and reopen Cursor and the browser afterwards. Firefox uses its own store, so use Safari or Chrome. Claude Code takes the CA from an environment variable instead (step 4).
 
-## 3. Create the two project folders
+> The per-agent files (connection config and standing instructions) for all five supported agents are in [connect your agent](connect-your-agent.md). The demo script below writes them for you from the server's own setup endpoint.
+
+## 3. Create the project folders
 
 ```sh
 deploy/stack/make-demo-folders.sh
 ```
+
+It signs in as `ravi`, asks the server for the setup, and writes one folder per agent: `anika-claude-code`, `anika-claude-desktop`, `ravi-codex`, `ravi-cursor` and `anika-vscode`, each with that agent's files (no token in any of them; start the agent from a shell with `WK_TOKEN` exported).
 
 This creates `~/wk-demo/anika-claude-code`, `~/wk-demo/anika-claude-desktop` and `~/wk-demo/ravi-cursor`, clones of a tiny shop repo (`backend/retry.rs` retries a payment three times). Each has the MCP address configured (`.mcp.json` for Claude Code, `.cursor/mcp.json` for Cursor) and a short project rule that tells the agent to check for teammates' work before editing and to share what it did afterwards.
 

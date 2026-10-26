@@ -7,6 +7,7 @@ mod approval;
 mod folder;
 mod login;
 mod net;
+mod proxy;
 mod session;
 mod store;
 #[cfg(test)]
@@ -908,6 +909,16 @@ enum Command {
         #[arg(long, env = "WK_SERVER_URL")]
         server: String,
     },
+    /// Forward a client that can only start a local process (Claude Desktop) to one product's hosted MCP
+    /// endpoint with a personal token. The token comes from the WK_TOKEN environment variable.
+    Proxy {
+        /// The product's MCP address, https://HOST/mcp/PRODUCT
+        #[arg(long, env = "WK_MCP_URL")]
+        url: String,
+        /// PEM bundle for a server behind a private CA (replaces public roots).
+        #[arg(long, env = "WK_SERVER_CA_FILE")]
+        ca_file: Option<std::path::PathBuf>,
+    },
 }
 #[tokio::main]
 async fn main() {
@@ -955,6 +966,13 @@ async fn command_run(command: Command) -> Result<(), String> {
             )
             .await?;
             println!("{}", login::summary(&origin, &outcome));
+        }
+        Command::Proxy { url, ca_file } => {
+            let token = std::env::var(wk_contracts::agent_setup::TOKEN_ENV)
+                .map_err(|_| format!("{} is required", wk_contracts::agent_setup::TOKEN_ENV))?;
+            let proxy =
+                proxy::Proxy::new(&url, &token, net::trust(ca_file.as_deref())?.as_deref())?;
+            return proxy::run_stdio(&proxy).await;
         }
         Command::Logout { server } => {
             let origin = net::server_origin(&server)?;

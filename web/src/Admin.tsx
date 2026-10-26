@@ -1,6 +1,7 @@
 import {useEffect,useState,type FormEvent} from 'react';
 import {ApiError,request} from './api';
-import {CopyButton,NAME,day,json,lifetimes,shaped,usable} from './Connect';
+import {CopyButton,day,lifetimes,shaped,usable} from './common';
+import {ClientChooser,setupMessage,useAgentSetup} from './AgentSetup';
 import type {PersonalTokenSettings} from './Session';
 
 type Tok={id:string;label:string;created_ms:number;expires_ms:number;last_used_ms:number|null};
@@ -8,26 +9,6 @@ type User={user:string;services:string[];can_review:boolean;token_only:boolean;t
 type Listing={services:string[];users:User[];mcp_url:string|null};
 type Issued={user:string;product:string;token:string;expires_ms:number;mcp_url:string|null};
 
-// Everything the developer needs, in one message the admin can paste into chat or email. It contains a
-// secret, so the portal shows it once and only builds it from a token and address with the expected shape.
-export function shareMessage({user,product,token,expires_ms,mcp_url}:Issued):string|null {
- if(!shaped(token)||!usable(mcp_url))return null;
- return [
-  `Workspace Knowledge access for ${user} (product ${product})`,
-  '',
-  `MCP URL: ${mcp_url}`,
-  `Token (keep it private, valid until ${day(expires_ms)}): ${token}`,
-  '',
-  'Claude Code:',
-  `  export WK_TOKEN=${token}`,
-  `  claude mcp add --transport http ${NAME} ${mcp_url} --header "Authorization: Bearer $WK_TOKEN"`,
-  '',
-  'Cursor: save this as .cursor/mcp.json, then start Cursor from a terminal where WK_TOKEN is exported:',
-  json({mcpServers:{[NAME]:{url:mcp_url,headers:{Authorization:'Bearer ${env:WK_TOKEN}'}}}}),
-  '',
-  'If you lose the token, ask me for a new one; the old one then stops working.',
- ].join('\n');
-}
 const reason=(e:unknown,what:string)=>e instanceof ApiError
  ?e.status===409?'That name is already used by another developer. Choose a different one.'
  :e.status===403?'You are not allowed to do that. Check that the services are within your admin scope.'
@@ -43,6 +24,8 @@ export function Admin({product,settings}:{product:string;settings:PersonalTokenS
  const [days,setDays]=useState(choices.includes(30)?30:choices[choices.length-1]);
  const [busy,setBusy]=useState(false);const [error,setError]=useState('');const [confirming,setConfirming]=useState<string|null>(null);
  const [message,setMessage]=useState('');const [count,setCount]=useState(0);
+ const [clientId,setClientId]=useState('claude-code');const [autoShare,setAutoShare]=useState(false);
+ const {setup,failed:setupFailed}=useAgentSetup(product,autoShare);
  const announce=(text:string)=>{setMessage(text);setCount(n=>n+1);};
  const load=(signal?:AbortSignal)=>request<Listing>('',path,undefined,undefined,signal).then(setListing);
  useEffect(()=>{
@@ -67,7 +50,8 @@ export function Admin({product,settings}:{product:string;settings:PersonalTokenS
   await request('',`${path}/${encodeURIComponent(u.user)}`,undefined,'DELETE');
   setConfirming(null);if(issued?.user===u.user)setIssued(null);await load();announce(`Removed ${u.user}.`);
  },'The developer could not be removed.');
- const text=issued?shareMessage(issued):null;
+ const client=setup?(setup.clients.find(c=>c.id===clientId)??setup.clients[0]):undefined;
+ const text=issued&&setup&&client?setupMessage(client,setup,issued):null;
  return <div className="admin-view">
   <p className="intro">Add a developer and send them their access. They never sign in: they paste the token and address you send into their agent. Each token works as that developer on this product only.</p>
   {error&&<p role="alert" className="error">{error}</p>}
@@ -85,10 +69,16 @@ export function Admin({product,settings}:{product:string;settings:PersonalTokenS
   {issued&&<section className="panel token-once" aria-label="Share with developer">
    <h2>Send this to {issued.user}</h2>
    <p role="note"><strong>This is shown only once.</strong> It contains {issued.user}’s secret token. Send it over a channel you trust; if it is lost, reissue it below.</p>
+   {setup&&setup.clients.length>0&&<>
+    <ClientChooser setup={setup} selected={client?.id??clientId} onSelect={setClientId} legend={`Which agent will ${issued.user} use?`}/>
+    <label className="checkbox"><input type="checkbox" checked={autoShare} onChange={e=>setAutoShare(e.target.checked)}/>Tell the agent to share finished work automatically (otherwise only when asked)</label>
+   </>}
    {text?<>
     <pre className="share-message"><code>{text}</code></pre>
     <CopyButton text={text} label={`message for ${issued.user}`} announce={announce}/>
-   </>:<p role="alert" className="error">The server did not return a usable MCP address, so the message cannot be built. Ask your administrator to check WK_MCP_RESOURCE, then reissue this token.</p>}
+   </>:!usable(issued.mcp_url)?<p role="alert" className="error">The server did not return a usable MCP address, so the message cannot be built. Ask your administrator to check WK_MCP_RESOURCE, then reissue this token.</p>
+   :setupFailed?<p role="alert" className="error">The setup instructions could not be loaded, so the message cannot be built. Reload the page; the token and address below can still be copied.</p>
+   :<p className="muted" role="status">Preparing the message…</p>}
    <div className="copy-row"><label htmlFor={`${base}-token`}>Token<input id={`${base}-token`} readOnly value={shaped(issued.token)?issued.token:''} onFocus={e=>e.currentTarget.select()} spellCheck={false}/></label>{shaped(issued.token)&&<CopyButton text={issued.token} label={`token for ${issued.user}`} announce={announce}/>}</div>
    {usable(issued.mcp_url)&&<div className="copy-row"><label htmlFor={`${base}-url`}>MCP URL<input id={`${base}-url`} readOnly value={issued.mcp_url} onFocus={e=>e.currentTarget.select()} spellCheck={false}/></label><CopyButton text={issued.mcp_url} label={`MCP URL for ${issued.user}`} announce={announce}/></div>}
    <button type="button" onClick={()=>setIssued(null)}>I have sent it</button>
