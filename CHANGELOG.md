@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Updated Tokio to 1.53.3 for RUSTSEC-2026-0386; dependency CI now rejects unsoundness warnings. The fresh local audit has no vulnerability findings and retains four unmaintained-package notices.
+
 - Repeatable source-installed Codex and Antigravity onboarding: `wk-connect connect|check|disconnect` validates authenticated MCP access before changing settings, keeps token/CA files private, preserves other servers and tool policies, and refuses conflicting configuration edits. `wk-mcp proxy --token-file` lets IDEs execute the native proxy without custom launchers or credentials in IDE settings. The source installer now includes six commands and requires Python 3.11+. See [setup](docs/operations/client-onboarding.md) and [local lifecycle acceptance](docs/reviews/2026-11-07-client-onboarding-acceptance.md).
 
 - Local IDE acceptance fixes: read-only MCP tools advertise their side effects so approval-aware clients can retrieve context without treating a lookup as a write; mutating tools retain their existing approval behavior. Team-work entries now expose `published` separately from implementation `lifecycle`, including compact replies. Compose forwards `WK_AUTO_PUBLISH_PRODUCTS`, the populated-server verifier scopes its keyword probe to a unique fixture, and the current-main installation guide describes schema 21 and publication defaults. See [local Codex/Antigravity acceptance](docs/reviews/2026-11-07-local-ide-acceptance.md).

@@ -1,5 +1,7 @@
 # v0.1.0-alpha.4: draft release notes and owner checklist
 
+**Historical draft:** the notes below describe the 2026-10-24 candidate, not the current tree. Do not use its schema-18 upgrade instructions for current source; follow the [current installation guide](install.md), which requires schema 21. Current MCP onboarding, model-driven client evidence and release gates are recorded in the [readiness ledger](production-readiness.md). Rewrite this draft for the exact tested release commit before publishing it.
+
 **Status: draft. No tag or GitHub release exists for alpha.4.** The latest published release is the source-only `v0.1.0-alpha.3` prerelease. Cut alpha.4 only after the checklist below. The code was verified locally at commit `b5e72f7`; the tag goes on the documentation-only commit that records that SHA here, so the tagged tree differs from `b5e72f7` by this file alone. Nothing here makes the project production-supported: see the [production readiness ledger](production-readiness.md).
 
 ## Draft release notes
