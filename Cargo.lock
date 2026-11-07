@@ -4119,6 +4119,7 @@ dependencies = [
  "clap",
  "jsonwebtoken",
  "keyring",
+ "libc",
  "reqwest",
  "rmcp",
  "serde",

@@ -182,7 +182,7 @@ From the cloned checkout on macOS/Linux:
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The installer builds and installs all five user tools into `~/.local/bin` by default. Use `WK_PREFIX` for another user-owned prefix. It does not enable capture, modify client profiles or register startup services. The PATH command applies to the current shell.
+The installer builds and installs all five native tools and the `wk-connect` onboarding helper into `~/.local/bin` by default. Use `WK_PREFIX` for another user-owned prefix. It does not enable capture, modify client profiles or register startup services. The PATH command applies to the current shell. To connect Codex or Antigravity, follow [repeatable client onboarding](docs/operations/client-onboarding.md); the helper uses Python 3.11 or newer.
 
 | Platform | Source-build prerequisites |
 |---|---|

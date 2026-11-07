@@ -4,7 +4,8 @@
 //!
 //! The hosted endpoint is stateless (one JSON reply per POST), so there is no session to keep: every line read
 //! from stdin is one JSON-RPC message, sent as one POST, and every message in the reply is written back as one
-//! line. The token is read from the environment, never an argument, and never written anywhere.
+//! line. The token is read from the environment or a private file, never as an argument value,
+//! and is never printed or written by the proxy.
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -38,6 +39,37 @@ pub fn validate_url(value: &str) -> Result<reqwest::Url, String> {
 /// A token that can safely be sent as a header value: printable ASCII, no whitespace.
 fn valid_token(token: &str) -> bool {
     !token.is_empty() && token.len() <= 512 && token.bytes().all(|b| b.is_ascii_graphic())
+}
+
+/// Read only a bounded, private regular file; never follow a token-file symlink.
+#[cfg(unix)]
+pub fn token_from_file(path: &std::path::Path) -> Result<String, String> {
+    use std::{
+        io::Read,
+        os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|_| "token file unavailable")?;
+    let meta = file.metadata().map_err(|_| "token file unavailable")?;
+    if !meta.is_file() || meta.permissions().mode() & 0o077 != 0 {
+        return Err("token file must be a private regular file (mode 0600)".into());
+    }
+    let mut text = String::new();
+    file.take(515)
+        .read_to_string(&mut text)
+        .map_err(|_| "token file unreadable")?;
+    let token = text.trim();
+    if text.len() > 514 || !valid_token(token) {
+        return Err("invalid token file".into());
+    }
+    Ok(token.into())
+}
+#[cfg(not(unix))]
+pub fn token_from_file(_: &std::path::Path) -> Result<String, String> {
+    Err("token-file onboarding is currently supported on macOS and Linux; use WK_TOKEN on other platforms".into())
 }
 
 fn rpc_error(id: &Value, message: &str) -> Value {
@@ -201,6 +233,29 @@ pub async fn run_stdio(proxy: &Proxy) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn token_files_are_private_bounded_regular_files_and_are_read_again_after_rotation() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token");
+        std::fs::write(&path, "first-token\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(token_from_file(&path).unwrap(), "first-token");
+        std::fs::write(&path, "replacement-token\n").unwrap();
+        assert_eq!(token_from_file(&path).unwrap(), "replacement-token");
+        let link = dir.path().join("link");
+        symlink(&path, &link).unwrap();
+        assert!(token_from_file(&link).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(token_from_file(&path).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        for bad in [String::new(), "a b".into(), "x".repeat(515)] {
+            std::fs::write(&path, bad).unwrap();
+            assert!(token_from_file(&path).is_err());
+        }
+        assert!(token_from_file(dir.path()).is_err());
+    }
     use std::sync::{Arc, Mutex};
 
     type Seen = Arc<Mutex<Vec<(axum::http::HeaderMap, Value)>>>;

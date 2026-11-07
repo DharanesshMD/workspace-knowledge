@@ -20,6 +20,8 @@ wk-contracts={path="../contracts"}
 wk-login={path="../login"}
 wk-scope={path="../scope"}
 wk-summarize={path="../summarize"}
+[target.'cfg(unix)'.dependencies]
+libc="0.2"
 [dev-dependencies]
 wk-login={path="../login",features=["test-support"]}
 axum="0.8"

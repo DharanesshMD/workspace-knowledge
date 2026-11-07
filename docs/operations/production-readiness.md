@@ -6,6 +6,8 @@
 
 ## Current repository and release state
 
+**2026-11-07 onboarding follow-up:** the source installer and `wk-connect` passed 12 real local lifecycle checks under a fresh HOME/prefix; both normal local IDE configurations were then migrated from trial launchers to the installed native proxy and passed authenticated tool discovery. The current suite passed 801 Rust tests and 57 Python tests, with one explicit Python skip. See [scope and evidence](../reviews/2026-11-07-client-onboarding-acceptance.md). This closes the repeatable local setup step, with clean-machine and remote release qualification still open.
+
 | Item | Observed state |
 |---|---|
 | GitHub visibility | Private. The owner will change visibility manually; no agent workflow changes it. |

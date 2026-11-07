@@ -21,7 +21,7 @@ class SourceInstallTests(unittest.TestCase):
         scripts = self.root / "deploy/scripts"
         scripts.mkdir(parents=True)
         repository = Path(__file__).resolve().parents[2]
-        for name in ("install-source.sh", "uninstall.sh"):
+        for name in ("install-source.sh", "uninstall.sh", "wk-connect.py"):
             shutil.copy2(repository / "deploy/scripts" / name, scripts / name)
         # Compilation is the expensive dependency. Real shell/install/removal run
         # unchanged; the build fixture emits only binaries for requested packages.
@@ -54,7 +54,7 @@ for index, arg in enumerate(sys.argv[1:], 1):
         self.assertIn("No capture consent, hooks or startup services were enabled.", result.stdout)
         self.assertEqual(sorted(path.name for path in self.prefix.iterdir()), ["bin"])
         self.assertEqual(sorted(path.name for path in (self.prefix / "bin").iterdir()),
-                         ["wk", "wk-agent", "wk-env", "wk-mcp", "wk-server"])
+                         ["wk", "wk-agent", "wk-connect", "wk-env", "wk-mcp", "wk-server"])
         self.assertEqual(list(self.home.iterdir()), [])
 
     def test_installs_every_user_command_including_mcp(self):
@@ -64,6 +64,9 @@ for index, arg in enumerate(sys.argv[1:], 1):
             result = subprocess.run([str(self.prefix / "bin" / binary)],
                                     check=True, capture_output=True, text=True)
             self.assertEqual(result.stdout.strip(), binary)
+        help_result = subprocess.run([str(self.prefix / "bin/wk-connect"), "--help"],
+                                     env=self.env, check=True, capture_output=True, text=True)
+        self.assertIn("disconnect", help_result.stdout)
 
     def test_install_resolves_checkout_from_another_directory(self):
         self.install(self.base)
@@ -72,7 +75,7 @@ for index, arg in enumerate(sys.argv[1:], 1):
 
     def test_uninstall_removes_mcp_and_preserves_unrelated_files(self):
         (self.prefix / "bin").mkdir(parents=True)
-        for binary in ("wk", "wk-agent", "wk-env", "wk-server", "wk-mcp", "unrelated"):
+        for binary in ("wk", "wk-agent", "wk-connect", "wk-env", "wk-server", "wk-mcp", "unrelated"):
             (self.prefix / "bin" / binary).write_text("fixture", encoding="utf-8")
         state = self.prefix / "private-state"
         state.write_text("preserved", encoding="utf-8")

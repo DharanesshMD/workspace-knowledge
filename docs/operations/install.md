@@ -6,7 +6,7 @@ This is a pre-release source build. The latest published source-only prerelease 
 
 ## Install the tools
 
-Install Rust through rustup; the checkout pins the toolchain in `rust-toolchain.toml`. A C build toolchain is required. macOS needs Xcode Command Line Tools; Windows needs MSVC build tools. On Debian/Ubuntu, collector builds need `build-essential pkg-config libdbus-1-dev`. Persistent capture also requires a working user credential store: macOS Keychain, Windows Credential Store, or Linux Secret Service/DBus. Missing secure storage fails closed.
+Install Rust through rustup; the checkout pins the toolchain in `rust-toolchain.toml`. A C build toolchain is required. The macOS/Linux source installer also requires Python 3.11 or newer for `wk-connect` and checks that prerequisite before building. macOS needs Xcode Command Line Tools; Windows needs MSVC build tools. On Debian/Ubuntu, collector builds need `build-essential pkg-config libdbus-1-dev`. Persistent capture also requires a working user credential store: macOS Keychain, Windows Credential Store, or Linux Secret Service/DBus. Missing secure storage fails closed.
 
 From a cloned checkout on macOS/Linux:
 
@@ -28,6 +28,8 @@ cargo build --locked --release -p wk-cli -p wk-agent -p wk-environments -p wk-se
 Copy `wk.exe`, `wk-agent.exe`, `wk-env.exe`, `wk-server.exe` and `wk-mcp.exe` from `target/release` to a user-owned directory on PATH. This does not register startup or install client hooks. Node.js 22/npm is needed only to build the web console; server Docker builds handle that in the build image.
 
 ## Join a team server
+
+For Codex or Antigravity MCP access with a personal token, use the [repeatable client onboarding](client-onboarding.md) commands. `wk-connect` validates the connection and configures the installed proxy without a machine-specific launcher or tokens in IDE settings.
 
 Get the portal URL, product name and permitted services from your administrator. Sign in to that portal through the team's OIDC provider. My context and Team context are available without installing a collector; installation adds local capture and synchronization.
 

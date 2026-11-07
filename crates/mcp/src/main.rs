@@ -919,11 +919,14 @@ enum Command {
         server: String,
     },
     /// Forward a client that can only start a local process (Claude Desktop) to one product's hosted MCP
-    /// endpoint with a personal token. The token comes from the WK_TOKEN environment variable.
+    /// endpoint with a personal token from a private file or the WK_TOKEN environment variable.
     Proxy {
         /// The product's MCP address, https://HOST/mcp/PRODUCT
         #[arg(long, env = "WK_MCP_URL")]
         url: String,
+        /// Private regular file containing the personal token. Takes precedence over WK_TOKEN.
+        #[arg(long)]
+        token_file: Option<std::path::PathBuf>,
         /// PEM bundle for a server behind a private CA (replaces public roots).
         #[arg(long, env = "WK_SERVER_CA_FILE")]
         ca_file: Option<std::path::PathBuf>,
@@ -976,9 +979,16 @@ async fn command_run(command: Command) -> Result<(), String> {
             .await?;
             println!("{}", login::summary(&origin, &outcome));
         }
-        Command::Proxy { url, ca_file } => {
-            let token = std::env::var(wk_contracts::agent_setup::TOKEN_ENV)
-                .map_err(|_| format!("{} is required", wk_contracts::agent_setup::TOKEN_ENV))?;
+        Command::Proxy {
+            url,
+            ca_file,
+            token_file,
+        } => {
+            let token = match token_file {
+                Some(path) => proxy::token_from_file(&path)?,
+                None => std::env::var(wk_contracts::agent_setup::TOKEN_ENV)
+                    .map_err(|_| format!("{} is required", wk_contracts::agent_setup::TOKEN_ENV))?,
+            };
             let proxy =
                 proxy::Proxy::new(&url, &token, net::trust(ca_file.as_deref())?.as_deref())?;
             return proxy::run_stdio(&proxy).await;
@@ -1043,6 +1053,18 @@ async fn run() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn proxy_accepts_an_explicit_token_file_without_a_token_argument() {
+        assert!(Cli::try_parse_from([
+            "wk-mcp",
+            "proxy",
+            "--url",
+            "https://wk.example/mcp/demo",
+            "--token-file",
+            "/private/token",
+        ])
+        .is_ok());
+    }
     /// Some MCP clients (Claude Code 2.1.15) reject a tool list where any property schema is the
     /// boolean `true`, which is what an untyped `serde_json::Value` field generates.
     #[test]
