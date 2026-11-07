@@ -46,6 +46,7 @@ services:
       # lifetime cap is 1 to 365 days. Disabling it makes the server reject every existing token.
       WK_PERSONAL_TOKENS: ${WK_PERSONAL_TOKENS:-0}
       WK_PERSONAL_TOKEN_MAX_DAYS: ${WK_PERSONAL_TOKEN_MAX_DAYS:-90}
+      WK_AUTO_PUBLISH_PRODUCTS: ${WK_AUTO_PUBLISH_PRODUCTS:-}
       WK_BIND: 0.0.0.0:8080
       WK_CONSOLE_ORIGIN: ${WK_CONSOLE_ORIGIN:?Set exact HTTPS console origin}
       WK_POOL_MAX: '${WK_POOL_MAX:-10}'

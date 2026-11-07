@@ -274,7 +274,7 @@ def main():
         print(json.dumps(mcp[a.sharer].rpc("tools/list")["result"]["tools"], indent=1))
         return
     if a.team_work:
-        marker = "verify-" + secrets.token_hex(3)
+        marker = "wkverify" + secrets.token_hex(8)
         module, files = f"backend/{marker}", [f"backend/{marker}/retry.rs", f"backend/{marker}/gateway.rs"]
         shared = mcp[a.sharer].tool("knowledge.share_session", {"service": "backend", "title": f"Retry with backoff ({marker})",
                                                                 "intent": "Make payment retries back off", "rationale": "Hammering the gateway made outages worse",
@@ -284,11 +284,13 @@ def main():
         ask = lambda **kw: json.loads(mcp[a.finder].tool("knowledge.team_work", kw)["content"][0]["text"])
         try:
             prefix = a.sharer[:3]
-            by_name = ask(developer=prefix.upper(), since_days=1, query="retry backoff")
+            # Scope this probe to its own card: keyword results rank by relevance, and an
+            # existing developer's real retry card may outrank this freshly created fixture.
+            by_name = ask(developer=prefix.upper(), since_days=1, query=marker)
             top = by_name["entries"][0]
             assert by_name["resolved"]["developer"] == a.sharer and marker in top["title"], f"by name: {by_name['text'][:300]}"
             assert top["files_reported"] == sorted(files) and top["decisions"] == ["Exponential backoff with jitter"]
-            print(f"ok  '{prefix.upper()}' resolved to {a.sharer}: newest work is '{top['title']}'")
+            print(f"ok  '{prefix.upper()}' resolved to {a.sharer}: this run's work is '{top['title']}'")
             by_module = ask(paths=[module])
             assert [e["card_id"] for e in by_module["entries"]] == [card_id] and by_module["entries"][0]["matched_files"] == sorted(files)
             print(f"ok  asking about the module {module} finds it, with the matching files")

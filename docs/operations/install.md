@@ -52,7 +52,7 @@ For an AI agent's MCP access, run `wk-mcp login --server https://knowledge.inter
 
 In another terminal, run `wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" doctor`. Then follow the [adapter instructions](../adapters/setup.md) for your exact client/version. Connecting a device alone does not install hooks or establish capture coverage. Each collector state binds one chosen service; multiple services require explicit attribution.
 
-Owner summary synchronization and activity sharing default off. If wanted, grant the matching hosted setting under Devices and explicitly enable the corresponding local permission; both are required. Owner sync uses `owner-sync enable --yes`. Publication still requires review. A changed local scope, destination, model or summarizer mode requires a new explicit local connection/consent.
+Owner summary synchronization and activity sharing default off. If wanted, grant the matching hosted setting under Devices and explicitly enable the corresponding local permission; both are required. Owner sync uses `owner-sync enable --yes`. On current `main`, new collectors enable publication without a reviewer for eligible assistant-written cards. Set `WK_AUTO_PUBLISH_PRODUCTS=none` on the server or connect with `--no-auto-publish` to require review; existing collectors keep their prior choice. Rule drafts and hook captures still require review. A changed local scope, destination, model or summarizer mode requires a new explicit local connection/consent.
 
 ### Renewal and device controls
 
@@ -111,7 +111,7 @@ After provisioning:
 docker compose -f deploy/compose/compose.yaml up -d app
 ```
 
-Place the HTTPS reverse proxy in front of host-loopback port 8080. Preserve Origin headers and cookies; do not log callback queries, cookies or Authorization headers. Configure proxy deadlines, request-size/rate limits and backup retention. Run the separately authorized retention worker and rehearse deletion-safe encrypted restore using the [hosted operations](hosted-portal.md), [backup](backup.md) and [restore](restore.md) guides. `/health/ready` checks runtime database access and schema migrations 1–18; it does not certify capture, identity-provider health or backups.
+Place the HTTPS reverse proxy in front of host-loopback port 8080. Preserve Origin headers and cookies; do not log callback queries, cookies or Authorization headers. Configure proxy deadlines, request-size/rate limits and backup retention. Run the separately authorized retention worker and rehearse deletion-safe encrypted restore using the [hosted operations](hosted-portal.md), [backup](backup.md) and [restore](restore.md) guides. On current `main`, `/health/ready` checks runtime database access and schema migrations 1–21; it does not certify capture, identity-provider health or backups. After migrating an older installation, reapply `deploy/scripts/application-role.sql` with the operator connection so the restricted runtime role can use the new tables and functions.
 
 For a source-hosted server, build the console with `cd web && npm ci && npm run build`, then set `WK_WEB_DIR` to the absolute `web/dist` directory when starting `wk-server --production`. Assets are served from that directory; they are not embedded in the executable.
 

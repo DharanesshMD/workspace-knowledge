@@ -146,6 +146,29 @@ fn strings(v: &[&str]) -> Vec<String> {
 
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
+async fn publication_is_separate_from_implementation_lifecycle_even_in_small_replies() {
+    let w = world().await;
+    let mut card = request("Published retry", None, &["backend/retry.rs"]);
+    card.rationale = "Synthetic rationale. ".repeat(100);
+    let shared = w.k.share_session(&w.sam, "demo", card).await.unwrap();
+    assert!(shared.published);
+    for budget in [256, 2500] {
+        let found = ask(&w, &w.anika, |q| {
+            q.developer = Some("sam".into());
+            q.budget_tokens = Some(budget);
+        })
+        .await;
+        let entry = &found["entries"][0];
+        assert_eq!(entry["published"], true, "budget {budget}: {entry}");
+        assert_eq!(entry["lifecycle"], "proposed");
+        if budget == 256 {
+            assert_eq!(entry["trimmed"], true);
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
 async fn a_name_resolves_by_case_and_unique_prefix_and_failures_say_who_exists() {
     let w = world().await;
     seed(&w).await;
