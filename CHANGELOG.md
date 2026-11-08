@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Local folder approvals use generation-aware filesystem handles on Linux and include creation time on other Unix systems, preventing a recreated Linux directory from inheriting consent through inode reuse. Existing Unix inode-only approvals require fresh developer approval; unsupported filesystems fail closed and no automatic migration grants consent. Ordinary project edits preserve approval. Windows consent validation also rejects parent traversal hidden inside verbatim path components. CI fixes handle Windows fixture line endings and legal folder names, and bound PostgreSQL build output to runner disk capacity.
+
 - Updated Tokio to 1.53.3 for RUSTSEC-2026-0386; dependency CI now rejects unsoundness warnings. The fresh local audit has no vulnerability findings and retains four unmaintained-package notices.
 
 - Repeatable source-installed Codex and Antigravity onboarding: `wk-connect connect|check|disconnect` validates authenticated MCP access before changing settings, keeps token/CA files private, preserves other servers and tool policies, and refuses conflicting configuration edits. `wk-mcp proxy --token-file` lets IDEs execute the native proxy without custom launchers or credentials in IDE settings. The source installer now includes six commands and requires Python 3.11+. See [setup](docs/operations/client-onboarding.md) and [local lifecycle acceptance](docs/reviews/2026-11-07-client-onboarding-acceptance.md).

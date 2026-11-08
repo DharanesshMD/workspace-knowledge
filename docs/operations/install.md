@@ -15,7 +15,7 @@ From a cloned checkout on macOS/Linux:
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The script works from another directory when invoked by its absolute path. It installs `wk`, `wk-agent`, `wk-env`, `wk-server` and `wk-mcp` into `~/.local/bin`. Set `WK_PREFIX` to use another user-owned prefix. The PATH command applies to the current shell; add the directory to your shell configuration if you want it available in future sessions. Never run the collector installer as root.
+The script works from another directory when invoked by its absolute path. It installs `wk`, `wk-agent`, `wk-env`, `wk-server`, `wk-mcp` and `wk-connect` into `~/.local/bin`. Set `WK_PREFIX` to use another user-owned prefix. The PATH command applies to the current shell; add the directory to your shell configuration if you want it available in future sessions. Never run the collector installer as root.
 
 **macOS and Gatekeeper.** Binaries you build with this script are signed ad hoc by the linker and are not quarantined (checked on macOS with `xattr` and `codesign -dv`), so macOS shows no unsigned-developer prompt. Only binaries downloaded from a browser or chat get quarantined; no signed or notarized binary is published yet, so prefer the source install above. The first run of a rebuilt `wk-agent` can still ask for Keychain access to its existing items: allow only the expected Workspace Knowledge items. A signed, notarized release needs an Apple Developer identity the project does not have yet ([readiness ledger](production-readiness.md)).
 
@@ -28,6 +28,8 @@ cargo build --locked --release -p wk-cli -p wk-agent -p wk-environments -p wk-se
 Copy `wk.exe`, `wk-agent.exe`, `wk-env.exe`, `wk-server.exe` and `wk-mcp.exe` from `target/release` to a user-owned directory on PATH. This does not register startup or install client hooks. Node.js 22/npm is needed only to build the web console; server Docker builds handle that in the build image.
 
 ## Join a team server
+
+**Folder-approval upgrade:** Linux approvals use generation-aware filesystem export handles; other Unix approvals bind the directory's device, inode and creation time. Older Unix inode-only bindings require fresh developer approval and affected collectors must be re-enrolled against that approval before capture resumes. Do not edit or copy approval hashes by hand. Local folder approval fails closed when the required handle or creation-time metadata is unavailable; some Linux filesystems/container policies do not support export handles. Personal-token MCP proxy onboarding is unaffected by this local capture-consent change.
 
 For Codex or Antigravity MCP access with a personal token, use the [repeatable client onboarding](client-onboarding.md) commands. `wk-connect` validates the connection and configures the installed proxy without a machine-specific launcher or tokens in IDE settings.
 

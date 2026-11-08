@@ -47,6 +47,52 @@ fn replacing_approved_root_requires_fresh_consent() {
 }
 #[cfg(unix)]
 #[test]
+fn inode_only_legacy_approval_requires_fresh_consent() {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::MetadataExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir(d.path().join("backend")).unwrap();
+    let mut b = Binding::approve(d.path(), "product", vec!["backend".into()]).unwrap();
+    let meta = std::fs::metadata(&b.root).unwrap();
+    let legacy = serde_json::to_vec(&(
+        &b.root,
+        &b.product,
+        &b.services,
+        format!("{}:{}", meta.dev(), meta.ino()),
+    ))
+    .unwrap();
+    b.policy_hash = format!("{:x}", Sha256::digest(legacy));
+    assert!(
+        !b.intact(),
+        "inode-only approval cannot distinguish a recycled inode"
+    );
+}
+#[test]
+fn ordinary_workspace_changes_preserve_approval() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir(d.path().join("backend")).unwrap();
+    let b = Binding::approve(d.path(), "product", vec!["backend".into()]).unwrap();
+    std::fs::create_dir(d.path().join("new-module")).unwrap();
+    std::fs::write(d.path().join("new-file"), "work").unwrap();
+    std::fs::remove_file(d.path().join("new-file")).unwrap();
+    assert!(b.intact());
+}
+#[cfg(target_os = "linux")]
+#[test]
+fn rapid_root_recreation_never_reuses_consent() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("product");
+    for _ in 0..64 {
+        std::fs::create_dir_all(root.join("backend")).unwrap();
+        let b = Binding::approve(&root, "product", vec!["backend".into()]).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::create_dir_all(root.join("backend")).unwrap();
+        assert!(!b.intact(), "replacement directory inherited old consent");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+#[cfg(unix)]
+#[test]
 fn service_retarget_does_not_grant_personal_folder() {
     let d = tempfile::tempdir().unwrap();
     let root = d.path();

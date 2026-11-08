@@ -1035,7 +1035,12 @@ mod tests {
     #[tokio::test]
     async fn page_text_is_escaped_so_a_hostile_folder_name_cannot_inject_markup() {
         let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path().join("a<b>&\"'c").canonicalize_or_create();
+        let (name, escaped) = if cfg!(windows) {
+            ("a&'c", "a&amp;&#39;c")
+        } else {
+            ("a<b>&\"'c", "a&lt;b&gt;&amp;&quot;&#39;c")
+        };
+        let folder = dir.path().join(name).canonicalize_or_create();
         std::fs::create_dir(folder.join("backend")).unwrap();
         let gate = Gate::new(quick());
         let started = gate
@@ -1051,8 +1056,8 @@ mod tests {
             .unwrap();
         let (host, path) = split(&started.url);
         let (_, page) = get(&host, &path, &host).await;
-        assert!(!page.contains("a<b>"), "folder name must be escaped");
-        assert!(page.contains("a&lt;b&gt;&amp;&quot;&#39;c"));
+        assert!(!page.contains(name), "folder name must be escaped");
+        assert!(page.contains(escaped));
         assert!(!page.contains("<b>x</b>") && page.contains("&lt;b&gt;x&lt;/b&gt;"));
     }
 }

@@ -39,11 +39,19 @@ pub fn resolve_prefix(path: &Path, what: &str) -> Result<PathBuf, String> {
 /// The consent directory must be absolute, free of `..`, and outside the product folder.
 fn checked_state(state: Option<&Path>, root: &Path) -> Result<PathBuf, String> {
     let state = state.ok_or("--state-dir is required for local consent")?;
-    if !state.is_absolute()
+    let parent_traversal = state
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir));
+    // Verbatim Windows paths keep forward slashes inside Normal components;
+    // filesystem operations can still interpret them as separators.
+    #[cfg(windows)]
+    let parent_traversal = parent_traversal
         || state
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
+            .as_os_str()
+            .to_string_lossy()
+            .split(['/', '\\'])
+            .any(|part| part == "..");
+    if !state.is_absolute() || parent_traversal {
         return Err("state directory must be an absolute path without parent traversal".into());
     }
     let root = root.canonicalize().map_err(|_| "workspace unavailable")?;

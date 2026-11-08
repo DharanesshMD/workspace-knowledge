@@ -21,7 +21,9 @@ fn the_portal_fixtures_are_what_the_server_sends() {
             continue;
         }
         assert_eq!(
-            std::fs::read_to_string(&path).expect("fixture missing; run with UPDATE_FIXTURES=1"),
+            std::fs::read_to_string(&path)
+                .expect("fixture missing; run with UPDATE_FIXTURES=1")
+                .replace("\r\n", "\n"),
             text,
             "web/tests/fixtures/{file} is stale; regenerate it with UPDATE_FIXTURES=1"
         );
