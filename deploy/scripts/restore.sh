@@ -22,7 +22,7 @@ pg_restore --exit-on-error --no-owner --no-privileges --file="$work/restore.sql"
   cat "$work/restore.sql"
   cat <<'SQL'
 DO $$ BEGIN
- IF (SELECT array_agg(version ORDER BY version) FROM public.wk_schema_migrations) IS DISTINCT FROM ARRAY[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18]::integer[] THEN
+ IF (SELECT array_agg(version ORDER BY version) FROM public.wk_schema_migrations) IS DISTINCT FROM ARRAY[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21]::integer[] THEN
   RAISE EXCEPTION 'incompatible restored schema';
  END IF;
 END $$;

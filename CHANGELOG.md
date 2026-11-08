@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed encrypted backup/restore schema validation: manifests already named schema 21 but both scripts still required migrations 1–18, rejecting current databases. Both now require exactly 1–21. The disposable recovery drill also verifies personal MCP token removal and runs in PostgreSQL CI; current backup/restore documentation describes the same version boundary.
+
 - Local folder approvals use generation-aware filesystem handles on Linux and include creation time on other Unix systems, preventing a recreated Linux directory from inheriting consent through inode reuse. Existing Unix inode-only approvals require fresh developer approval; unsupported filesystems fail closed and no automatic migration grants consent. Ordinary project edits preserve approval. Windows consent validation also rejects parent traversal hidden inside verbatim path components. CI fixes handle Windows fixture line endings and legal folder names, and bound PostgreSQL build output to runner disk capacity.
 
 - Updated Tokio to 1.53.3 for RUSTSEC-2026-0386; dependency CI now rejects unsoundness warnings. The fresh local audit has no vulnerability findings and retains four unmaintained-package notices.

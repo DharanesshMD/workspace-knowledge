@@ -77,6 +77,12 @@ jobs:
       - run: python3 scripts/integration.py
       - run: python3 scripts/demo.py
       - run: python3 scripts/code-context-live.py
+      - name: Verify deletion-safe encrypted backup and restore
+        env:
+          WK_TEST_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$WK_TEST_CONTAINER" sh -c 'apt-get update -qq && apt-get install -y -qq age'
+          python3 scripts/hosted-restore-drill.py
 
   console:
     runs-on: ubuntu-latest

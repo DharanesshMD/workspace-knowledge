@@ -1,6 +1,6 @@
 # Encrypted hosted backup
 
-Install PostgreSQL client tools, `age` and `tar`. Configure protected `PGSERVICE` / `.pgpass`; never pass passwords as arguments. Run `deploy/scripts/backup.sh AGE_PUBLIC_RECIPIENT /private/backup.age`. Version2 snapshots require exactly schema migrations1–18 and include the hosted database: shared cards, **sanitized owner-private summaries**, and access metadata. Raw conversations and local encrypted vaults are never part of this database backup. `pg_dump` supplies its consistent snapshot; coordinate the snapshot and independently retained journal recovery point operationally.
+Install PostgreSQL client tools, `age` and `tar`. Configure protected `PGSERVICE` / `.pgpass`; never pass passwords as arguments. Run `deploy/scripts/backup.sh AGE_PUBLIC_RECIPIENT /private/backup.age`. Version2 snapshots require exactly schema migrations 1–21 and include the hosted database: shared cards, **sanitized owner-private summaries**, and access metadata. Raw conversations and local encrypted vaults are never part of this database backup. `pg_dump` supplies its consistent snapshot; coordinate the snapshot and independently retained journal recovery point operationally.
 
 Export the latest journals independently after deletions or at the documented recovery point:
 
