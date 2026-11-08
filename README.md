@@ -416,6 +416,9 @@ Linux runners may need `npx playwright install --with-deps chromium`. See [CONTR
 
 ## Documentation
 
+- [Local Codex/Antigravity pilot](docs/operations/local-pilot.md) — the single-Mac evaluation protocol and its exit criteria.
+- [Alpha.4 draft notes](docs/operations/alpha4-release.md) — current setup, upgrade and release boundaries; not a published release.
+
 | Area | Guides |
 |---|---|
 | Getting started | [Installation](docs/operations/install.md) · [Keycloak quick start](docs/operations/quick-start-keycloak.md) · [Collector/client setup](docs/adapters/setup.md) |
