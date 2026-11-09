@@ -1,8 +1,8 @@
 //! "What did sam do recently?", "what has anyone changed under backend/payments?", "who touched
 //! retry.rs and why?" One query that resolves who and where, then returns a bounded brief. It
-//! answers only from what teammates published: visible cards inside the caller's services, never
-//! drafts or withdrawn work. Files come from two places and are labelled: the files an assistant
-//! reported when it shared (`card_files`) and the collector's file observations.
+//! answers from visible published cards and explicitly shared live activity inside the caller's
+//! services, never drafts or withdrawn work. Files come from two places and are labelled: the files
+//! an assistant reported when it shared (`card_files`) and the collector's file observations.
 use super::*;
 use crate::{activity, lexical, team::SharedActivity};
 use serde_json::{json, Value};
@@ -135,10 +135,21 @@ impl Knowledge {
             .map_err(|_| Error::Storage)?
             .as_millis() as i64;
         let guard = self.device_guard.as_ref().map(|g| g.services.clone());
+        // Reuse the feed's expiry and content screening for both name resolution and results.
+        let active: Vec<SharedActivity> = self
+            .team_activity(a, product)
+            .await?
+            .into_iter()
+            .filter(|r| {
+                guard
+                    .as_ref()
+                    .is_none_or(|services| r.services.iter().all(|s| services.contains(s)))
+            })
+            .collect();
         let mut tx = self.actor_tx(a).await?;
 
-        // Who is "sam"? Only people with visible shared work can be found, and only they can be asked about.
-        let known: Vec<String> = sqlx::query_scalar("SELECT DISTINCT c.author FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND ($4::text[] IS NULL OR $4::text[] @> c.services) AND c.published AND NOT c.withdrawn ORDER BY 1 LIMIT 200")
+        // Who is "sam"? Only people with visible published work or live activity can be found.
+        let mut known: Vec<String> = sqlx::query_scalar("SELECT DISTINCT c.author FROM cards c JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$1 WHERE c.org=$2 AND c.product=$3 AND m.services @> c.services AND ($4::text[] IS NULL OR $4::text[] @> c.services) AND c.published AND NOT c.withdrawn ORDER BY 1 LIMIT 200")
             .bind(&a.user)
             .bind(&a.org)
             .bind(product)
@@ -146,6 +157,10 @@ impl Knowledge {
             .fetch_all(&mut *tx)
             .await
             .map_err(db)?;
+        known.extend(active.iter().map(|r| r.developer.clone()));
+        known.sort();
+        known.dedup();
+        known.truncate(200);
         let mut resolved = json!({"developer":null,"paths":paths,"service":q.service,"since_days":q.since_days,"query":text});
         let developer = match developer_ask.map(|d| resolve(d, &known)) {
             None => None,
@@ -231,9 +246,7 @@ impl Knowledge {
         tx.commit().await.map_err(db)?;
 
         // Live activity from the collector hooks, filtered the same way. Often empty, never required.
-        let active: Vec<SharedActivity> = self
-            .team_activity(a, product)
-            .await?
+        let active: Vec<SharedActivity> = active
             .into_iter()
             .filter(|r| developer.as_ref().is_none_or(|d| &r.developer == d))
             .filter(|r| {
@@ -395,7 +408,7 @@ fn pack(
     }
     out["entries"] = json!(kept);
     out["text"] = json!(render(&kept));
-    if kept.is_empty() {
+    if kept.is_empty() && active.is_empty() {
         let who = developer
             .as_deref()
             .map(|d| format!(" by {d}"))

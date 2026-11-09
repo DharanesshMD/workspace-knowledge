@@ -29,7 +29,7 @@ Unrelated settings and MCP servers are preserved. A different existing server wi
 
 Codex changes are staged through its native CLI and compared with the complete TOML configuration before being saved. If the CLI would discard an unrelated setting, or the live configuration changes during staging, setup refuses the update. Reconnect and disconnect also refuse manually changed tool policies. Each explicit replacement retains a separate private snapshot of the displaced configuration.
 
-The IDE executes the installed native `wk-mcp proxy` directly, with a private token-file argument and, when needed, a managed CA-file argument. No generated launcher script or shell environment is needed to start the MCP server. Python is used for setup/check/removal, not for MCP traffic.
+The IDE executes the installed native `wk-mcp proxy` directly, with a private token-file argument and, when needed, a managed CA-file argument. Each endpoint has its own credential directory. Changing the URL retains the previous endpoint's private files so a cached IDE command cannot send the new endpoint's token to the old server. Disconnect removes these retired credentials too. No generated launcher script or shell environment is needed to start the MCP server. Python is used for setup/check/removal, not for MCP traffic.
 
 ## Check and renew
 
@@ -49,7 +49,7 @@ wk-connect disconnect --client codex
 wk-connect disconnect --client antigravity
 ```
 
-Disconnect removes only the managed entry and its active token/CA/connection files. Other servers are preserved. If you changed that entry manually, removal refuses to overwrite your changes. Backups are retained for manual recovery. Disconnecting locally does not revoke a server token; revoke it in the portal or through your administrator when retiring it.
+Disconnect removes only the managed entry, its active and retired endpoint token/CA files, and its connection manifest. Other servers are preserved. If you changed that entry manually, removal refuses to overwrite your changes. Backups are retained for manual recovery. Disconnecting locally does not revoke a server token; revoke it in the portal or through your administrator when retiring it.
 
 The source checkout's `deploy/scripts/uninstall.sh` removes the six installed commands from `WK_PREFIX` (default `~/.local`) and preserves private state and unrelated files. Disconnect before removing the tools. Reinstalling the same source revision restores the commands without enabling capture or recreating a disconnected MCP entry.
 

@@ -35,7 +35,7 @@ for line in sys.stdin:
     if token == "bad-token":
         reply = {"error": {"code": -32001, "message": "HTTP 401"}}
     else:
-        reply = {"result": {"tools": [{"name": "knowledge.team_work"}]}}
+        reply = {"result": {"tools": [{"name": "knowledge.team_work"}], "seen_token": token}}
     print(json.dumps({"jsonrpc": "2.0", "id": request["id"], **reply}), flush=True)
 ''')
         self.proxy.chmod(0o700)
@@ -73,6 +73,35 @@ for line in sys.stdin:
         self.assertEqual(self.config.read_bytes(), before)
         self.assertEqual(self.run_setup("check").returncode, 0)
 
+    def test_cached_endpoint_command_never_reads_a_replacement_endpoints_token(self):
+        self.assertEqual(self.run_setup(token="endpoint-a-token").returncode, 0)
+        old = json.loads(self.config.read_text())["mcpServers"]["workspace-knowledge"]
+        result = self.run_setup(token="endpoint-b-token", extra=("--url", "https://other.example/mcp/demo"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cached = subprocess.run([old["command"]] + old["args"], env=self.env,
+                                input=json.dumps({"id": 1, "method": "tools/list"}) + "\n",
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(cached.returncode, 0, cached.stderr)
+        self.assertEqual(json.loads(cached.stdout)["result"]["seen_token"], "endpoint-a-token")
+        self.assertEqual(self.run_setup("disconnect").returncode, 0)
+        old_token = Path(old["args"][old["args"].index("--token-file") + 1])
+        self.assertFalse(old_token.exists(), "disconnect clears retired endpoint credentials too")
+
+    def test_legacy_cached_endpoint_does_not_read_a_new_endpoints_token(self):
+        self.assertEqual(self.run_setup(token="legacy-endpoint-token").returncode, 0)
+        data = json.loads(self.config.read_text())
+        old = data["mcpServers"]["workspace-knowledge"]
+        state = self.home / ".local/share/workspace-knowledge/clients/antigravity/workspace-knowledge"
+        legacy = state / "token"
+        legacy.write_text("legacy-endpoint-token\n")
+        legacy.chmod(0o600)
+        old["args"][old["args"].index("--token-file") + 1] = str(legacy)
+        self.config.write_text(json.dumps(data))
+        (state / "connection.json").write_text(json.dumps({"url": "https://wk.example/mcp/demo", "entry": old}))
+        result = self.run_setup(token="new-endpoint-token", extra=("--url", "https://other.example/mcp/demo"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(legacy.read_text().strip(), "legacy-endpoint-token")
+
     def test_disconnect_preserves_other_servers_and_refuses_user_modified_entry(self):
         self.assertEqual(self.run_setup().returncode, 0)
         config = json.loads(self.config.read_text())
@@ -100,6 +129,20 @@ for line in sys.stdin:
         self.config.symlink_to(target)
         self.assertNotEqual(self.run_setup().returncode, 0)
         self.assertEqual(json.loads(target.read_text()), self.original)
+
+    def test_disconnect_refuses_a_symlinked_credential_directory_before_changing_settings(self):
+        self.assertEqual(self.run_setup().returncode, 0)
+        before = self.config.read_bytes()
+        entry = json.loads(before)["mcpServers"]["workspace-knowledge"]
+        token = Path(entry["args"][entry["args"].index("--token-file") + 1])
+        external = self.home / "unmanaged"
+        external.mkdir()
+        (external / "token").write_text("unmanaged-token")
+        (token.parent.parent / ("endpoint-" + "f" * 64)).symlink_to(external, target_is_directory=True)
+        self.assertNotEqual(self.run_setup("disconnect").returncode, 0)
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertTrue(token.exists())
+        self.assertEqual((external / "token").read_text(), "unmanaged-token")
 
     def test_failed_final_state_write_rolls_back_the_ide_configuration(self):
         spec = importlib.util.spec_from_file_location("wk_connect", SCRIPT)
@@ -212,7 +255,9 @@ for line in sys.stdin:
         config = self.home / ".codex/config.toml"
         original_config = config.read_text()
         state = self.home / ".local/share/workspace-knowledge/clients/codex/workspace-knowledge"
-        original_token = (state / "token").read_bytes()
+        token_args = json.loads((state / "connection.json").read_text())["entry"]["args"]
+        original_token_file = Path(token_args[token_args.index("--token-file") + 1])
+        original_token = original_token_file.read_bytes()
         spec = importlib.util.spec_from_file_location("wk_connect", SCRIPT)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -232,7 +277,7 @@ for line in sys.stdin:
             with self.assertRaises(ValueError):
                 module.main()
         self.assertEqual(config.read_text(), changed_config)
-        self.assertEqual((state / "token").read_bytes(), original_token)
+        self.assertEqual(original_token_file.read_bytes(), original_token)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 """Configure installed Codex/Antigravity clients without putting a token in IDE settings."""
 import argparse
 import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -128,6 +129,16 @@ def main():
         raise ValueError("refusing a symlinked configuration file")
     manifest = state / "connection.json"
     previous = json.loads(read_file(manifest, private=True)) if manifest.exists() else None
+
+    def credential_directories():
+        # Include the original pre-endpoint layout for existing installations.
+        yield state
+        if state.exists():
+            for folder in state.iterdir():
+                if re.fullmatch(r"endpoint-[0-9a-f]{64}", folder.name):
+                    if folder.is_symlink() or not folder.is_dir():
+                        raise ValueError("invalid managed credential directory")
+                    yield folder
     cli_env = dict(os.environ, CODEX_HOME=str(config.parent))
     codex = None
     if args.client == "codex":
@@ -205,10 +216,13 @@ def main():
             count = check_connection(current)
             print(json.dumps({"connected": True, "client": args.client, "tools": count, "url": previous["url"]}))
         else:
+            folders = list(credential_directories())
             if current is not None:
                 set_entry(None)
-            for name in ("token", "ca.pem", "connection.json"):
-                (state / name).unlink(missing_ok=True)
+            for folder in folders:
+                for name in ("token", "ca.pem"):
+                    (folder / name).unlink(missing_ok=True)
+            manifest.unlink(missing_ok=True)
             print(json.dumps({"disconnected": True, "client": args.client, "other_servers_preserved": True}))
         return
     if not args.url:
@@ -233,6 +247,7 @@ def main():
         raise ValueError("invalid token; it must be a single printable token")
     ca = read_file(args.ca_file, maximum=65536) if args.ca_file else None
     directory(state, home, private=True)
+    credentials = state / ("endpoint-" + hashlib.sha256(args.url.encode()).hexdigest())
     def entry_at(folder):
         options = ["proxy", "--url", args.url, "--token-file", str(folder / "token")]
         if ca is not None:
@@ -244,12 +259,13 @@ def main():
         if ca is not None:
             write_file(stage / "ca.pem", ca)
         count = check_connection(entry_at(stage))
+    directory(credentials, home, private=True)
     backup = state / "original-config.backup"
     if config.exists() and not backup.exists():
         write_file(backup, read_file(config))
-    paths = [state / name for name in ("token", "ca.pem", "connection.json")]
+    paths = [credentials / "token", credentials / "ca.pem", manifest]
     old = {p: read_file(p, private=True) if p.exists() else None for p in paths}
-    entry = entry_at(state)
+    entry = entry_at(credentials)
     if current_entry() != current:
         raise ValueError("IDE entry changed during setup; retry after reviewing it")
     before_config = read_file(config) if config.exists() else None

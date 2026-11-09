@@ -215,11 +215,10 @@ def admin_check(ca, origin, issuer, product, admin_user, passwords, other_user):
 
     assert b.call(f"{base}/{name}", headers=api, method="DELETE")[0] == 200
     assert mcp_status(ca, mcp_url, again["token"]) == 401, "removal must revoke the token at once"
-    status, reborn, _ = post(base, {"user": name, "services": services, "days": 1})
-    assert status == 201, "the name should be free again after removal"
-    assert mcp_status(ca, mcp_url, again["token"]) == 401 and mcp_status(ca, mcp_url, token) == 401, "a recreated name inherits no old token"
-    assert b.call(f"{base}/{name}", headers=api, method="DELETE")[0] == 200
-    print("ok  removal revokes the token, frees the name, and a recreated name inherits nothing")
+    status, _, _ = post(base, {"user": name, "services": services, "days": 1})
+    assert status == 409, "a retired principal name must not be reassigned"
+    assert mcp_status(ca, mcp_url, again["token"]) == 401 and mcp_status(ca, mcp_url, token) == 401
+    print("ok  removal revokes tokens and permanently reserves the principal name")
     print("PASS: the admin can add, hand over, reissue and remove developers end to end.")
 
 

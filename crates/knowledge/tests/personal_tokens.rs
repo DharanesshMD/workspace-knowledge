@@ -284,3 +284,99 @@ async fn ending_a_membership_revokes_the_token_for_good() {
         .collect();
     assert_eq!(remaining, vec!["other".to_string()]);
 }
+
+// Observe PostgreSQL's actual lock wait instead of guessing when the request has reached a barrier.
+async fn named_knowledge(name: &str) -> Knowledge {
+    let name = name.to_owned();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(move |c, _| {
+            let name = name.clone();
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('application_name',$1,false)")
+                    .bind(name)
+                    .execute(c)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&std::env::var("WK_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    Knowledge::from_pool(pool)
+}
+async fn waiting_on_lock(pool: &sqlx::PgPool, name: &str) -> bool {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock')")
+        .bind(name).fetch_one(pool).await.unwrap()
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn membership_removal_cannot_leave_a_token_issued_after_revocation() {
+    for admin_removal in [false, true] {
+        let (k, pool, anika, ravi) = setup().await;
+        k.admin_assign(&ravi, "demo", &["backend".into()])
+            .await
+            .unwrap();
+        let h = hash();
+        let issuance_name = format!("issuance-{}", uuid::Uuid::new_v4());
+        let removal_name = format!("removal-{}", uuid::Uuid::new_v4());
+        let issuing = named_knowledge(&issuance_name).await;
+        let removing = named_knowledge(&removal_name).await;
+        // Pause issuance immediately after its membership authorization, at the per-owner cap lock.
+        let mut barrier = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+            .bind(format!(
+                "wk-token:{}:{}:{}",
+                anika.org.len(),
+                anika.org,
+                anika.user
+            ))
+            .execute(&mut *barrier)
+            .await
+            .unwrap();
+        let (issuer, token_hash) = (anika.clone(), h.clone());
+        let creation = tokio::spawn(async move {
+            issuing
+                .create_personal_token(&issuer, "demo", "racing", &token_hash, 30)
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !waiting_on_lock(&pool, &issuance_name).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("issuance must reach the owner lock barrier");
+        let (target, admin) = (anika.clone(), ravi.clone());
+        let removal = tokio::spawn(async move {
+            if admin_removal {
+                removing
+                    .admin_remove_user(&admin, "demo", &target.user)
+                    .await
+            } else {
+                removing.revoke(&target, "demo").await
+            }
+        });
+        // A correct implementation makes removal wait for issuance's administration gate.
+        // The vulnerable implementation commits removal now, then inserts a live token later.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !removal.is_finished() && !waiting_on_lock(&pool, &removal_name).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("removal must finish or reach its lock barrier");
+        barrier.commit().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            creation.await.unwrap().unwrap();
+            removal.await.unwrap().unwrap();
+        })
+        .await
+        .expect("issuance and removal must finish without a lock-order deadlock");
+        k.grant(&anika, "demo", &["backend".into()], false)
+            .await
+            .unwrap();
+        assert_eq!(k.personal_token_actor(&h, "demo").await.err(), Some(Error::Denied), "membership re-add must not revive a token that raced with removal (admin={admin_removal})");
+        assert!(k.list_personal_tokens(&anika).await.unwrap().is_empty());
+    }
+}

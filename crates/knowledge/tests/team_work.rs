@@ -2,7 +2,8 @@ use serde_json::Value;
 use sqlx::Row;
 use wk_contracts::CardSubmission;
 use wk_knowledge::{
-    share::ShareRequest, team_work::TeamWorkQuery, Actor, AutoPublish, Error, Knowledge,
+    activity::ActivityUpdate, share::ShareRequest, team_work::TeamWorkQuery, Actor, AutoPublish,
+    Error, Knowledge,
 };
 
 struct World {
@@ -142,6 +143,177 @@ fn titles(v: &Value) -> Vec<String> {
 }
 fn strings(v: &[&str]) -> Vec<String> {
     v.iter().map(|s| s.to_string()).collect()
+}
+
+async fn live(w: &World, who: &Actor, product: &str, services: &[&str], ended: bool) {
+    w.k.record_activity(
+        who,
+        product,
+        ActivityUpdate {
+            session_id: "live".into(),
+            services: strings(services),
+            files: strings(&["backend/payments/retry.rs"]),
+            intent: "Investigating payment retries".into(),
+            ended,
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn named_activity_only_work_resolves_and_keeps_useful_text_without_cards() {
+    let w = world().await;
+    live(&w, &w.sam, "demo", &["backend"], false).await;
+    for name in [Some("SAM"), Some("sa"), None] {
+        let found = ask(&w, &w.viewer, |q| {
+            q.developer = name.map(String::from);
+            q.paths = strings(&["backend/payments"]);
+            q.service = Some("backend".into());
+        })
+        .await;
+        assert_eq!(found["status"], "ok", "{found}");
+        if name.is_some() {
+            assert_eq!(found["resolved"]["developer"], "sam");
+        }
+        assert!(found["entries"].as_array().unwrap().is_empty());
+        assert_eq!(found["active_now"].as_array().unwrap().len(), 1);
+        assert_eq!(found["active_now"][0]["developer"], "sam");
+        let text = found["text"].as_str().unwrap();
+        assert!(text.contains("Active now: sam"), "{text}");
+        assert!(text.contains("Investigating payment retries"));
+        assert!(text.contains("backend/payments/retry.rs"));
+        assert!(found.to_string().len() <= 2500 * 3);
+    }
+    for (path, service) in [("backend/pay", "backend"), ("backend", "frontend")] {
+        let found = ask(&w, &w.viewer, |q| {
+            q.developer = Some("sam".into());
+            q.paths = strings(&[path]);
+            q.service = Some(service.into());
+        })
+        .await;
+        assert_eq!(found["status"], "no_matches");
+        assert!(found["active_now"].as_array().unwrap().is_empty());
+    }
+    let cards: i64 = sqlx::query_scalar("SELECT count(*) FROM cards WHERE org=$1")
+        .bind(&w.viewer.org)
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!(cards, 0);
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn activity_names_merge_with_card_authors_without_duplicates_and_keep_ambiguity() {
+    let w = world().await;
+    share(&w, &w.sam, None, "Published retries", &[]).await;
+    live(&w, &w.sam, "demo", &["backend"], false).await;
+    live(&w, &w.samira, "demo", &["backend"], false).await;
+    let exact = ask(&w, &w.viewer, |q| q.developer = Some("sam".into())).await;
+    assert_eq!(exact["status"], "ok");
+    assert_eq!(exact["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(exact["active_now"].as_array().unwrap().len(), 1);
+    let ambiguous = ask(&w, &w.viewer, |q| q.developer = Some("sa".into())).await;
+    assert_eq!(ambiguous["status"], "developer_ambiguous");
+    assert_eq!(
+        ambiguous["known_developers"],
+        serde_json::json!(["sam", "samira"])
+    );
+    let unknown = ask(&w, &w.viewer, |q| q.developer = Some("missing".into())).await;
+    assert_eq!(
+        unknown["known_developers"],
+        serde_json::json!(["sam", "samira"])
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn hidden_or_inactive_activity_never_reveals_names_or_results() {
+    let w = world().await;
+    live(&w, &w.jo, "demo", &["frontend"], false).await;
+    live(&w, &w.sam, "demo", &["backend"], false).await;
+    sqlx::query(
+        "UPDATE activity SET expires_at=now()-interval '1 second' WHERE org=$1 AND user_id='sam'",
+    )
+    .bind(&w.viewer.org)
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    live(&w, &w.samira, "demo", &["backend"], false).await;
+    live(&w, &w.samira, "demo", &["backend"], true).await;
+    live(&w, &w.anika, "demo", &["backend"], false).await;
+    w.k.clear_activity(&w.anika, "demo").await.unwrap();
+    w.k.grant(&w.outsider, "other", &strings(&["backend"]), false)
+        .await
+        .unwrap();
+    live(&w, &w.outsider, "other", &["backend"], false).await;
+    let other_org = Actor {
+        org: uuid::Uuid::new_v4().to_string(),
+        user: "cross-org".into(),
+    };
+    w.k.grant(&other_org, "demo", &strings(&["backend"]), false)
+        .await
+        .unwrap();
+    live(&w, &other_org, "demo", &["backend"], false).await;
+    // Stored activity from an older collector is screened before names are discovered too.
+    live(&w, &w.viewer, "demo", &["backend"], false).await;
+    sqlx::query(
+        "UPDATE activity SET files=ARRAY['/private/unsafe'] WHERE org=$1 AND user_id='viewer'",
+    )
+    .bind(&w.viewer.org)
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    for name in [
+        "missing",
+        "jo",
+        "sam",
+        "samira",
+        "anika",
+        "outsider",
+        "cross-org",
+        "viewer",
+    ] {
+        let found = ask(&w, &w.viewer, |q| q.developer = Some(name.into())).await;
+        assert_eq!(found["status"], "developer_not_found", "{name}: {found}");
+        assert_eq!(found["known_developers"], serde_json::json!([]), "{found}");
+        assert!(found["active_now"].as_array().unwrap().is_empty());
+    }
+    let found = ask(&w, &w.viewer, |_| {}).await;
+    assert_eq!(found["status"], "no_matches");
+    assert!(found["active_now"].as_array().unwrap().is_empty());
+    // A device's narrower grant applies even when its owner can read frontend work.
+    let device =
+        w.k.device_register(
+            &w.anika,
+            wk_contracts::device::DeviceRegistration {
+                id: uuid::Uuid::new_v4(),
+                product: "demo".into(),
+                services: strings(&["backend"]),
+                public_key: "11".repeat(32),
+                approval_hash: "22".repeat(32),
+            },
+        )
+        .await
+        .unwrap();
+    let narrow =
+        w.k.device_bound(&device, wk_knowledge::devices::DevicePermission::Read);
+    let found = narrow
+        .team_work(
+            &w.anika,
+            "demo",
+            TeamWorkQuery {
+                developer: Some("jo".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(found["status"], "developer_not_found");
+    assert_eq!(found["known_developers"], serde_json::json!([]));
+    assert!(found["active_now"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

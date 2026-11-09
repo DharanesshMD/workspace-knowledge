@@ -1,7 +1,7 @@
 //! Token-only developer accounts created by a product admin. The account is an identity under the
 //! reserved issuer `wk-admin-created` plus an ordinary membership, so the developer never signs in:
 //! they connect with a personal token (see `personal_tokens`). Authority, the services ceiling and the
-//! refusal to touch signed-in developers live in the SQL functions of migration 20; this module runs
+//! refusal to touch signed-in developers live in the SQL functions of migrations 20 and 22; this module runs
 //! them and the token inserts that must succeed or fail together with them.
 use super::*;
 use crate::personal_tokens::{token, valid_hash, valid_label, PersonalToken, COLUMNS};
@@ -199,8 +199,8 @@ impl Knowledge {
         Ok(created)
     }
     /// Remove a developer from the product (any member inside the ceiling). Their tokens are
-    /// revoked, and a token-only account that now belongs to nothing is deleted so the name can be
-    /// reused. All in one transaction.
+    /// revoked, while the principal identity and name remain reserved so retained data cannot be
+    /// adopted by a new account. All in one transaction.
     pub async fn admin_remove_user(
         &self,
         a: &Actor,

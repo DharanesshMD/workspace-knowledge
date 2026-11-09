@@ -342,7 +342,7 @@ async fn reissuing_replaces_the_tokens_and_only_for_accounts_an_admin_created() 
 
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
-async fn removing_a_developer_revokes_the_token_and_frees_the_name() {
+async fn removing_a_developer_revokes_the_token_and_reserves_the_name() {
     let w = world().await;
     let (first, second) = (hash(), hash());
     w.k.admin_create_user(
@@ -373,28 +373,30 @@ async fn removing_a_developer_revokes_the_token_and_frees_the_name() {
             .fetch_one(&w.pool)
             .await
             .unwrap();
-    assert_eq!(gone, 0);
-    // The name can be used again, by a new account that inherits nothing.
-    w.k.admin_create_user(
-        &w.admin,
-        "demo",
-        "leaver",
-        &svc(&["backend"]),
-        false,
-        "b",
-        &second,
-        30,
-    )
-    .await
-    .unwrap();
+    assert_eq!(gone, 1, "the principal identity remains reserved");
+    // An unrelated new account must never adopt this principal name.
     assert_eq!(
-        w.k.personal_token_actor(&first, "demo")
+        w.k.admin_create_user(
+            &w.admin,
+            "demo",
+            "leaver",
+            &svc(&["backend"]),
+            false,
+            "b",
+            &second,
+            30,
+        )
+        .await
+        .unwrap_err(),
+        Error::Conflict
+    );
+    assert_eq!(
+        w.k.personal_token_actor(&second, "demo")
             .await
             .err()
             .unwrap(),
         Error::Denied
     );
-    assert!(w.k.personal_token_actor(&second, "demo").await.is_ok());
 
     // An account that still belongs to another product is kept (only its demo access ends).
     let (dual, other) = (hash(), hash());
@@ -484,4 +486,244 @@ async fn a_signed_in_developer_can_still_be_removed_but_keeps_their_identity() {
         identity, 1,
         "a real identity-provider identity is never deleted by an admin"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn a_recreated_name_cannot_inherit_a_removed_developers_private_summary() {
+    let w = world().await;
+    w.k.admin_create_user(
+        &w.admin,
+        "demo",
+        "privateowner",
+        &svc(&["backend"]),
+        false,
+        "a",
+        &hash(),
+        30,
+    )
+    .await
+    .unwrap();
+    let owner = actor(&w, "privateowner");
+    let note = w.k.personal_put(&owner, "demo", wk_knowledge::personal::PersonalInput {
+        body: serde_json::from_value(serde_json::json!({"schema_version":1,"idempotency_key":"retained-private","policy_revision":1,"title":"Private decision","intent":"Preserve privacy","rationale":"Owner only","decisions":[],"constraints":[],"open_questions":[],"service_ids":["backend"],"evidence":[],"lifecycle":"proposed","capture_completeness":"complete","base_revision":null})).unwrap(),
+        provenance: wk_knowledge::personal::PersonalProvenance::Captured,
+    }).await.unwrap();
+    w.k.admin_remove_user(&w.admin, "demo", &owner.user)
+        .await
+        .unwrap();
+    assert_eq!(
+        w.k.personal_get(&owner, "demo", note.id).await.unwrap_err(),
+        Error::NotFound
+    );
+    assert_eq!(
+        w.k.admin_create_user(
+            &w.admin,
+            "demo",
+            &owner.user,
+            &svc(&["backend"]),
+            false,
+            "replacement",
+            &hash(),
+            30
+        )
+        .await
+        .unwrap_err(),
+        Error::Conflict
+    );
+    assert_eq!(
+        w.k.personal_get(&owner, "demo", note.id).await.unwrap_err(),
+        Error::NotFound
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL with CREATE DATABASE"]
+async fn upgrading_schema_21_reserves_previously_deleted_principals() {
+    let base_url = std::env::var("WK_TEST_DATABASE_URL").unwrap();
+    assert!(base_url.ends_with("/wk_test"));
+    let controller = sqlx::PgPool::connect(&base_url).await.unwrap();
+    let database = format!("wk_auth_upgrade_{}", uuid::Uuid::new_v4().simple());
+    sqlx::raw_sql(&format!("CREATE DATABASE {database}"))
+        .execute(&controller)
+        .await
+        .unwrap();
+    let url = format!("{}/{}", base_url.rsplit_once('/').unwrap().0, database);
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::raw_sql("CREATE TABLE wk_schema_migrations(version INTEGER PRIMARY KEY)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for version in 1..=21 {
+        let source = std::fs::read_to_string(format!(
+            "{}/../../migrations/server/{version:04}.sql",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        sqlx::raw_sql(&source).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO wk_schema_migrations(version) VALUES($1)")
+            .bind(version)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let k = Knowledge::from_pool(pool.clone());
+    let admin = Actor {
+        org: "legacy-org".into(),
+        user: "admin".into(),
+    };
+    k.provision_identity("https://legacy.synthetic.example", "admin", &admin)
+        .await
+        .unwrap();
+    k.grant(&admin, "demo", &svc(&["backend"]), false)
+        .await
+        .unwrap();
+    k.admin_assign(&admin, "demo", &svc(&["backend"]))
+        .await
+        .unwrap();
+    for name in [
+        "legacyprivate",
+        "legacycard",
+        "legacyprofile",
+        "legacyempty",
+    ] {
+        k.admin_create_user(
+            &admin,
+            "demo",
+            name,
+            &svc(&["backend"]),
+            false,
+            "original",
+            &hash(),
+            30,
+        )
+        .await
+        .unwrap();
+    }
+    let private = Actor {
+        org: admin.org.clone(),
+        user: "legacyprivate".into(),
+    };
+    let body = || {
+        serde_json::from_value(serde_json::json!({"schema_version":1,"idempotency_key":"legacy-retained","policy_revision":1,"title":"Private decision","intent":"Preserve privacy","rationale":"Owner only","decisions":[],"constraints":[],"open_questions":[],"service_ids":["backend"],"evidence":[],"lifecycle":"proposed","capture_completeness":"complete","base_revision":null})).unwrap()
+    };
+    let note = k
+        .personal_put(
+            &private,
+            "demo",
+            wk_knowledge::personal::PersonalInput {
+                body: body(),
+                provenance: wk_knowledge::personal::PersonalProvenance::Captured,
+            },
+        )
+        .await
+        .unwrap();
+    k.submit(
+        &Actor {
+            org: admin.org.clone(),
+            user: "legacycard".into(),
+        },
+        "demo",
+        body(),
+    )
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO code_profiles(org,product,user_id,services,display_name) VALUES($1,'demo','legacyprofile',ARRAY['backend'],'Legacy developer')")
+        .bind(&admin.org).execute(&pool).await.unwrap();
+    for name in [
+        "legacyprivate",
+        "legacycard",
+        "legacyprofile",
+        "legacyempty",
+    ] {
+        k.admin_remove_user(&admin, "demo", name).await.unwrap();
+    }
+    let identities: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM identities WHERE org=$1 AND user_id LIKE 'legacy%'",
+    )
+    .bind(&admin.org)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        identities, 0,
+        "schema 21 actually deleted the old principal identities"
+    );
+    // Exercise each independent ownership surface: the private summary, unpublished card and
+    // profile must protect their names even if their legacy account audit rows are unavailable.
+    // The empty account is protected solely by its retained audit target.
+    sqlx::query("DELETE FROM audit_events WHERE org=$1 AND target_user IS DISTINCT FROM 'legacyempty' AND user_id<>'legacyempty'")
+        .bind(&admin.org).execute(&pool).await.unwrap();
+
+    k.migrate().await.unwrap();
+    k.ready().await.unwrap();
+    for name in [
+        "legacyprivate",
+        "legacycard",
+        "legacyprofile",
+        "legacyempty",
+    ] {
+        assert_eq!(
+            k.admin_create_user(
+                &admin,
+                "demo",
+                name,
+                &svc(&["backend"]),
+                false,
+                "replacement",
+                &hash(),
+                30
+            )
+            .await
+            .unwrap_err(),
+            Error::Conflict,
+            "historical principal {name} remains reserved after upgrade"
+        );
+    }
+    assert_eq!(
+        k.personal_get(&private, "demo", note.id).await.unwrap_err(),
+        Error::NotFound
+    );
+    // Reservation survives the underlying content's retention cleanup as well.
+    sqlx::query("DELETE FROM personal_summaries WHERE org=$1")
+        .bind(&admin.org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM code_profiles WHERE org=$1")
+        .bind(&admin.org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM audit_events WHERE org=$1")
+        .bind(&admin.org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    for name in ["legacyprivate", "legacyprofile", "legacyempty"] {
+        assert_eq!(
+            k.admin_create_user(
+                &admin,
+                "demo",
+                name,
+                &svc(&["backend"]),
+                false,
+                "replacement",
+                &hash(),
+                30
+            )
+            .await
+            .unwrap_err(),
+            Error::Conflict
+        );
+    }
+    drop(k);
+    pool.close().await;
+    sqlx::raw_sql(&format!("DROP DATABASE {database}"))
+        .execute(&controller)
+        .await
+        .unwrap();
+    controller.close().await;
 }

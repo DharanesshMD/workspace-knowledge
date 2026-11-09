@@ -185,7 +185,8 @@ def main():
             if replacement is None:
                 replacement = post(api + "/" + user + "/token", {"days": 1})["token"]
             for client in ("codex", "antigravity"):
-                managed_ca = home / ".local/share/workspace-knowledge/clients" / client / "workspace-knowledge/ca.pem"
+                managed_args = entry(client)["args"]
+                managed_ca = Path(managed_args[managed_args.index("--ca-file") + 1])
                 setup(client, token=replacement, ca_path=managed_ca)
                 setup(client, "check")
             ok(label + " is enforced; credential replacement restores both clients")
@@ -193,7 +194,8 @@ def main():
         for client in ("codex", "antigravity"):
             setup(client, "disconnect")
             setup(client, "disconnect")
-            assert not (home / ".local/share/workspace-knowledge/clients" / client / "workspace-knowledge/token").exists()
+            client_state = home / ".local/share/workspace-knowledge/clients" / client / "workspace-knowledge"
+            assert not any(client_state.rglob("token"))
         assert json.loads(ag_config.read_text()) == ag_original
         assert "existing" in codex_config.read_text() and "workspace-knowledge" not in codex_config.read_text()
         ok("disconnect is repeatable, removes managed credentials and preserves unrelated IDE settings")

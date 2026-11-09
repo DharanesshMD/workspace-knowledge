@@ -188,7 +188,7 @@ impl Knowledge {
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db)?;
-        if versions != (1..=21).collect::<Vec<_>>() {
+        if versions != (1..=22).collect::<Vec<_>>() {
             return Err(Error::Storage);
         }
         Ok(())
@@ -228,6 +228,7 @@ impl Knowledge {
             (19, include_str!("../../../migrations/server/0019.sql")),
             (20, include_str!("../../../migrations/server/0020.sql")),
             (21, include_str!("../../../migrations/server/0021.sql")),
+            (22, include_str!("../../../migrations/server/0022.sql")),
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM wk_schema_migrations WHERE version=$1)",

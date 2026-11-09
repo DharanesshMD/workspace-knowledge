@@ -52,7 +52,9 @@ impl Knowledge {
         {
             return Err(Error::Invalid);
         }
-        let mut tx = self.actor_tx(a).await?;
+        // Take the administration gate before device/membership locks, and hold it through the
+        // owner token lock and insertion. Removal must revoke this issuance or precede its check.
+        let mut tx = self.code_tx(a, product).await?;
         let member =
             sqlx::query("SELECT 1 FROM memberships WHERE org=$1 AND product=$2 AND user_id=$3")
                 .bind(&a.org)

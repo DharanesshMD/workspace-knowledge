@@ -114,7 +114,7 @@ python3 deploy/stack/verify.py --team-work --tokens
 2. **Add a developer**: a name (lowercase letters, digits, `.` `-` `_`, starting with a letter), the services they may use (only ones inside your own admin scope are offered), whether they may review, and how long the token lasts. Press **Create developer and token**.
 3. The portal shows, once, a **Send this to NAME** box: one message with the MCP URL, the token, the Claude Code command and the Cursor configuration. **Copy** it and send it to the developer over a channel you trust. The token is a secret and is not shown again.
 4. The developer pastes it into their agent (Claude Code or Cursor, as in the personal-token section below) and is connected as themselves.
-5. Later, in the same tab: **Reissue token** for a lost one (the old one stops working at once), or **Remove** a developer, which revokes their access and token immediately and frees the name.
+5. Later, in the same tab: **Reissue token** for a lost one (the old one stops working at once), or **Remove** a developer, which revokes their access and token immediately; the principal name remains reserved so a new account cannot inherit retained data.
 
 What an admin can and cannot do: they work only inside their own services scope; they can issue tokens only for accounts they created, never for a developer who signs in through Keycloak; a name already used by anyone is refused, so a new account can never take over an existing one. Every create, reissue and removal is written to the audit log. Check it from the command line with `python3 deploy/stack/verify.py --admin`.
 
