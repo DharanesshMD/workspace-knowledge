@@ -20,7 +20,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - if: runner.os != 'Windows'
         run: python3 -m unittest discover -s scripts/tests -v
       - if: runner.os == 'Linux'
@@ -68,7 +68,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_BUILD_JOBS: "2"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - run: rustup toolchain install 1.98.1 --profile minimal
       - run: cargo test --workspace --locked -- --include-ignored
@@ -88,7 +88,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -105,7 +105,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build Linux amd64 runtime candidate
         run: docker build --platform linux/amd64 --target runtime -f deploy/Dockerfile -t wk-candidate:${{ github.sha }} .
       - name: Check non-root assets and fail-closed production startup
@@ -125,7 +125,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup toolchain install 1.98.1 --profile minimal
       - run: cargo build -p wk-environments --locked
       - name: Start disposable TLS vault
