@@ -19,7 +19,7 @@ wk-summarize={path="../summarize"}
 tokio = { version = "1", features = ["rt", "time", "net"] }
 
 [dev-dependencies]
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "cache"] }
 
 [[bin]]
 name = "wk"

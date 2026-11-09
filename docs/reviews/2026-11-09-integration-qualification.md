@@ -13,6 +13,8 @@ The ownership, issuance-race, activity-only and cached-endpoint regressions were
 
 ## Fresh local verification
 
+The results below qualify the initial schema-22 integration at `3e4a5f2`, before the dependency follow-up described below.
+
 | Check | Result |
 |---|---|
 | Full Rust workspace including PostgreSQL-backed ignored tests | 809 passed, zero failed or ignored; pinned Rust 1.98.1, disposable PostgreSQL 17 with pgvector |
@@ -31,6 +33,8 @@ The local stack now runs `wk-server:integration-20261109`, also tagged `wk-serve
 Local receipts are `/tmp/wk-integration-{rust,python-final,clippy,build,recovery,image,install,live-admin,live-team,live-onboarding}.log`. Fresh-HOME lifecycle metadata is retained in the private `wk-clean-user-45a8hvlz/results.json` temporary directory. The pre-upgrade snapshot and its private recovery identity are outside the repository in the local stack's private backup directory; neither is a release artifact.
 
 ## Integration and release boundary
+
+The initial PR dependency audit reported four vulnerabilities, reproduced locally without suppressions. `rusqlite` is now 0.41.1 with bundled `libsqlite3-sys` 0.39.1, addressing [RUSTSEC-2026-0459](https://raw.githubusercontent.com/RustSec/advisory-db/main/crates/libsqlite3-sys/RUSTSEC-2026-0459.md). `rmcp` and its macros are now 3.9.0, addressing [RUSTSEC-2026-0457](https://raw.githubusercontent.com/RustSec/advisory-db/main/crates/rmcp/RUSTSEC-2026-0457.md), [RUSTSEC-2026-0461](https://raw.githubusercontent.com/RustSec/advisory-db/main/crates/rmcp/RUSTSEC-2026-0461.md) and [RUSTSEC-2026-0462](https://raw.githubusercontent.com/RustSec/advisory-db/main/crates/rmcp/RUSTSEC-2026-0462.md). The fresh unsuppressed local audit reports zero vulnerabilities and zero unsoundness warnings, retaining four unmaintained-package notices. The all-target normal dependency graph still excludes RSA. The SQLite feature selection preserves bundled native storage and caching without adding the new optional WASM backend. Final rebuilt/runtime and regression results for this dependency follow-up are recorded in [PR #25](https://github.com/DharanesshMD/workspace-knowledge/pull/25) and the frozen private packet; the earlier image above is retained as baseline evidence.
 
 The integration PR and subsequent merged-commit workflows must pass before the merged SHA is frozen. Their exact revision, run URLs and artifact hashes belong in the private evaluation packet. Earlier CI at `b419704` remains historical baseline evidence; it does not qualify schema 22.
 
