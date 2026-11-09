@@ -7,7 +7,7 @@ license.workspace=true
 serde.workspace=true
 serde_json.workspace=true
 sha2.workspace=true
-rmcp={version="3.5",features=["transport-io"]}
+rmcp={version="3.9",features=["transport-io"]}
 tokio={version="1",features=["macros","rt-multi-thread","io-std","io-util","net","sync","time"]}
 reqwest={version="0.12",default-features=false,features=["json","rustls-tls"]}
 uuid={version="1",features=["v4"]}
@@ -20,6 +20,8 @@ wk-contracts={path="../contracts"}
 wk-login={path="../login"}
 wk-scope={path="../scope"}
 wk-summarize={path="../summarize"}
+[target.'cfg(unix)'.dependencies]
+libc="0.2"
 [dev-dependencies]
 wk-login={path="../login",features=["test-support"]}
 axum="0.8"

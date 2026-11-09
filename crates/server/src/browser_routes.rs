@@ -210,10 +210,22 @@ async fn me(
     let products = api.knowledge.products_for(&who).await?;
     // The hosted MCP address for each product; null when remote MCP is not (validly) configured.
     let resource = crate::remote_mcp::resource(&api).ok();
+    let mut admin_of = std::collections::HashSet::new();
+    for p in &products {
+        if api
+            .knowledge
+            .is_product_admin(&who, &p.product)
+            .await
+            .unwrap_or(false)
+        {
+            admin_of.insert(p.product.clone());
+        }
+    }
     let products: Vec<_> = products
         .iter()
         .map(|p| {
             let mut value = json!(p);
+            value["is_admin"] = json!(admin_of.contains(&p.product));
             value["mcp_url"] = json!(resource
                 .as_ref()
                 .filter(|_| wk_contracts::valid_id(&p.product))
@@ -223,7 +235,8 @@ async fn me(
         .collect();
     let token = session_cookie(&api, &headers)?.map(|s| csrf(&s));
     Ok(Json(
-        json!({"user":who.user,"org":who.org,"products":products,"csrf_token":token}),
+        json!({"user":who.user,"org":who.org,"products":products,"csrf_token":token,
+            "personal_tokens":api.personal_tokens.map(|c| json!({"max_days":c.max_days}))}),
     ))
 }
 async fn logout(State(api): State<Api>, headers: HeaderMap) -> Result<Response, Failure> {

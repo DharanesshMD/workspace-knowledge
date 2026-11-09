@@ -46,7 +46,13 @@ fn the_consent_directory_rules_are_unchanged() {
     assert!(refused(Some(std::path::Path::new("relative")))
         .unwrap()
         .contains("absolute"));
-    assert!(refused(Some(&base.join("a/../b")))
+    // PathBuf::join normalizes `..` for Windows verbatim prefixes. Preserve
+    // the literal caller input so this actually exercises traversal refusal.
+    let mut traversal = base.as_os_str().to_os_string();
+    traversal.push(std::path::MAIN_SEPARATOR_STR);
+    traversal.push("a/../b");
+    let traversal = std::path::PathBuf::from(traversal);
+    assert!(refused(Some(&traversal))
         .unwrap()
         .contains("parent traversal"));
     assert_eq!(

@@ -1,5 +1,6 @@
 //! Authenticated shared knowledge HTTP API.
 pub mod admin_cli;
+mod admin_routes;
 pub mod auth;
 pub mod browser_auth;
 mod browser_routes;
@@ -10,6 +11,7 @@ pub mod embeddings;
 pub mod environments;
 mod health;
 mod personal_routes;
+pub mod personal_tokens;
 mod prompt_context;
 pub mod remote_mcp;
 pub mod retention_worker;
@@ -39,6 +41,7 @@ struct Api {
     origin: Option<String>,
     browser: Option<browser_auth::BrowserAuth>,
     collector: Option<device_routes::CollectorAuth>,
+    personal_tokens: Option<personal_tokens::Config>,
 }
 struct Failure(StatusCode, &'static str);
 impl IntoResponse for Failure {
@@ -57,13 +60,17 @@ impl From<Error> for Failure {
         }
     }
 }
-async fn bearer_actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
+fn reject_browser_origin(api: &Api, headers: &HeaderMap) -> Result<(), Failure> {
     if headers
         .get("origin")
         .is_some_and(|v| v.to_str().ok() != api.origin.as_deref())
     {
         return Err(Failure(StatusCode::FORBIDDEN, "browser_access_disabled"));
     }
+    Ok(())
+}
+async fn bearer_actor(api: &Api, headers: &HeaderMap) -> Result<Actor, Failure> {
+    reject_browser_origin(api, headers)?;
     let token = headers
         .get("authorization")
         .and_then(|h| h.to_str().ok())
@@ -198,6 +205,8 @@ struct Share {
     constraints: Vec<String>,
     #[serde(default)]
     open_questions: Vec<String>,
+    #[serde(default)]
+    files: Vec<String>,
 }
 /// What a successful share tells the caller, over HTTP and from the hosted MCP tool alike.
 fn share_outcome(o: &wk_knowledge::share::ShareOutcome) -> Value {
@@ -240,6 +249,7 @@ async fn share(
         decisions: r.decisions,
         constraints: r.constraints,
         open_questions: r.open_questions,
+        files: r.files,
     };
     Ok(
         match api.knowledge.share_session(&who, &r.product, request).await {
@@ -563,6 +573,7 @@ pub fn portal_router_with_embeddings(
         .into_iter()
         .map(|(token, actor)| (Sha256::digest(token.as_bytes()).into(), actor))
         .collect();
+    let personal_tokens = personal_tokens::config(|key| std::env::var(key).ok())?;
     let api = Api {
         embeddings: embeddings.map(Arc::new),
         health_slots: Arc::new(tokio::sync::Semaphore::new(1)),
@@ -573,11 +584,14 @@ pub fn portal_router_with_embeddings(
         origin,
         browser,
         collector,
+        personal_tokens,
     };
     let limits = runtime::Limits::from_env()?;
     let router = Router::new()
         .merge(browser_routes::routes())
         .merge(personal_routes::routes())
+        .merge(personal_tokens::routes())
+        .merge(admin_routes::routes())
         .merge(team_routes::routes())
         .merge(change_routes::routes())
         .merge(device_routes::routes())

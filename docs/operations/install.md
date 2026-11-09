@@ -6,7 +6,7 @@ This is a pre-release source build. The latest published source-only prerelease 
 
 ## Install the tools
 
-Install Rust through rustup; the checkout pins the toolchain in `rust-toolchain.toml`. A C build toolchain is required. macOS needs Xcode Command Line Tools; Windows needs MSVC build tools. On Debian/Ubuntu, collector builds need `build-essential pkg-config libdbus-1-dev`. Persistent capture also requires a working user credential store: macOS Keychain, Windows Credential Store, or Linux Secret Service/DBus. Missing secure storage fails closed.
+Install Rust through rustup; the checkout pins the toolchain in `rust-toolchain.toml`. A C build toolchain is required. The macOS/Linux source installer also requires Python 3.11 or newer for `wk-connect` and checks that prerequisite before building. macOS needs Xcode Command Line Tools; Windows needs MSVC build tools. On Debian/Ubuntu, collector builds need `build-essential pkg-config libdbus-1-dev`. Persistent capture also requires a working user credential store: macOS Keychain, Windows Credential Store, or Linux Secret Service/DBus. Missing secure storage fails closed.
 
 From a cloned checkout on macOS/Linux:
 
@@ -15,7 +15,7 @@ From a cloned checkout on macOS/Linux:
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The script works from another directory when invoked by its absolute path. It installs `wk`, `wk-agent`, `wk-env`, `wk-server` and `wk-mcp` into `~/.local/bin`. Set `WK_PREFIX` to use another user-owned prefix. The PATH command applies to the current shell; add the directory to your shell configuration if you want it available in future sessions. Never run the collector installer as root.
+The script works from another directory when invoked by its absolute path. It installs `wk`, `wk-agent`, `wk-env`, `wk-server`, `wk-mcp` and `wk-connect` into `~/.local/bin`. Set `WK_PREFIX` to use another user-owned prefix. The PATH command applies to the current shell; add the directory to your shell configuration if you want it available in future sessions. Never run the collector installer as root.
 
 **macOS and Gatekeeper.** Binaries you build with this script are signed ad hoc by the linker and are not quarantined (checked on macOS with `xattr` and `codesign -dv`), so macOS shows no unsigned-developer prompt. Only binaries downloaded from a browser or chat get quarantined; no signed or notarized binary is published yet, so prefer the source install above. The first run of a rebuilt `wk-agent` can still ask for Keychain access to its existing items: allow only the expected Workspace Knowledge items. A signed, notarized release needs an Apple Developer identity the project does not have yet ([readiness ledger](production-readiness.md)).
 
@@ -28,6 +28,10 @@ cargo build --locked --release -p wk-cli -p wk-agent -p wk-environments -p wk-se
 Copy `wk.exe`, `wk-agent.exe`, `wk-env.exe`, `wk-server.exe` and `wk-mcp.exe` from `target/release` to a user-owned directory on PATH. This does not register startup or install client hooks. Node.js 22/npm is needed only to build the web console; server Docker builds handle that in the build image.
 
 ## Join a team server
+
+**Folder-approval upgrade:** Linux approvals use generation-aware filesystem export handles; other Unix approvals bind the directory's device, inode and creation time. Older Unix inode-only bindings require fresh developer approval and affected collectors must be re-enrolled against that approval before capture resumes. Do not edit or copy approval hashes by hand. Local folder approval fails closed when the required handle or creation-time metadata is unavailable; some Linux filesystems/container policies do not support export handles. Personal-token MCP proxy onboarding is unaffected by this local capture-consent change.
+
+For Codex or Antigravity MCP access with a personal token, use the [repeatable client onboarding](client-onboarding.md) commands. `wk-connect` validates the connection and configures the installed proxy without a machine-specific launcher or tokens in IDE settings.
 
 Get the portal URL, product name and permitted services from your administrator. Sign in to that portal through the team's OIDC provider. My context and Team context are available without installing a collector; installation adds local capture and synchronization.
 
@@ -52,7 +56,7 @@ For an AI agent's MCP access, run `wk-mcp login --server https://knowledge.inter
 
 In another terminal, run `wk-agent --state-dir "$HOME/.local/share/workspace-knowledge/collector" doctor`. Then follow the [adapter instructions](../adapters/setup.md) for your exact client/version. Connecting a device alone does not install hooks or establish capture coverage. Each collector state binds one chosen service; multiple services require explicit attribution.
 
-Owner summary synchronization and activity sharing default off. If wanted, grant the matching hosted setting under Devices and explicitly enable the corresponding local permission; both are required. Owner sync uses `owner-sync enable --yes`. Publication still requires review. A changed local scope, destination, model or summarizer mode requires a new explicit local connection/consent.
+Owner summary synchronization and activity sharing default off. If wanted, grant the matching hosted setting under Devices and explicitly enable the corresponding local permission; both are required. Owner sync uses `owner-sync enable --yes`. On current `main`, new collectors enable publication without a reviewer for eligible assistant-written cards. Set `WK_AUTO_PUBLISH_PRODUCTS=none` on the server or connect with `--no-auto-publish` to require review; existing collectors keep their prior choice. Rule drafts and hook captures still require review. A changed local scope, destination, model or summarizer mode requires a new explicit local connection/consent.
 
 ### Renewal and device controls
 
@@ -88,6 +92,7 @@ Configure secrets through your deployment secret manager. The required variables
 | `WK_OIDC_CA_FILE` | Optional PEM bundle for an identity provider behind a private CA; replaces public roots for provider requests only. Collectors take the bundle with `device connect --ca-file`. See [Keycloak setup](oidc-keycloak.md) |
 | `WK_AUTO_PUBLISH_PRODUCTS` | Optional. Unset or empty (the default): every product lets a developer's collector publish their own assistant-written cards without a reviewer, if that collector has it on. `none` turns it off server-wide; a comma-separated list of product IDs enables only those. Any other value stops startup. See [publishing without review](../adapters/setup.md#publishing-without-review-on-by-default-for-new-setups). |
 | `WK_MCP_RESOURCE`, `WK_MCP_CLIENT_ID` | Optional, for remote MCP and `wk-mcp login`: the server's public HTTPS origin with no trailing slash (it must equal `WK_OIDC_AUDIENCE`) and the public sign-in client. See the [Keycloak quick start](quick-start-keycloak.md) and [remote MCP](../architecture/remote-mcp.md) |
+| `WK_PERSONAL_TOKENS`, `WK_PERSONAL_TOKEN_MAX_DAYS` | Optional. `WK_PERSONAL_TOKENS=1` lets each developer create revocable personal tokens in the portal's Connect page that authenticate to one product's hosted MCP address only (never the REST API), so an agent can connect without a browser sign-in. Off by default; any other value stops startup. The lifetime cap is 1 to 365 days, default 90. Existing databases need the `GRANT` for `personal_tokens` in `deploy/scripts/application-role.sql` re-applied. See the [threat model](../security/threat-model.md) |
 | `WK_BROWSER_CLIENT_ID` | Registered portal authorization-code client |
 | `WK_BROWSER_CLIENT_SECRET` | Optional secret for a confidential browser client; omit for a public client |
 | `WK_CONSOLE_ORIGIN` | Exact public HTTPS portal origin |
@@ -110,7 +115,7 @@ After provisioning:
 docker compose -f deploy/compose/compose.yaml up -d app
 ```
 
-Place the HTTPS reverse proxy in front of host-loopback port 8080. Preserve Origin headers and cookies; do not log callback queries, cookies or Authorization headers. Configure proxy deadlines, request-size/rate limits and backup retention. Run the separately authorized retention worker and rehearse deletion-safe encrypted restore using the [hosted operations](hosted-portal.md), [backup](backup.md) and [restore](restore.md) guides. `/health/ready` checks runtime database access and schema migrations 1–18; it does not certify capture, identity-provider health or backups.
+Place the HTTPS reverse proxy in front of host-loopback port 8080. Preserve Origin headers and cookies; do not log callback queries, cookies or Authorization headers. Configure proxy deadlines, request-size/rate limits and backup retention. Run the separately authorized retention worker and rehearse deletion-safe encrypted restore using the [hosted operations](hosted-portal.md), [backup](backup.md) and [restore](restore.md) guides. On current `main`, `/health/ready` checks runtime database access and schema migrations 1–22; it does not certify capture, identity-provider health or backups. After migrating an older installation, reapply `deploy/scripts/application-role.sql` with the operator connection so the restricted runtime role can use the new tables and functions.
 
 For a source-hosted server, build the console with `cd web && npm ci && npm run build`, then set `WK_WEB_DIR` to the absolute `web/dist` directory when starting `wk-server --production`. Assets are served from that directory; they are not embedded in the executable.
 

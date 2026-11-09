@@ -683,3 +683,199 @@ async fn admin_policy_can_restrict_but_not_widen_privacy_or_destinations() {
         Error::Invalid
     );
 }
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn removing_a_member_revokes_their_personal_tokens_under_the_restricted_role() {
+    let (k, u, pool) = setup().await;
+    let (runtime, scoped, role) = restricted(&pool).await;
+    let hash = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    runtime
+        .create_personal_token(&u[2], "demo", "laptop", &hash, 30)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .personal_token_actor(&hash, "demo")
+            .await
+            .unwrap()
+            .user,
+        "alice"
+    );
+    runtime
+        .admin_member_remove(&u[0], "demo", "alice")
+        .await
+        .unwrap();
+    k.grant(&u[2], "demo", &["backend".into()], false)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .personal_token_actor(&hash, "demo")
+            .await
+            .err()
+            .unwrap(),
+        Error::Denied
+    );
+    scoped.close().await;
+    drop_role(&pool, &role).await;
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn admin_created_accounts_work_under_the_restricted_application_role() {
+    let (_k, u, pool) = setup().await;
+    let (runtime, scoped, role) = restricted(&pool).await;
+    let hash = || {
+        format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        )
+    };
+    let (first, second) = (hash(), hash());
+    let services = vec!["backend".to_string()];
+    assert!(runtime.is_product_admin(&u[0], "demo").await.unwrap());
+    assert!(!runtime.is_product_admin(&u[2], "demo").await.unwrap());
+    runtime
+        .admin_create_user(
+            &u[0], "demo", "newdev", &services, false, "first", &first, 30,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .personal_token_actor(&first, "demo")
+            .await
+            .unwrap()
+            .user,
+        "newdev"
+    );
+    let listing = runtime.admin_users(&u[0], "demo").await.unwrap();
+    assert!(listing
+        .users
+        .iter()
+        .any(|m| m.user == "newdev" && m.token_only && m.tokens.len() == 1));
+    runtime
+        .admin_reissue_token(&u[0], "demo", "newdev", "second", &second, 7)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .personal_token_actor(&first, "demo")
+            .await
+            .err()
+            .unwrap(),
+        Error::Denied
+    );
+    assert_eq!(
+        runtime
+            .admin_reissue_token(&u[0], "demo", "alice", "x", &hash(), 7)
+            .await
+            .unwrap_err(),
+        Error::Denied
+    );
+    assert_eq!(
+        runtime
+            .admin_create_user(
+                &u[2],
+                "demo",
+                "bysomeone",
+                &services,
+                false,
+                "x",
+                &hash(),
+                7
+            )
+            .await
+            .unwrap_err(),
+        Error::Denied
+    );
+    runtime
+        .admin_remove_user(&u[0], "demo", "newdev")
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .personal_token_actor(&second, "demo")
+            .await
+            .err()
+            .unwrap(),
+        Error::Denied
+    );
+    scoped.close().await;
+    drop_role(&pool, &role).await;
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn shared_files_and_team_work_run_under_the_restricted_application_role() {
+    let (_k, u, pool) = setup().await;
+    let (runtime, scoped, role) = restricted(&pool).await;
+    let share = |title: &str, files: &[&str]| wk_knowledge::share::ShareRequest {
+        service: Some("backend".into()),
+        title: title.into(),
+        intent: format!("Goal of {title}"),
+        rationale: "Because".into(),
+        files: files.iter().map(|f| f.to_string()).collect(),
+        ..Default::default()
+    };
+    let shared = runtime
+        .share_session(
+            &u[2],
+            "demo",
+            share("Retry with backoff", &["backend/payments/retry.rs"]),
+        )
+        .await
+        .unwrap();
+    assert!(shared.published);
+    let found = runtime
+        .team_work(
+            &u[3],
+            "demo",
+            wk_knowledge::team_work::TeamWorkQuery {
+                developer: Some("ali".into()),
+                paths: vec!["backend/payments".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(found["resolved"]["developer"], "alice");
+    assert_eq!(
+        found["entries"][0]["files_reported"],
+        serde_json::json!(["backend/payments/retry.rs"])
+    );
+    // Row-level security: another organization's member sees nothing of it.
+    let stranger = Actor {
+        org: uuid::Uuid::new_v4().to_string(),
+        user: "alice".into(),
+    };
+    assert_eq!(
+        runtime
+            .team_work(&stranger, "demo", Default::default())
+            .await
+            .unwrap_err(),
+        Error::Denied
+    );
+    let leaked: i64 = {
+        let mut tx = scoped.begin().await.unwrap();
+        sqlx::query("SELECT set_config('wk.org',$1,true),set_config('wk.user',$2,true)")
+            .bind(&stranger.org)
+            .bind(&stranger.user)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query_scalar("SELECT count(*) FROM card_files")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        leaked, 0,
+        "card_files rows are invisible outside the organization"
+    );
+    scoped.close().await;
+    drop_role(&pool, &role).await;
+}

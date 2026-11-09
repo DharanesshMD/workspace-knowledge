@@ -1,4 +1,5 @@
 //! Strict shared knowledge contracts. Raw conversation types never belong here.
+pub mod agent_setup;
 pub mod change_context;
 pub mod device;
 pub mod retrieval;

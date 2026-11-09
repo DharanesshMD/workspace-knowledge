@@ -41,6 +41,12 @@ services:
       # be the API audience, and the public client that `wk-mcp login` signs in with.
       WK_MCP_RESOURCE: ${WK_MCP_RESOURCE:-}
       WK_MCP_CLIENT_ID: ${WK_MCP_CLIENT_ID:-}
+      # Personal MCP tokens, off by default. `1` lets each developer create revocable tokens in the portal
+      # that authenticate to the hosted MCP address of one product only (never the REST API); the
+      # lifetime cap is 1 to 365 days. Disabling it makes the server reject every existing token.
+      WK_PERSONAL_TOKENS: ${WK_PERSONAL_TOKENS:-0}
+      WK_PERSONAL_TOKEN_MAX_DAYS: ${WK_PERSONAL_TOKEN_MAX_DAYS:-90}
+      WK_AUTO_PUBLISH_PRODUCTS: ${WK_AUTO_PUBLISH_PRODUCTS:-}
       WK_BIND: 0.0.0.0:8080
       WK_CONSOLE_ORIGIN: ${WK_CONSOLE_ORIGIN:?Set exact HTTPS console origin}
       WK_POOL_MAX: '${WK_POOL_MAX:-10}'

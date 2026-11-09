@@ -1,56 +1,43 @@
-# v0.1.0-alpha.4: draft release notes and owner checklist
+# v0.1.0-alpha.4: source-only evaluation draft
 
-**Status: draft. No tag or GitHub release exists for alpha.4.** The latest published release is the source-only `v0.1.0-alpha.3` prerelease. Cut alpha.4 only after the checklist below. The code was verified locally at commit `b5e72f7`; the tag goes on the documentation-only commit that records that SHA here, so the tagged tree differs from `b5e72f7` by this file alone. Nothing here makes the project production-supported: see the [production readiness ledger](production-readiness.md).
+**Draft, not published or tagged.** The latest published prerelease remains `v0.1.0-alpha.3`. These notes describe the current evaluation work, including schema-22 principal reservations and recovery support. They are not approval to publish or a production-support claim.
 
-## Draft release notes
+The first evaluation workflow is a Linux Docker server and macOS developers using MCP to retrieve team knowledge and explicitly share screened summaries. Real model-driven Codex CLI and Antigravity IDE workflows passed locally; exact versions and surfaces are in the [client report](../reviews/2026-11-07-local-ide-acceptance.md). Automatic conversation capture remains separately experimental and version-pinned.
 
-**Workspace Knowledge v0.1.0-alpha.4: source-only evaluation prerelease**
+## Verification
 
-A self-hostable alpha for small teams: a Linux Docker server (PostgreSQL, an OIDC provider, an HTTPS reverse proxy) and macOS developer machines. Built from source; no binaries are attached and nothing is signed or notarized. Not production-certified. Use disposable or synthetic data. Nothing leaves a developer's machine except summaries that pass screening (a rule draft or hook capture always waits for review).
+The application baseline `49adaaf` passed all seven Foundation and both Dependency CI jobs across Linux, macOS and Windows, PostgreSQL, the web console, OpenBao and the amd64 server image. Local evidence includes 803 Rust tests, 58 Python checks without skips, 77 browser tests and a 12-check fresh-HOME onboarding lifecycle. See the [qualification report](../reviews/2026-11-08-release-qualification.md).
 
-**Verified commit:** `b5e72f7`. On a pristine checkout of it (2026-10-24): `cargo fmt`, strict Clippy and 715 Rust tests, including the database-backed ones, against PostgreSQL 17 with pgvector; and a Gitleaks scan of all 278 commits on branches and tags (no leaks). On the same code before it was committed: the web build and tests (42), the Keycloak acceptance run (85 checks), the integration and demo scripts, and a real-browser run of the folder-approval page. GitHub Actions had not run (see Known limits).
+The subsequent recovery correction at `b419704` fixes current-schema backup/restore and adds its real drill to PostgreSQL CI. Local checks passed 15 encrypted-recovery checks and 85 private-CA Keycloak checks. The [local pilot/recovery report](../reviews/2026-11-09-local-pilot-recovery.md) records that candidate's remote result and exact limits. Select and verify the final release revision before creating a tag; neither a later documentation commit nor a moving branch inherits an exact-SHA CI result.
 
-### What changed since alpha.3
+## Changes since alpha.3
 
-- **Log in once to the hosted MCP.** `wk-mcp login` signs a developer in (authorization code with PKCE) and renews tokens silently from the OS credential store, so no access token has to be copied. A prefilled Keycloak realm and a [quick start](quick-start-keycloak.md) cover the server side. Claude Code and the Cursor agent CLI sign in to the server's MCP endpoint themselves once the realm allows it; the Cursor editor and VS Code 1.142.0 also passed sign-in and silent renewal ([results](../reviews/2026-10-19-remote-mcp-signin-results.md)); VS Code needs a realm access-token lifespan above 5 minutes. No client was tested with a real model calling a tool.
-- **Identity providers behind a private CA.** `WK_OIDC_CA_FILE` for the server and `--ca-file` for `wk-agent device connect` and `wk-mcp login`. Keycloak 26.4 is the one provider qualified so far ([guide](oidc-keycloak.md)).
-- **Publish without review, on by default for new setups.** A developer's own assistant-written cards go live right after `wk-agent draft`, with no reviewer, once they pass screening. New collectors have it on (`--no-auto-publish` opts out), the server enables every product (`WK_AUTO_PUBLISH_PRODUCTS=none` turns it off), and collectors set up before alpha.4 stay off until the developer runs `wk-agent auto-publish enable --yes`. Cards can be withdrawn and each publication is audited ([setup](../adapters/setup.md#publishing-without-review-on-by-default-for-new-setups)). This is a change from alpha.3, where every card waited for a reviewer.
-- **A Connect page in the portal.** After signing in, each developer sees their MCP address and copy-ready setup for Claude, Claude Code, Cursor and VS Code, so connecting an agent is a paste ([setup](../adapters/setup.md#mcp-sign-in-wk-mcp-login-and-native-remote-clients)).
-- **Share from your agent, with only your sign-in.** A `knowledge.share_session` tool lets an agent share a screened summary of its work (never the conversation); after a folder is approved once, later sessions there pull team context and share on request automatically. Keyword search is now forgiving, so natural-language queries find teammates' cards ([setup](../adapters/setup.md#share-a-session-summary-from-your-agent)).
-- **Approve a folder from your agent.** The local `wk-mcp` bridge can ask you, through a one-time local browser page, to approve the project folder your agent is in; only your click records it ([setup](../adapters/setup.md#approve-a-project-folder-from-your-agent)).
-- **Better default summaries.** The assistant-written flow (`/wk-summarize`) is the recommended path and a reviewer can publish such cards. Rules-mode drafts are the zero-setup fallback and now avoid greetings and pasted traces as titles.
-- **Faster search.** Schema migration 18 stores the card search vector and adds a missing graph index. Five-developer search p95 fell from about 0.9 s to 34 ms in a local synthetic test ([measurements and limits](../reviews/2026-10-21-capacity-and-search.md)).
-- **One capture support table.** [`docs/adapters/support.md`](../adapters/support.md) lists tested client versions, what is captured and what is held. Unsupported versions are refused with a message that points to it.
-- **Fixes.** `knowledge.record` no longer shows Claude Code an unusable tool schema; contact-detail screening no longer flags UUIDs and dates as phone numbers; `rustls-webpki` and `webpki-roots` are updated for two certificate-trust advisories (RUSTSEC-2026-0382 and RUSTSEC-2026-0381).
+- **Repeatable Codex/Antigravity setup.** The source installer includes five native commands and `wk-connect`. Its connect/check/disconnect commands validate authenticated MCP access before updating settings, preserve other servers and tool policies, retain private backups, and use a native proxy with private token/CA files. Python 3.11+ is required for the setup helper. See [onboarding](client-onboarding.md).
+- **Ask about people, files and modules.** `knowledge.team_work` retrieves published work by developer, paths, service, keywords and time window. Results distinguish publication from implementation lifecycle. Shared summaries can name the files actually changed.
+- **Personal MCP tokens and product administration.** Developers can use revocable, product-scoped tokens. Product admins can provision scoped token-only developers through the portal. The operator must enable personal tokens. Tokens do not authorize other products or the ordinary REST API. Removed account names remain reserved so retained data cannot be inherited by a new account. Token issuance is serialized with membership changes.
+- **Login and private-CA support.** Native MCP sign-in and collector login support private-CA Keycloak. The Connect page supplies agent setup instructions. Public-provider acceptance remains open.
+- **Explicit sharing and publication policy.** Agents share when asked. Eligible assistant-written cards publish after screening by default; `WK_AUTO_PUBLISH_PRODUCTS=none` requires review instead. Existing collectors retain their recorded policy, and new collector setup can use `--no-auto-publish`. Rule drafts, partial captures and hook output do not gain automatic publication.
+- **Folder approval and revocation.** The bridge's approval page requires a developer click. Linux receipts now use generation-aware filesystem handles; other Unix receipts include creation time. Legacy Unix inode-only approvals require fresh consent and collector reenrollment. Unsupported filesystems fail closed.
+- **Recovery.** Backup/restore requires migrations 1–22, consistent with the version-2/schema-22 manifest. Restored access is quarantined, including personal MCP tokens. Both latest deletion journals must be replayed before granting access. CI now exercises actual encrypted recovery.
+- **Maintenance and CI fixes.** Tokio 1.53.3 removes its recorded I/O-safety warning, and dependency CI denies unsoundness warnings. The integration audit prompted updates to rusqlite 0.41.1/bundled SQLite 3.54.1 and rmcp 3.9.0; see the [dependency follow-up](../reviews/2026-11-09-integration-qualification.md). The latest local audit has zero vulnerability findings and four unmaintained-package notices. Windows fixture/path checks and PostgreSQL runner build bounds were corrected. Older search and summary improvements remain included.
 
-### Upgrading from alpha.3
+## Installation and upgrade
 
-- **Review before publish is no longer the default for new setups.** If you want a reviewer on every card, set `WK_AUTO_PUBLISH_PRODUCTS=none` on the server before onboarding developers. Existing collectors keep their old behavior.
-- The server now needs **schema 18**. Run `wk-server migrate` with the operator connection before starting the new binary.
-- Backup snapshots taken at schema 17 are refused by the schema-18 restore script; follow the offline upgrade in the [restore guide](restore.md) and take a new snapshot after migrating.
-- New collectors default to `rules` summaries. Existing `local` configurations are unchanged, but a `rules` configuration cannot be read by older binaries.
+Follow [install and deploy](install.md), then [client onboarding](client-onboarding.md). The source installer does not enable capture, hooks or startup services. No signed/notarized binaries are attached to this proposed source release.
 
-### Known limits
+Before upgrading an existing server, retain a trusted backup created with tools matching its schema. Stop the application, apply migrations 1–22 with the protected operator connection, and reapply `deploy/scripts/application-role.sql`. Start the application using the restricted runtime connection. Keep client/proxy traffic stopped until `/health/ready` succeeds, then resume traffic. Current backup/restore tools accept exactly schema 22; earlier snapshots require the [offline upgrade procedure](restore.md). Do not edit a manifest to bypass compatibility, and take a new snapshot after migration.
 
-- Capture is partial and pinned to specific client versions; Codex and Antigravity are experimental and Windows is unsupported ([table](../adapters/support.md)).
-- No hosted or public-CA identity provider, real-team pilot, signed macOS binaries or independent security review yet. Capacity figures are from a local Docker VM with synthetic text and are not a forecast.
-- GitHub Actions had not run on the final commit when these notes were written (account billing block, still in effect on 2026-10-24); local verification results are in the [readiness ledger](production-readiness.md): the full local suite, web tests, `npm audit` and the 85-check Keycloak run passed on 2026-10-24, and `cargo audit` reports no vulnerabilities (five informational advisories). The Gitleaks history scan found no leaks on the pushed branches and tags after two exact-line allowlist entries for false positives were added to `.gitleaks.toml`.
+Review publication policy before onboarding: alpha.3 required review, while current eligible assistant-written cards can publish immediately. Reapprove legacy Unix folder bindings and reenroll affected collectors. Personal-token MCP proxy onboarding does not depend on local capture receipts.
 
-## Owner checklist before publishing
+## Evaluation limits
 
-Agents prepare; only the owner does these.
+The [local pilot protocol](local-pilot.md) uses synthetic work, one Mac and local Docker infrastructure. A fresh HOME is not a new OS account or clean physical machine. Passing Windows build/tests does not qualify the POSIX onboarding helper or Windows capture. Native capture pins were not broadened to make client-drift checks pass.
 
-1. **Billing and CI.** Resolve the GitHub billing block (or make the repository public, which gives free minutes), then run both workflows on the final commit and the weekly client-release check once by hand.
-2. **Security contact.** `SECURITY.md` currently says private vulnerability reporting is not enabled and names no channel, which is accurate while the repository is private. After going public, enable *Settings → Code security → Private vulnerability reporting*, confirm the "Report a vulnerability" button works, then replace the first paragraph's channel sentences in `SECURITY.md` with: "Report vulnerabilities privately with GitHub's *Report a vulnerability* button on the Security tab." Do not add an email address you do not monitor.
-3. **Git history.** About 94 commits carry a personal email address and earlier reviews noted local path metadata. Decide whether that is acceptable. Rewriting history would invalidate the existing alpha tags.
-4. **Final verification.** Done locally on 2026-10-24 (see the ledger); repeat on the exact commit to tag, and let CI run once billing allows: formatting, strict Clippy, the full Rust test suite against a disposable PostgreSQL with `--include-ignored`, the Python tests, `scripts/keycloak-acceptance.py`, the dependency audit and a secret scan of the published history. Record the SHA in the ledger.
-5. **Cut the prerelease** (marked *pre-release*, source only):
+Public-CA identity-provider acceptance, independent security review, a consented real-team target-server pilot, clean-machine installation and signed/notarized macOS distribution remain open. Local synthetic capacity measurements are not a production forecast. Audits, checksums and dependency inventories do not certify security or publisher identity. Read the [readiness ledger](production-readiness.md) before making support claims.
 
-   ```sh
-   git tag -a v0.1.0-alpha.4 -m "Source-only evaluation prerelease" <final-sha>
-   git push origin v0.1.0-alpha.4
-   gh release create v0.1.0-alpha.4 --prerelease --title "v0.1.0-alpha.4" --notes-file <edited-notes.md>
-   ```
+## Before any publication
 
-   Before running it, rewrite the notes above with the SHA and final results, and move the `Unreleased` changelog section under an `alpha.4` heading.
-6. **Visibility.** Change repository visibility manually, then re-check the README, SECURITY and release page from a logged-out browser.
+1. Choose the release scope and exact revision; close the relevant gates and rerun its complete checks. Keep the repository private until the owner deliberately changes visibility.
+2. Confirm a monitored private security-reporting channel and review retained Actions logs/artifacts, license notices and intentional history disclosures. Do not rewrite old tags or delete evidence as a shortcut.
+3. Update README, SECURITY, changelog and these notes to the selected revision and actual evidence. Alpha.4 is still a draft; do not move Unreleased changes into a published heading yet.
+4. Only after explicit release authorization, create a new prerelease tag and source-only release for that revision. Do not retag alpha.3. Verify the public view separately if the owner chooses to change visibility.

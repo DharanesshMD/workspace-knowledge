@@ -3,6 +3,13 @@
 [extend]
 useDefault = true
 
+# A Workspace Knowledge personal MCP token (a bearer credential): catch one pasted into a file.
+[[rules]]
+id = "wk-personal-token"
+description = "Workspace Knowledge personal MCP token"
+regex = '''wkpt_[0-9a-f]{64}'''
+keywords = ["wkpt_"]
+
 [[rules]]
 id = "generic-api-key"
 

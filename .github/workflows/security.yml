@@ -48,7 +48,7 @@ jobs:
             echo '::error::RUSTSEC-2023-0071 remains in normal runtime dependencies; release is blocked.'
             exit 1
           fi
-      - run: cargo audit
+      - run: cargo audit --deny unsound
       - uses: actions/setup-node@v4
         with:
           node-version: 22

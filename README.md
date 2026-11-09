@@ -12,7 +12,7 @@ Git brings the code into your checkout. Workspace Knowledge brings the recorded 
 
 [Try the demo](#quickstart) · [Join a team](#join-a-team-server) · [Host a server](#host-a-team-server) · [Documentation](#documentation) · [Contribute](CONTRIBUTING.md)
 
-> **Latest release: `v0.1.0-alpha.3`, the private source-only prerelease.** The tag points to `5b982a5`; `main` has since advanced and includes model-free draft improvements. This is an evaluation release, not production-certified or production-supported. Production OIDC/HTTPS, broader privacy/client qualification, a real-team target-server pilot, macOS signing/notarization and independent security review remain open. Automatic publication is disabled. See [current release readiness](docs/operations/production-readiness.md), [limitations](#limitations-and-release-status) and the [changelog](CHANGELOG.md).
+> **Latest release: `v0.1.0-alpha.3`, the private source-only prerelease.** The tag points to `5b982a5`; `main` has since advanced. This is an evaluation release, not production-certified or production-supported. Production OIDC/HTTPS, broader privacy/client qualification, a real-team target-server pilot, macOS signing/notarization and independent security review remain open. Alpha.3 requires publication review; current `main` enables publication without a reviewer for eligible assistant-written cards from new collectors. Operators can disable it with `WK_AUTO_PUBLISH_PRODUCTS=none`; developers can connect with `--no-auto-publish`. See [current release readiness](docs/operations/production-readiness.md), [limitations](#limitations-and-release-status) and the [changelog](CHANGELOG.md).
 
 <img src="docs/assets/team-context-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
 
@@ -182,7 +182,7 @@ From the cloned checkout on macOS/Linux:
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The installer builds and installs all five user tools into `~/.local/bin` by default. Use `WK_PREFIX` for another user-owned prefix. It does not enable capture, modify client profiles or register startup services. The PATH command applies to the current shell.
+The installer builds and installs all five native tools and the `wk-connect` onboarding helper into `~/.local/bin` by default. Use `WK_PREFIX` for another user-owned prefix. It does not enable capture, modify client profiles or register startup services. The PATH command applies to the current shell. To connect Codex or Antigravity, follow [repeatable client onboarding](docs/operations/client-onboarding.md); the helper uses Python 3.11 or newer.
 
 | Platform | Source-build prerequisites |
 |---|---|
@@ -252,7 +252,7 @@ The server container includes both the API and portal. The deployment template s
 4. Use the protected operator connection for migrations, runtime-role grants and initial provisioning.
 5. Start the restricted application, then verify sign-in, membership isolation, readiness, retention and backup/restore in your deployment.
 
-Start with [the complete server setup](docs/operations/install.md#host-a-team-server) and [Compose template](deploy/compose/compose.yaml). For Keycloak, a prefilled realm and a one-login MCP bridge, follow the [Keycloak quick start](docs/operations/quick-start-keycloak.md). Starting Compose alone does not provision identity or database roles. Production configuration has no browser token-paste fallback.
+Start with [the complete server setup](docs/operations/install.md#host-a-team-server) and [Compose template](deploy/compose/compose.yaml). For Keycloak, a prefilled realm and a one-login MCP bridge, follow the [Keycloak quick start](docs/operations/quick-start-keycloak.md). To connect Claude Code, Claude Desktop, Codex, Cursor or VS Code Copilot (connection files plus standing instructions), see [connect your agent](docs/operations/connect-your-agent.md); to try it with two developers on one machine, see [local Docker test](docs/operations/local-docker-test.md); to have an AI agent set a server up over SSH, see [agent install](docs/operations/agent-install.md). Starting Compose alone does not provision identity or database roles. Production configuration has no browser token-paste fallback.
 
 ## Code-change context
 
@@ -415,6 +415,9 @@ npm run build
 Linux runners may need `npx playwright install --with-deps chromium`. See [CONTRIBUTING.md](CONTRIBUTING.md) for database tests, a local development server and the distinction between legacy development-token views and the full OIDC portal. CI includes Rust checks across Linux/macOS/Windows, PostgreSQL integration and console checks; CI configuration is not native-client or production certification.
 
 ## Documentation
+
+- [Local Codex/Antigravity pilot](docs/operations/local-pilot.md) — the single-Mac evaluation protocol and its exit criteria.
+- [Alpha.4 draft notes](docs/operations/alpha4-release.md) — current setup, upgrade and release boundaries; not a published release.
 
 | Area | Guides |
 |---|---|

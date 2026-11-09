@@ -10,20 +10,68 @@ pub struct Binding {
     pub enabled: bool,
     pub policy_hash: String,
 }
+#[cfg(target_os = "linux")]
+fn identity(root: &Path) -> Result<String, String> {
+    use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
+    // Linux birth times may share a coarse clock tick with a replacement inode.
+    // Export handles include the filesystem generation rather than a timestamp.
+    #[repr(C)]
+    struct Handle {
+        header: libc::file_handle,
+        bytes: [u8; 128],
+    }
+    let meta = std::fs::metadata(root).map_err(|_| "workspace unavailable")?;
+    let mut handle = Handle {
+        header: libc::file_handle {
+            handle_bytes: 128,
+            handle_type: 0,
+            f_handle: [],
+        },
+        bytes: [0; 128],
+    };
+    let path = std::ffi::CString::new(root.as_os_str().as_bytes())
+        .map_err(|_| "invalid workspace path")?;
+    let mut mount = 0;
+    // SAFETY: the initialized C header is followed by its advertised 128 writable
+    // bytes, and the path and output pointers remain valid throughout the call.
+    let result = unsafe {
+        libc::name_to_handle_at(
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            (&raw mut handle).cast::<libc::file_handle>(),
+            &mut mount,
+            0,
+        )
+    };
+    let len = handle.header.handle_bytes as usize;
+    if result != 0 || len == 0 || len > handle.bytes.len() {
+        return Err(
+            "filesystem cannot provide a stable workspace handle; local consent unavailable".into(),
+        );
+    }
+    Ok(format!(
+        "{}:{}:{:?}",
+        meta.dev(),
+        handle.header.handle_type,
+        &handle.bytes[..len]
+    ))
+}
+#[cfg(not(target_os = "linux"))]
 fn identity(root: &Path) -> Result<String, String> {
     let meta = std::fs::metadata(root).map_err(|_| "workspace unavailable")?;
+    let created = meta.created().map_err(|_| {
+        "workspace creation time unavailable; cannot bind consent to this filesystem"
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        Ok(format!("{}:{}", meta.dev(), meta.ino()))
+        // Inodes can be recycled immediately after deletion. Birth time remains
+        // stable during ordinary edits and distinguishes the replacement folder.
+        Ok(format!("{}:{}:{created:?}", meta.dev(), meta.ino()))
     }
     #[cfg(not(unix))]
     {
-        Ok(format!(
-            "{:?}",
-            meta.created()
-                .map_err(|_| "workspace identity unavailable")?
-        ))
+        Ok(format!("{created:?}"))
     }
 }
 impl Binding {
