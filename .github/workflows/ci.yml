@@ -34,7 +34,7 @@ jobs:
       - run: cargo test --locked -p wk-server --example hosted_pilot
       - run: cargo build --workspace --locked
       - if: runner.os == 'macOS'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Install isolated supported Claude host fixture
@@ -89,7 +89,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
