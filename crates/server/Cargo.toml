@@ -15,7 +15,7 @@ uuid = { version="1",features=["serde"] }
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 openidconnect.workspace = true
-rand = "0.8"
+rand = "0.10"
 wk-summarize={path="../summarize"}
 tower-http={version="0.6",features=["fs","set-header"]}
 rmcp={version="3.9",features=["transport-streamable-http-server"]}
