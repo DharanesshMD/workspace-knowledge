@@ -23,6 +23,11 @@ fn reply(uuid: &str, text: &str) -> Value {
     )
 }
 
+/// An attached image as Claude Code stores it; the data must never reach the output.
+fn image(media: &str) -> Value {
+    json!({"type":"image","source":{"type":"base64","media_type":media,"data":"secret"}})
+}
+
 fn write_lines(path: &Path, lines: &[Vec<u8>], separator: &[u8]) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, lines.join(separator)).unwrap();
@@ -120,7 +125,7 @@ fn imports_only_typed_prompts_and_real_replies() {
     assert_eq!(
         messages(&history, "claude-code:s"),
         owned(&[
-            ("u1", "user", "Real prompt one"),
+            ("u1", "user", "Real prompt one\n[developer attached 1 image]"),
             ("a1", "assistant", "Reply one"),
             ("u2", "user", "Real prompt two <b>with</b> a tag inside"),
         ])
@@ -134,6 +139,46 @@ fn imports_only_typed_prompts_and_real_replies() {
         history.dropped_injected, 9,
         "bash, task, reminder, two IDE parts and two interrupt markers"
     );
+}
+
+#[test]
+fn attached_images_leave_a_count_and_never_their_data() {
+    let d = tempfile::tempdir().unwrap();
+    let records = [
+        // The shape Claude Code writes: the image part first, then the typed text.
+        user(
+            "u1",
+            json!([image("image/jpeg"), {"type":"text","text":"The hero lands a little low"}]),
+        ),
+        reply("a1", "Fixed"),
+        // Nothing typed: the prompt is still a turn of its own.
+        user("u2", json!([image("image/png"), image("image/webp")])),
+        reply("a2", "Both match"),
+        // A picture a tool returned is not something the developer attached.
+        user(
+            "tool",
+            json!([{"type":"tool_result","tool_use_id":"t","content":[image("image/png")]}]),
+        ),
+    ];
+    write_lines(&d.path().join("-work-app/s.jsonl"), &bytes(&records), b"\n");
+    let history = read(d.path()).unwrap();
+    let all = serde_json::to_string(&history.conversations).unwrap();
+    assert!(!all.contains("secret"), "image data leaked: {all}");
+    assert_eq!(
+        messages(&history, "claude-code:s"),
+        owned(&[
+            ("u1", "user", "The hero lands a little low\n[developer attached 1 image]"),
+            ("a1", "assistant", "Fixed"),
+            ("u2", "user", "[developer attached 2 images]"),
+            ("a2", "assistant", "Both match"),
+        ])
+    );
+    assert_eq!(
+        history.conversations[0].title,
+        "The hero lands a little low",
+        "the title is still the typed text"
+    );
+    assert_eq!(history.unreadable_records, 0);
 }
 
 #[test]

@@ -121,6 +121,16 @@ pub(crate) fn first_line(text: &str) -> Option<String> {
         .map(|l| l.chars().take(TITLE_CHARS).collect())
 }
 
+/// The line that stands in a prompt for the images the developer attached to it. Image data is
+/// never read; the line only lets a summary say that the prompt referred to a picture.
+pub(crate) fn image_marker(images: usize) -> Option<String> {
+    match images {
+        0 => None,
+        1 => Some("[developer attached 1 image]".into()),
+        n => Some(format!("[developer attached {n} images]")),
+    }
+}
+
 /// The first non-blank line of the first prompt, at most [`TITLE_CHARS`] characters.
 pub(crate) fn title(messages: &[Message]) -> String {
     messages
@@ -523,5 +533,12 @@ mod tests {
             "First"
         );
         assert_eq!(title(&[m("user", &"x".repeat(500))]).len(), TITLE_CHARS);
+    }
+
+    #[test]
+    fn attached_images_are_counted_in_one_line() {
+        assert_eq!(image_marker(0), None);
+        assert_eq!(image_marker(1).as_deref(), Some("[developer attached 1 image]"));
+        assert_eq!(image_marker(3).as_deref(), Some("[developer attached 3 images]"));
     }
 }

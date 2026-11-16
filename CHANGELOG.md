@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Images attached to a prompt keep their context without being stored. The share tools (`knowledge.share_session`, local and hosted) and the `/wk-summarize` prompt now ask the assistant to say in words what an attached image showed that mattered, under the same privacy rules. Claude Code and Codex session imports add one line, `[developer attached N image(s)]`, to the prompt an image came with instead of dropping it without a trace; image data is still never read, and a prompt made only of an image is now a turn of its own. No schema change.
+
 - Fixed encrypted backup/restore schema validation: manifests already named schema 21 but both scripts still required migrations 1–18, rejecting current databases. Both now require exactly 1–21. The disposable recovery drill also verifies personal MCP token removal and runs in PostgreSQL CI; current backup/restore documentation describes the same version boundary.
 
 - Local folder approvals use generation-aware filesystem handles on Linux and include creation time on other Unix systems, preventing a recreated Linux directory from inheriting consent through inode reuse. Existing Unix inode-only approvals require fresh developer approval; unsupported filesystems fail closed and no automatic migration grants consent. Ordinary project edits preserve approval. Windows consent validation also rejects parent traversal hidden inside verbatim path components. CI fixes handle Windows fixture line endings and legal folder names, and bound PostgreSQL build output to runner disk capacity.

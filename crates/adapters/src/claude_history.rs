@@ -6,7 +6,9 @@
 //! `message: {role, content}`.
 //!
 //! Only text the developer typed and the model's real replies are read: prompt text parts
-//! (string content or `text` parts) and reply `text` parts. Thinking, tool calls, tool results,
+//! (string content or `text` parts) and reply `text` parts. An image attached to a prompt is
+//! never read; the prompt gains one `[developer attached N image(s)]` line after its text, so a
+//! summary can say a picture was involved. Thinking, tool calls, tool results,
 //! meta and compact-summary records, API-error and synthetic replies, interrupt markers,
 //! subagent sidechains and injected parts (slash commands, bash mode, IDE context, system
 //! reminders, task notifications, and parts made only of tool-style `<tag_name>…</tag_name>`
@@ -23,7 +25,8 @@
 //! record and marks the session incomplete. Copying would add I/O without a consistency gain.
 use crate::cursor_history::{Conversation, History, Message};
 use crate::history_common::{
-    absolute_dir, injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Newest, Refused,
+    absolute_dir, image_marker, injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Newest,
+    Refused,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -206,9 +209,9 @@ fn read_session(file: &Path, root: &Path, history: &mut History) -> Option<Conve
     })
 }
 
-/// A typed prompt: string content or `text` parts, each kept only if the developer wrote it;
-/// `dropped` counts the injected parts. Meta, compact-summary and transcript-only records and
-/// tool results are not prompts.
+/// A typed prompt: string content or `text` parts, each kept only if the developer wrote it,
+/// then a line counting the images attached to it; `dropped` counts the injected parts. Meta,
+/// compact-summary and transcript-only records and tool results are not prompts.
 fn prompt_text(v: &Value, dropped: &mut usize) -> Option<String> {
     if v["isMeta"] == true
         || v["isCompactSummary"] == true
@@ -223,11 +226,19 @@ fn prompt_text(v: &Value, dropped: &mut usize) -> Option<String> {
             return None;
         }
     }
-    joined(text_parts(content).filter(|t| {
-        let keep = t.is_empty() || typed(t);
-        *dropped += usize::from(!keep);
-        keep
-    }))
+    let images = content
+        .as_array()
+        .map_or(0, |parts| parts.iter().filter(|p| p["type"] == "image").count());
+    let marker = image_marker(images);
+    joined(
+        text_parts(content)
+            .filter(|t| {
+                let keep = t.is_empty() || typed(t);
+                *dropped += usize::from(!keep);
+                keep
+            })
+            .chain(marker.as_deref()),
+    )
 }
 
 /// Reply `text` parts; thinking, tool calls, API errors and synthetic replies are ignored.

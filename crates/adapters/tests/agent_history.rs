@@ -534,7 +534,7 @@ fn codex_reads_visible_prompts_and_replies_only() {
             (
                 "u2",
                 "user",
-                "Now add tests\n\nSee <environment_context> above"
+                "Now add tests\n\nSee <environment_context> above\n[developer attached 1 image]"
             ),
             ("a2", "assistant", "Tests added."),
         ]
@@ -1408,7 +1408,7 @@ fn codex_counts_unknown_content_parts_and_ignores_relative_cwd() {
     assert!(!all.contains("secret"), "{all}");
     let c = find(&history, "codex:parts");
     let got: Vec<_> = c.messages.iter().map(|m| m.text.as_str()).collect();
-    assert_eq!(got, ["Question", "Answer"]);
+    assert_eq!(got, ["Question\n[developer attached 1 image]", "Answer"]);
     assert_eq!(
         history.unreadable_records, 2,
         "input_audio and refusal parts are unknown; input_image is expected"

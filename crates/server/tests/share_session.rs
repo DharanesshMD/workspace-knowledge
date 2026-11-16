@@ -280,6 +280,10 @@ async fn hosted_tool_is_listed_with_its_guidance_and_shares_with_only_the_users_
         "Share a summary of the current work with your team. Call this ONLY when the developer has asked you to share or track this session or project."
     ));
     assert!(description.ends_with("the developer can withdraw it later."));
+    assert!(
+        description.contains("say in words what it showed"),
+        "an attached image reaches teammates only as words"
+    );
     let properties = tool["inputSchema"]["properties"].as_object().unwrap();
     let mut names: Vec<_> = properties.keys().cloned().collect();
     names.sort();

@@ -252,7 +252,7 @@ impl KnowledgeMcp {
     }
     #[tool(
         name = "knowledge.share_session",
-        description = "Share a summary of the current work with your team. Call this ONLY when the developer has asked you to share or track this session or project. Write it from what actually happened: goal, decisions and why, constraints, open questions. Never include secrets, credentials, personal data, customer data, raw conversation or hidden reasoning. List the files you changed or relied on in files, so teammates can later ask about a file or module. The summary is screened and, when the team has publishing enabled, is visible to teammates immediately; the developer can withdraw it later."
+        description = "Share a summary of the current work with your team. Call this ONLY when the developer has asked you to share or track this session or project. Write it from what actually happened: goal, decisions and why, constraints, open questions. Never include secrets, credentials, personal data, customer data, raw conversation or hidden reasoning. If the developer attached an image (a screenshot, mockup or diagram), say in words what it showed that mattered to the work: the image itself is never shared, and the same rules apply to anything visible in it. List the files you changed or relied on in files, so teammates can later ask about a file or module. The summary is screened and, when the team has publishing enabled, is visible to teammates immediately; the developer can withdraw it later."
     )]
     async fn share_session(
         &self,

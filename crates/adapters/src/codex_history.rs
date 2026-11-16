@@ -14,8 +14,10 @@
 //! injected wrapper with a plain name (like `<skill>`) is therefore only dropped once it is
 //! added to the markers below; the general tag rule cannot see it. Messages
 //! with an unknown role and content parts of an unknown type (anything but `input_text`,
-//! `output_text` and text-less `input_image`) are counted, never guessed. A user message made only
-//! of injected context leaves no prompt, so the replies around it read as one assistant turn.
+//! `output_text` and text-less `input_image`) are counted, never guessed. An `input_image` is
+//! never read; the prompt it came with gains one `[developer attached N image(s)]` line after
+//! its text. A user message made only of injected context leaves no prompt, so the replies
+//! around it read as one assistant turn.
 //! The workspace is `session_meta.cwd` only when it is absolute and has no `.` or `..`
 //! component. A session id found in two files is imported once, from the most recently
 //! modified file; the dropped copy counts as an unreadable record. Session files are read through a
@@ -31,7 +33,8 @@
 //! the same exchanges can appear in two conversations.
 use crate::cursor_history::{Conversation, History, Message};
 use crate::history_common::{
-    absolute_dir, injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Newest, Refused,
+    absolute_dir, image_marker, injected_tag_blocks, rfc3339_ms, session_id, title, Lines, Newest,
+    Refused,
 };
 use serde_json::Value;
 use std::ffi::OsString;
@@ -188,12 +191,16 @@ fn read_session(file: &Path, root: &Path, history: &mut History) -> Option<Conve
             continue;
         };
         saw_message_record = true;
+        let mut images = 0;
         let texts: Vec<&str> = parts
             .iter()
             .filter(|p| match p["type"].as_str() {
                 Some("input_text" | "output_text") => true,
                 // Attached images carry no text; anything else is an unknown part.
-                Some("input_image") => false,
+                Some("input_image") => {
+                    images += 1;
+                    false
+                }
                 _ => {
                     gaps += 1;
                     false
@@ -206,7 +213,13 @@ fn read_session(file: &Path, root: &Path, history: &mut History) -> Option<Conve
                 keep
             })
             .collect();
-        let text = texts.join("\n").trim().to_string();
+        let mut text = texts.join("\n").trim().to_string();
+        if let Some(marker) = image_marker(images).filter(|_| role == "user") {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&marker);
+        }
         if text.is_empty() {
             continue;
         }

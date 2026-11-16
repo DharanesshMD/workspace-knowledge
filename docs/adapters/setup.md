@@ -192,15 +192,15 @@ Read the `show` output and do not export a session that still contains a secret,
 
 - **Location:** `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects` (`%USERPROFILE%\.claude\projects` on Windows). The `*.jsonl` files directly inside each project folder are read; subfolders are not.
 - **Session:** ID `claude-code:<file name without .jsonl>`; folder: the first `cwd` on a prompt or reply record that is absolute and has no `.` or `..` component.
-- **Read:** prompt text (string content or `text` parts) and reply `text` parts; consecutive records of the same role form one message.
+- **Read:** prompt text (string content or `text` parts) and reply `text` parts; consecutive records of the same role form one message. An image you attached to a prompt is never read: the prompt gains one line, `[developer attached 1 image]`, after its text, so a summary can say a picture was involved.
 - **Skipped:** thinking, tool calls and results, meta, compact-summary and transcript-only records, API-error and synthetic replies, interrupt markers, subagent sidechains, and injected prompt parts: those starting with `<command-`, `<local-command-`, `<task-notification`, `<system-reminder`, `<ide_`, `<user-prompt-submit-hook`, `<user-memory-input` or `<bash-`, those containing `<bash-stdout>` or `<bash-stderr>`, and tool-style tag blocks.
 
 ### Codex
 
 - **Location:** `$CODEX_HOME/sessions`, else `~/.codex/sessions`; `*.jsonl` files up to `YYYY/MM/DD/`. `archived_sessions` is not read.
 - **Session:** ID `codex:<session_meta id>`; folder: the first `session_meta` record's `cwd`, only when absolute and without `.` or `..` components.
-- **Read:** `response_item` messages from the user and the assistant: `input_text` and `output_text` parts.
-- **Skipped:** developer and system messages, reasoning, tool calls and their output, events, turn context, compaction records, attached images, and injected user parts: those starting (in any case) with `<environment_context>`, `<user_instructions>`, `<permissions instructions>`, `# AGENTS.md instructions for `, `<skill>` (with or without attributes), `<user_shell_command>`, `<turn_aborted>` or `<subagent_notification>`, and tool-style tag blocks. A new injected wrapper with a plain name needs its own marker: the tag rule only sees names containing `_` or `-`. Unknown roles and content part types are counted.
+- **Read:** `response_item` messages from the user and the assistant: `input_text` and `output_text` parts. An attached image (`input_image`) is never read: the prompt gains one line, `[developer attached 1 image]`, after its text.
+- **Skipped:** developer and system messages, reasoning, tool calls and their output, events, turn context, compaction records, the content of attached images, and injected user parts: those starting (in any case) with `<environment_context>`, `<user_instructions>`, `<permissions instructions>`, `# AGENTS.md instructions for `, `<skill>` (with or without attributes), `<user_shell_command>`, `<turn_aborted>` or `<subagent_notification>`, and tool-style tag blocks. A new injected wrapper with a plain name needs its own marker: the tag rule only sees names containing `_` or `-`. Unknown roles and content part types are counted.
 - **Known limits:** sub-agent threads are stored, and listed, as their own sessions; a forked session copies its parent's history, so the same exchanges can appear in two sessions.
 
 ### VS Code GitHub Copilot Chat
