@@ -277,7 +277,7 @@ async fn hosted_tool_is_listed_with_its_guidance_and_shares_with_only_the_users_
         .unwrap();
     let description = tool["description"].as_str().unwrap();
     assert!(description.starts_with(
-        "Share a summary of the current work with your team. Call this ONLY when the developer has asked you to share or track this session or project."
+        "Share a summary of the current work with your team. Call this ONLY when the developer has asked you to share or track this session or project, including through an explicit project instruction to share finished work."
     ));
     assert!(description.ends_with("the developer can withdraw it later."));
     assert!(

@@ -280,6 +280,34 @@ async fn a_personal_token_opens_only_its_own_products_mcp_endpoint() {
     k.grant(&ravi, "demo", &["backend".into()], false)
         .await
         .unwrap();
+    // Two independently issued IDE credentials can complete a published handoff.
+    let (reader_token, reader_hash) = generate();
+    k.create_personal_token(&ravi, "demo", "second IDE", &reader_hash, 30)
+        .await
+        .unwrap();
+    let path = "backend/payments/retry.rs";
+    let call = |name: &str, arguments: Value| json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}});
+    let share = call(
+        "knowledge.share_session",
+        json!({"title":"Payment retries","intent":"Limit duplicate requests","rationale":"Allow one retry","files":[path]}),
+    );
+    let (status, _, shared) = send(&on, mcp("demo", &token, share)).await;
+    assert_eq!(status, StatusCode::OK);
+    let payload = |reply: &Value| -> Value {
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+    };
+    let card = payload(&shared);
+    assert_eq!(card["published"], true, "{card}");
+    let lookup = call("knowledge.team_work", json!({"paths":[path]}));
+    let (status, _, found) = send(&on, mcp("demo", &reader_token, lookup)).await;
+    assert_eq!(status, StatusCode::OK);
+    let entry = &payload(&found)["entries"][0];
+    assert!(card["card_id"].is_string());
+    assert_eq!(entry["card_id"], card["card_id"]);
+    assert_eq!(entry["developer"], "anika");
+    assert_eq!(entry["files_reported"], json!([path]));
+
     let (ravi_identity, _) = jwt(&ravi_subject);
     let is_admin = |body: &Value, product: &str| {
         body["products"]

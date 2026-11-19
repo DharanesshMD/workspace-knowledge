@@ -1,7 +1,7 @@
 //! Authenticated stateless Streamable HTTP. Credentials never leave this server.
 use rmcp::{
-    handler::server::wrapper::Parameters, model::*, schemars, tool, tool_handler, tool_router,
-    ErrorData, ServerHandler,
+    handler::server::wrapper::Parameters, model::*, schemars, service::RequestContext, tool,
+    tool_handler, tool_router, ErrorData, RoleServer, ServerHandler,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -252,7 +252,7 @@ impl KnowledgeMcp {
     }
     #[tool(
         name = "knowledge.share_session",
-        description = "Share a summary of the current work with your team. Call this ONLY when the developer has asked you to share or track this session or project. Write it from what actually happened: goal, decisions and why, constraints, open questions. Never include secrets, credentials, personal data, customer data, raw conversation or hidden reasoning. If the developer attached an image (a screenshot, mockup or diagram), say in words what it showed that mattered to the work: the image itself is never shared, and the same rules apply to anything visible in it. List the files you changed or relied on in files, so teammates can later ask about a file or module. The summary is screened and, when the team has publishing enabled, is visible to teammates immediately; the developer can withdraw it later."
+        description = "Share a summary of the current work with your team. Call this ONLY when the developer has asked you to share or track this session or project, including through an explicit project instruction to share finished work. Write it from what actually happened: goal, decisions and why, constraints, open questions. Never include secrets, credentials, personal data, customer data, raw conversation or hidden reasoning. If the developer attached an image (a screenshot, mockup or diagram), say in words what it showed that mattered to the work: the image itself is never shared, and the same rules apply to anything visible in it. List the files you changed or relied on in files, so teammates can later ask about a file or module. The summary is screened and, when the team has publishing enabled, is visible to teammates immediately; the developer can withdraw it later."
     )]
     async fn share_session(
         &self,
@@ -523,6 +523,37 @@ impl ServerHandler for KnowledgeMcp {
             // The same standing instructions the setup files carry, so a client that shows server
             // instructions behaves correctly even with no rules file in the project.
             .with_instructions(wk_contracts::agent_setup::rules(false))
+    }
+    /// A client that keeps a project rule file is also told where to save the instructions: this
+    /// server cannot write files or install hooks on the developer's machine, so a saved rule file
+    /// is the strongest thing it can lead to. An unknown client gets the instructions unchanged.
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        context.peer.set_peer_info(request.clone());
+        let mut reply = self.negotiate_initialize(&request)?;
+        reply.instructions = Some(wk_contracts::agent_setup::connect_instructions(
+            &request.client_info.name,
+        ));
+        Ok(reply)
+    }
+    /// The same for a client that opens with `server/discover` and names itself in the request's
+    /// metadata instead of sending `initialize`.
+    async fn discover(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> Result<DiscoverResult, ErrorData> {
+        let mut reply = DiscoverResult::from_server_info(
+            self.supported_protocol_versions().into_owned(),
+            self.get_info(),
+        );
+        if let Some(client) = context.client_info() {
+            reply.instructions =
+                Some(wk_contracts::agent_setup::connect_instructions(&client.name));
+        }
+        Ok(reply)
     }
 }
 

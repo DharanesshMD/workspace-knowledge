@@ -32,10 +32,15 @@ import json, pathlib, sys
 token = pathlib.Path(sys.argv[sys.argv.index("--token-file") + 1]).read_text().strip()
 for line in sys.stdin:
     request = json.loads(line)
+    if "id" not in request:
+        continue
     if token == "bad-token":
         reply = {"error": {"code": -32001, "message": "HTTP 401"}}
     else:
-        reply = {"result": {"tools": [{"name": "knowledge.team_work"}], "seen_token": token}}
+        names = ["knowledge.team_work", "knowledge.change_context", "knowledge.overlaps"]
+        if token != "lookup-only":
+            names.append("knowledge.share_session")
+        reply = {"result": {"tools": [{"name": name} for name in names], "seen_token": token}}
     print(json.dumps({"jsonrpc": "2.0", "id": request["id"], **reply}), flush=True)
 ''')
         self.proxy.chmod(0o700)
@@ -71,6 +76,15 @@ for line in sys.stdin:
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("bad-token", result.stdout + result.stderr)
         self.assertEqual(self.config.read_bytes(), before)
+        self.assertEqual(self.run_setup("check").returncode, 0)
+
+    def test_incomplete_endpoint_preserves_working_setup(self):
+        self.assertEqual(self.run_setup().returncode, 0)
+        config = self.config.read_bytes()
+        result = self.run_setup(token="lookup-only")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing tools: knowledge.share_session", result.stderr)
+        self.assertEqual(self.config.read_bytes(), config)
         self.assertEqual(self.run_setup("check").returncode, 0)
 
     def test_cached_endpoint_command_never_reads_a_replacement_endpoints_token(self):

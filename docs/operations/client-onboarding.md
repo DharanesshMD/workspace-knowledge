@@ -38,7 +38,7 @@ wk-connect check --client codex
 wk-connect check --client antigravity
 ```
 
-The check opens a fresh proxy process and reports authenticated tool discovery without showing credentials. Ask your coding agent about teammates' recent work; it should call `knowledge.team_work`. Team-work `published` status is separate from implementation `lifecycle`.
+The check opens a fresh proxy process and verifies that the endpoint offers team lookup, sharing, overlap checks and code attribution without showing credentials. Ask your coding agent about teammates' recent work; it should call `knowledge.team_work`. Team-work `published` status is separate from implementation `lifecycle`.
 
 After revocation or expiry, obtain a replacement token and repeat the same `connect` command. It validates the replacement before updating the private token file. Restart the IDE's MCP connection to ensure an already running proxy stops using its old in-memory credential. Server outages are reported as connection failures; retain your settings and retry `check` when service returns.
 

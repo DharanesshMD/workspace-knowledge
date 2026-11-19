@@ -25,7 +25,7 @@ export function Admin({product,settings}:{product:string;settings:PersonalTokenS
  const [busy,setBusy]=useState(false);const [error,setError]=useState('');const [confirming,setConfirming]=useState<string|null>(null);
  const [message,setMessage]=useState('');const [count,setCount]=useState(0);
  const [clientId,setClientId]=useState('claude-code');const [autoShare,setAutoShare]=useState(false);
- const {setup,failed:setupFailed}=useAgentSetup(product,autoShare);
+ const {setup,choices:clientChoices,failed:setupFailed}=useAgentSetup(product,autoShare);
  const announce=(text:string)=>{setMessage(text);setCount(n=>n+1);};
  const load=(signal?:AbortSignal)=>request<Listing>('',path,undefined,undefined,signal).then(setListing);
  useEffect(()=>{
@@ -69,8 +69,8 @@ export function Admin({product,settings}:{product:string;settings:PersonalTokenS
   {issued&&<section className="panel token-once" aria-label="Share with developer">
    <h2>Send this to {issued.user}</h2>
    <p role="note"><strong>This is shown only once.</strong> It contains {issued.user}’s secret token. Send it over a channel you trust; if it is lost, reissue it below.</p>
-   {setup&&setup.clients.length>0&&<>
-    <ClientChooser setup={setup} selected={client?.id??clientId} onSelect={setClientId} legend={`Which agent will ${issued.user} use?`}/>
+   {clientChoices&&clientChoices.clients.length>0&&<>
+    <ClientChooser setup={clientChoices} selected={client?.id??clientId} onSelect={setClientId} legend={`Which agent will ${issued.user} use?`}/>
     <label className="checkbox"><input type="checkbox" checked={autoShare} onChange={e=>setAutoShare(e.target.checked)}/>Tell the agent to share finished work automatically (otherwise only when asked)</label>
    </>}
    {text?<>

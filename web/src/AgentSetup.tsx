@@ -27,22 +27,25 @@ export function setupMessage(client:ClientSetup,setup:AgentSetup,who:Handover):s
  for(const file of client.files){
   lines.push('',`${file.kind==='rules'?'Standing instructions':'Connection'}: save as ${file.path}`,`(${file.merge})`,f(file.content));
  }
- if(client.command)lines.push('',`Or in one command: ${f(client.command)}`);
+ if(client.command)lines.push('',`Alternative connection command (also save the standing instructions): ${f(client.command)}`);
  for(const n of client.notes)lines.push('',`Note: ${f(n)}`);
  lines.push('',`Check it works: ${client.verify}`,'','If you lose the token, ask me for a new one; the old one then stops working.');
  return lines.join('\n');
 }
 
 export function useAgentSetup(product:string,autoShare:boolean) {
- const [setup,setSetup]=useState<AgentSetup|null>(null);const [failed,setFailed]=useState(false);
+ const [result,setResult]=useState<{url:string;setup:AgentSetup|null}|null>(null);
+ const url=`/v1/products/${encodeURIComponent(product)}/agent-setup${autoShare?'?auto_share=true':''}`;
  useEffect(()=>{
-  const controller=new AbortController();setFailed(false);
-  request<AgentSetup>('',`/v1/products/${encodeURIComponent(product)}/agent-setup${autoShare?'?auto_share=true':''}`,undefined,undefined,controller.signal)
-   .then(s=>{if(!Array.isArray(s?.clients))throw new Error('unexpected');setSetup(s);})
-   .catch(()=>{if(!controller.signal.aborted)setFailed(true);});
+  const controller=new AbortController();
+  request<AgentSetup>('',url,undefined,undefined,controller.signal)
+   .then(s=>{if(!Array.isArray(s?.clients))throw new Error('unexpected');if(!controller.signal.aborted)setResult({url,setup:s});})
+   .catch(()=>{if(!controller.signal.aborted)setResult({url,setup:null});});
   return()=>controller.abort();
- },[product,autoShare]);
- return {setup,failed};
+ },[url]);
+ const setup=result?.url===url?result.setup:null;
+ const choices=result?.setup?.product===product?result.setup:null;
+ return {setup,choices,failed:result?.url===url&&result.setup===null};
 }
 
 /** The five clients as a radio group, with the chosen one's files, command and notes. */
@@ -51,18 +54,19 @@ export function ClientChooser({setup,selected,onSelect,legend}:{setup:AgentSetup
 }
 
 export function AgentSetupPanel({product,announce}:{product:string;announce:(message:string)=>void}) {
- const [autoShare,setAutoShare]=useState(false);const {setup,failed}=useAgentSetup(product,autoShare);
+ const [autoShare,setAutoShare]=useState(false);const {setup,choices,failed}=useAgentSetup(product,autoShare);
  const [selected,setSelected]=useState('claude-code');
  const base=`setup-${product}`;
  if(failed)return <section className="agent-setup" aria-labelledby={`${base}-title`}><h3 id={`${base}-title`}>Set up your coding agent</h3><p className="muted">The setup instructions could not be loaded. Reload the page to try again.</p></section>;
- if(!setup||setup.clients.length===0||!usable(setup.mcp_url))return null;
- const client=setup.clients.find(c=>c.id===selected)??setup.clients[0];
+ if(!choices||choices.clients.length===0||!usable(choices.mcp_url))return null;
+ const client=choices.clients.find(c=>c.id===selected)??choices.clients[0];
  const link=docsLink(client.docs);
  return <section className="agent-setup" aria-labelledby={`${base}-title`}>
   <h3 id={`${base}-title`}>Set up your coding agent</h3>
   <p>Pick your agent. These files connect it using your token and give it standing instructions, so it checks what teammates did before editing and can answer questions about their work. Nothing below contains your token.</p>
-  <ClientChooser setup={setup} selected={client.id} onSelect={setSelected} legend="Your coding agent"/>
+  <ClientChooser setup={choices} selected={client.id} onSelect={setSelected} legend="Your coding agent"/>
   <label className="checkbox"><input type="checkbox" checked={autoShare} onChange={e=>setAutoShare(e.target.checked)}/>Tell the agent to share finished work automatically (otherwise it shares only when you ask)</label>
+  {setup?<>
   <p>{client.summary}</p>
   <ol>{client.steps.map((s,i)=><li key={i}>{s}</li>)}</ol>
   {client.files.map(f=><div className="snippet" key={f.path}>
@@ -71,9 +75,10 @@ export function AgentSetupPanel({product,announce}:{product:string;announce:(mes
    <pre><code>{f.content}</code></pre>
    <CopyButton text={f.content} label={`${f.path} for ${client.name}`} announce={announce}/>
   </div>)}
-  {client.command&&<div className="snippet"><h4>Or in one command</h4><pre><code>{client.command}</code></pre><CopyButton text={client.command} label={`${client.name} command`} announce={announce}/></div>}
+  {client.command&&<div className="snippet"><h4>Alternative connection command</h4><p>Also save the standing instructions above.</p><pre><code>{client.command}</code></pre><CopyButton text={client.command} label={`${client.name} command`} announce={announce}/></div>}
   {client.notes.length>0&&<ul className="muted">{client.notes.map((n,i)=><li key={i}>{n}</li>)}</ul>}
   <p><strong>Check it works:</strong> {client.verify}</p>
   {link&&<p><a href={link} target="_blank" rel="noopener noreferrer">{client.name} documentation</a></p>}
+  </>:<p role="status">Loading the selected instructions…</p>}
  </section>;
 }

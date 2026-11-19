@@ -74,6 +74,7 @@ def check_connection(entry):
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
             "protocolVersion": "2025-03-26", "capabilities": {},
             "clientInfo": {"name": "wk-connect", "version": "1"}}},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
     ]
     env = dict(os.environ)
@@ -94,8 +95,13 @@ def check_connection(entry):
                 raise ValueError("server refused the token (expired, revoked or invalid)")
             raise ValueError("MCP connection failed; check server access, network and certificates")
     tools = next((r.get("result", {}).get("tools") for r in replies if r.get("id") == 2), None)
-    if not isinstance(tools, list) or not any(isinstance(t, dict) and t.get("name") == "knowledge.team_work" for t in tools):
-        raise ValueError("the endpoint did not provide Workspace Knowledge tools")
+    if not isinstance(tools, list):
+        raise ValueError("the endpoint did not return a tool list")
+    required = {"knowledge.team_work", "knowledge.share_session", "knowledge.overlaps", "knowledge.change_context"}
+    available = {tool["name"] for tool in tools if isinstance(tool, dict) and isinstance(tool.get("name"), str)}
+    missing = sorted(required - available)
+    if missing:
+        raise ValueError("the Workspace Knowledge endpoint is missing tools: " + ", ".join(missing))
     return len(tools)
 
 

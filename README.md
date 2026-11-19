@@ -318,7 +318,7 @@ missing, stale or high-risk, ask the developer to review before proceeding.
 Do not claim an acknowledgement or summary proves a change is safe.
 ```
 
-A project rule relies on the agent following it. The separate protection hook supplies the bounded blocking behavior described above. See [remote MCP configuration and OAuth boundaries](docs/architecture/remote-mcp.md) and [overlap notices](docs/architecture/overlap-notices.md).
+A project rule relies on the agent following it. The separate protection hook supplies the bounded blocking behavior described above. With the local `wk-mcp` bridge, approving a project folder can also install the bridge's own hooks, which put team context in front of the agent before it edits and send it back once to share when it stops with unshared edits; see [automatic team context](docs/adapters/setup.md#automatic-team-context-per-coding-tool). See [remote MCP configuration and OAuth boundaries](docs/architecture/remote-mcp.md) and [overlap notices](docs/architecture/overlap-notices.md).
 
 ## Client coverage
 
@@ -475,7 +475,7 @@ The knowledge service does not receive raw captured messages. Teammates see auth
 
 **Does installation automatically capture every agent?**
 
-No. Local approval, device connection, adapter configuration and exact supported client surfaces are separate requirements. MCP configuration alone is retrieval.
+No. Local approval, device connection, adapter configuration and exact supported client surfaces are separate requirements. MCP configuration alone is retrieval. Approving a folder through the `wk-mcp` bridge with "automatic team context" ticked adds hooks or a rule file for that coding tool; those bring in team context and prompt a shared summary, and capture no conversation.
 
 **Do all developers need PostgreSQL, Docker or Node.js?**
 

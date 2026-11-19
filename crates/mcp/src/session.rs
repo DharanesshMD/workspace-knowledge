@@ -23,6 +23,8 @@ struct SignedIn {
     cached: Mutex<Option<Cached>>,
 }
 enum Kind {
+    /// No token could be found; asking for one gives the reason.
+    Missing(String),
     Fixed(Zeroizing<String>),
     SignedIn(Box<SignedIn>),
 }
@@ -35,6 +37,10 @@ impl TokenSource {
             return Err("invalid development credentials or product".into());
         }
         Ok(Self(Kind::Fixed(Zeroizing::new(token))))
+    }
+    /// A source with nothing in it, for a caller that can still do useful local work (a hook).
+    pub fn missing(reason: String) -> Self {
+        Self(Kind::Missing(reason))
     }
     /// The stored sign-in for one server, refreshed against its identity provider. `ca`, when
     /// the operator set one, replaces the public roots for the provider as well.
@@ -52,6 +58,7 @@ impl TokenSource {
     }
     pub async fn token(&self) -> Result<Zeroizing<String>, String> {
         match &self.0 {
+            Kind::Missing(reason) => Err(reason.clone()),
             Kind::Fixed(token) => Ok(token.clone()),
             Kind::SignedIn(s) => s.token().await,
         }

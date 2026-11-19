@@ -62,6 +62,10 @@ pub fn csrf(page: &str) -> String {
 }
 /// A same-origin form submission exactly as a browser sends it.
 pub async fn answer(url: &str, decision: &str) -> (u16, String) {
+    submit(url, &format!("decision={decision}")).await
+}
+/// The same, with the form fields a browser would send after the CSRF token.
+pub async fn submit(url: &str, fields: &str) -> (u16, String) {
     let (host, path) = split(url);
     let (status, page) = get(&host, &path, &host).await;
     assert_eq!(status, 200, "{page}");
@@ -71,7 +75,7 @@ pub async fn answer(url: &str, decision: &str) -> (u16, String) {
         &host,
         Some(&format!("http://{host}")),
         "application/x-www-form-urlencoded",
-        &format!("csrf={}&decision={decision}", csrf(&page)),
+        &format!("csrf={}&{fields}", csrf(&page)),
     )
     .await
 }

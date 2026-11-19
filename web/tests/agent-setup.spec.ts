@@ -81,6 +81,24 @@ test('asking for automatic sharing fetches the other instructions',async({page})
  await expect(p).toContainText('Do not share unless I ask');
 });
 
+test('obsolete sharing instructions cannot be copied while the selected mode loads',async({page})=>{
+ let release!:()=>void;
+ const pending=new Promise<void>(resolve=>{release=resolve;});
+ await setup(page,{setup:async route=>{
+  if(route.request().url().includes('auto_share=true')){
+   await pending;
+   await route.fulfill({json:fixture('agent-setup-auto.json')});
+  }else await route.fulfill({json:base});
+ }});
+ const p=panel(page);
+ await expect(p).toContainText('Do not share unless I ask');
+ try{
+  await p.getByLabel('Tell the agent to share finished work automatically',{exact:false}).check();
+  await expect(p.locator('.snippet')).toHaveCount(0);
+ }finally{release();}
+ await expect(p).toContainText('Sharing is on for this project');
+});
+
 test('a failed or unusable setup is explained or hidden, never half shown',async({page})=>{
  await setup(page,{setup:r=>r.fulfill({status:500,json:{error:'x'}})});
  await expect(panel(page).getByText('could not be loaded')).toBeVisible();

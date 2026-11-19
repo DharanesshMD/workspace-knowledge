@@ -242,6 +242,29 @@ With the local stdio bridge (`wk-mcp`), your agent can ask you to approve the pr
 
 **After that, it is automatic.** Approval is a one-time act per project folder. Whenever an agent starts in that folder (or a folder inside it), the bridge reads the saved approval, with no network call, and gives the agent instructions that say so: at the start of work, pull in what teammates have recorded (`knowledge.context`, and `knowledge.overlaps` for files it will edit); when you say the task is done, or ask it to share or track the work, send a summary with `knowledge.share_session`. In a folder that is not approved, the instructions tell the agent to ask you to approve it and not to share anything. Agents follow instructions with varying reliability, so treat this as "usually happens", not as guaranteed capture.
 
+### Automatic team context, per coding tool
+
+Instructions alone depend on the agent following them. The approval page therefore has a ticked box, **Automatic team context**, and lists the files it will write for the coding tool that asked. The bridge reads the tool's name from the MCP handshake and uses the strongest thing that tool supports:
+
+| Coding tool | Before the agent edits | After it implements | Written into the project on Approve |
+|---|---|---|---|
+| Claude Code | A hook looks up the prompt's keywords and each file about to be edited, and puts what teammates recorded in front of the agent. | A hook sends the agent back **once** when it stops with edits it has not shared. | Hook entries in `.claude/settings.local.json` |
+| Cursor | The rule file tells the agent to call `knowledge.overlaps`; a hook adds context after an edit (Cursor cannot add it before one). | A stop hook submits one follow-up message asking for the share. | `.cursor/hooks.json` entries and, if absent, `.cursor/rules/workspace-knowledge.mdc` |
+| Codex, VS Code Copilot | A marked block in `AGENTS.md`, which the tool loads in every conversation. | The same block, with sharing on. | A marked block in `AGENTS.md`; the rest of the file is kept |
+| Claude Desktop, any other tool | The instructions the bridge sends when the tool connects, plus a `next` step in tool results. | The same. | Nothing |
+
+What to know before leaving the box ticked:
+
+- **Nothing is written until you click Approve**, and only the listed files, inside the approved folder. Untick the box to keep sharing to when you ask; approving again with it unticked takes an earlier setup out.
+- **Sharing becomes automatic in that folder.** The agent is told to call `knowledge.share_session` when a task that changed files is finished, without being asked. Tell it to keep something private and it is told to respect that.
+- **The reminder costs one extra reply.** It fires at most once for a batch of edits, never when the tool says the stop already follows a hook, and not again until more files change. The agent may answer that the task is not finished.
+- **The hooks are the bridge's own** (`wk-mcp hook`), not the collector's. They capture no conversation text: a prompt is reduced to keywords on your machine and dropped if the local screen flags it, and only files inside approved service folders are looked up or noted. They work without `wk-agent serve` or a device connect.
+- **The lookup needs a sign-in the hook can read.** A `wk-mcp login` sign-in works. A token that exists only in the MCP server's `env` block is not visible to a hook, so the lookup is skipped; noting edits and the reminder still work, because they are local.
+- **They switch themselves off.** Each run re-reads the approval and does nothing when the folder is paused, revoked or changed. `wk-mcp engage status` shows what was written and `wk-mcp engage remove` takes out exactly those entries, leaving anything you added.
+- **Only the local bridge can do this.** The hosted `/mcp/{product}` endpoint cannot write to your computer. It tailors its instructions instead: for a tool that keeps a rule file it names the file and asks the agent to offer to save the instructions there.
+
+What is verified: a real Claude Code 2.1.303 is recognised from its handshake (it names itself in each request and never sends `initialize`), loads the installed hooks, and runs the prompt hook, which reached the server. Not yet verified with a real tool: that the agent then uses the injected context and acts on the stop reminder, which rest on each tool's hook documentation and on tests of the exact output shapes. The Cursor hook shapes follow Cursor's documentation as of 2026-11-17; Cursor, Codex and VS Code themselves were not run. The client names matched are in `wk_contracts::agent_setup::detect`; a tool that sends a name not listed there gets the last row.
+
 ### Share a session summary from your agent
 
 `knowledge.share_session` lets your agent share a summary of the work (title, goal, rationale, decisions, constraints, open questions) with your team, using only your own sign-in: no collector, hooks or device are involved.
@@ -249,7 +272,7 @@ With the local stdio bridge (`wk-mcp`), your agent can ask you to approve the pr
 - **The MCP never sees your conversation.** The agent writes the summary from what happened and sends only that. Raw chat text is not uploaded.
 - **Screening and publishing.** The summary is screened for credentials and personal data (on your machine and again on the server). If the team's publishing is on for the product (the default; `WK_AUTO_PUBLISH_PRODUCTS`), teammates' agents can find it immediately; otherwise it waits for a reviewer. The result says which happened and how to withdraw it.
 - **Where it works.** The local bridge only shares from an approved project folder and only into the services you approved for it (name one with `service` if you approved several). The hosted `/mcp/{product}` endpoint has the same tool for clients that sign in directly; it cannot see your folder, so there the limit is your server membership.
-- **Agents are told to call it only when you ask** to share or track the work (or when the approved folder's instructions say sharing is on). The tool description says the same, and your client's tool-permission prompt is a further check unless you have allow-listed the tool.
+- **Agents are told to call it only when you ask** to share or track the work (or when the approved folder's instructions say sharing is on, which is the case once you approve a folder with automatic team context ticked). The tool description says the same, and your client's tool-permission prompt is a further check unless you have allow-listed the tool.
 
 Teammates retrieve it with `knowledge.search` or `knowledge.context`. Keyword search matches cards containing any of your significant words and ranks cards with more matches first, so a natural sentence works.
 

@@ -55,15 +55,25 @@ pub struct Proposal {
     pub server: String,
     /// A sentence describing an approval this one replaces, if any.
     pub replaces: Option<String>,
+    /// The coding tool that asked, as the developer knows it, if it was recognised.
+    pub tool: Option<String>,
+    /// What "automatic team context" would write into the folder for that tool.
+    pub setup: Vec<crate::engage::Install>,
 }
 pub struct Started {
     pub url: String,
     pub expires_in_seconds: u64,
 }
 enum Outcome {
-    Approved(PathBuf),
+    /// The binding file, and how the developer's choice about automatic team context went.
+    Approved(PathBuf, Automatic),
     Declined,
     Failed(String),
+}
+enum Automatic {
+    Off,
+    /// On, with any setup files that could not be written.
+    On(Vec<String>),
 }
 enum Phase {
     Waiting,
@@ -311,9 +321,11 @@ impl Shared {
         if Instant::now() >= self.deadline {
             return Reply::gone(EXPIRED);
         }
+        // An unticked box is simply absent from the form.
+        let automatic = fields.get("automatic").is_some_and(|v| v == "on");
         let outcome = if approve {
             match self.commit() {
-                Ok(file) => Outcome::Approved(file),
+                Ok(file) => Outcome::Approved(file, self.automatic(automatic)),
                 Err(reason) => Outcome::Failed(reason),
             }
         } else {
@@ -335,6 +347,34 @@ impl Shared {
         wk_scope::consent::approve(Some(&p.consent), &p.folder, &p.product, p.services.clone())
             .map(|approved| approved.binding_file)
     }
+    /// Apply the developer's choice about automatic team context, after the approval is saved.
+    /// Unticking it on a folder that had it takes everything out again.
+    fn automatic(&self, on: bool) -> Automatic {
+        let p = &self.proposal;
+        if on {
+            Automatic::On(
+                crate::engage::turn_on(&p.consent, &p.folder, p.setup.clone())
+                    .unwrap_or_else(|problem| vec![problem]),
+            )
+        } else {
+            let _ = crate::engage::turn_off(&p.consent, &p.folder);
+            Automatic::Off
+        }
+    }
+    /// The files automatic team context would write, as list items.
+    fn setup_items(&self) -> String {
+        self.proposal
+            .setup
+            .iter()
+            .map(|i| {
+                format!(
+                    "<li><code>{}</code> <span class=\"muted\">{}</span></li>",
+                    html(&i.file.to_string_lossy()),
+                    html(i.describe())
+                )
+            })
+            .collect()
+    }
     fn page_form(&self) -> String {
         let p = &self.proposal;
         let services: String = p
@@ -351,6 +391,19 @@ impl Shared {
         let replaces = p.replaces.as_ref().map_or(String::new(), |r| {
             format!("<p class=\"note\">{}</p>", html(r))
         });
+        let tool = p.tool.as_deref().unwrap_or("your assistant");
+        let writes = if p.setup.is_empty() {
+            format!(
+                "<p class=\"muted small\">Nothing is written into the project for {}: it is told what to do each time it connects, which it may not always follow.</p>",
+                html(tool)
+            )
+        } else {
+            format!(
+                "<p class=\"small\">For {} this writes into the project:</p><ul class=\"small\">{}</ul>",
+                html(tool),
+                self.setup_items()
+            )
+        };
         let body = format!(
             r#"<h1>Approve this project folder?</h1>
 <p class="lede">Your AI assistant asked to connect this folder to Workspace Knowledge. Nothing is approved until you click Approve.</p>
@@ -369,6 +422,10 @@ impl Shared {
 </ul>
 <form method="post">
 <input type="hidden" name="csrf" value="{csrf}">
+<h2>Automatic team context</h2>
+<p><label><input type="checkbox" name="automatic" value="on" checked> Bring in team context before the assistant edits, and have it share a summary when it finishes, without being asked each time.</label></p>
+{writes}
+<p class="muted small">The assistant may be sent back once, when it stops with edits it has not shared, which costs one extra reply. Untick this to keep sharing to when you ask. <code>wk-mcp engage remove</code> takes it all out later.</p>
 <div class="actions"><button type="submit" name="decision" value="approve" class="primary">Approve</button><button type="submit" name="decision" value="decline">Decline</button></div>
 </form>
 <p class="muted small">This page is served only on this computer, works once, and expires {minutes} minutes after it was requested.</p>"#,
@@ -387,7 +444,27 @@ impl Shared {
                 "<h1>Not approved</h1><p>The approval could not be saved: {}.</p><p class=\"muted\">Nothing was changed. You can close this tab.</p>",
                 html(reason)
             ),
-            Outcome::Approved(file) => {
+            Outcome::Approved(file, automatic) => {
+                let automatic = match automatic {
+                    Automatic::Off => "<p>Automatic team context is off: your assistant shares only when you ask.</p>".to_string(),
+                    Automatic::On(problems) => {
+                        let failed: String = problems
+                            .iter()
+                            .map(|problem| format!("<li>{}</li>", html(problem)))
+                            .collect();
+                        let failed = if failed.is_empty() {
+                            String::new()
+                        } else {
+                            format!("<p class=\"note\">Some of it could not be written, so that part is not active:</p><ul>{failed}</ul>")
+                        };
+                        let written = if p.setup.is_empty() {
+                            String::new()
+                        } else {
+                            format!("<ul class=\"small\">{}</ul>", self.setup_items())
+                        };
+                        format!("<p>Automatic team context is on. Restart the assistant's session in this folder so it picks this up.</p>{written}{failed}<p class=\"muted small\">To take it out: <code>wk-mcp engage remove</code> in this folder.</p>")
+                    }
+                };
                 let commands: String = p
                     .services
                     .iter()
@@ -405,6 +482,7 @@ impl Shared {
 <p>This computer now allows Workspace Knowledge to work inside these service folders of <code>{folder}</code>: <strong>{services}</strong>.</p>
 <p>This is your local consent only. To start capturing, run this in a terminal, or ask your assistant to:</p>
 <ul>{commands}</ul>
+{automatic}
 <p class="muted">To undo: <code>{pause}</code> pauses it, <code>{revoke}</code> deletes it. You can close this tab.</p>"#,
                     folder = html(&folder),
                     services = html(&p.services.join(", ")),
@@ -648,6 +726,8 @@ mod tests {
                 consent: self.consent.clone(),
                 server: "https://wk.example".into(),
                 replaces: None,
+                tool: None,
+                setup: Vec::new(),
             }
         }
         fn nothing_written(&self) {
@@ -1051,6 +1131,8 @@ mod tests {
                 consent: dir.path().canonicalize().unwrap().join("consent"),
                 server: "https://wk.example".into(),
                 replaces: Some("Replaces <b>x</b>.".into()),
+                tool: None,
+                setup: Vec::new(),
             })
             .await
             .unwrap();

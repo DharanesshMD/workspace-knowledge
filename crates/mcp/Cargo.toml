@@ -16,6 +16,7 @@ keyring={version="3.6",features=["apple-native","windows-native","sync-secret-se
 zeroize="1"
 base64="0.22"
 
+wk-adapters={path="../adapters"}
 wk-contracts={path="../contracts"}
 wk-login={path="../login"}
 wk-scope={path="../scope"}

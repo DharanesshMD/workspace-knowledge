@@ -1,6 +1,6 @@
 # Connect your coding agent
 
-Workspace Knowledge works in Claude Code, Claude Desktop, Codex, Cursor and VS Code (GitHub Copilot). Two things have to happen for each: the agent must be able to **connect** (with your personal token), and it must be told, in standing instructions, **when to use the tools**, so it checks what teammates did before editing, answers "what did sam do last week?", and shares its work. Without the instructions an agent only uses the tools when you ask for them by name.
+Workspace Knowledge works in Claude Code, Claude Desktop, Codex, Cursor and VS Code (GitHub Copilot). Two things have to happen for each: the agent must be able to **connect** (with your personal token), and it must be told, in standing instructions, **when to use the tools**, so it checks what teammates did before editing, answers "what did sam do last week?", and shares its work. Agents can also call the tools when you ask directly. For the managed Codex or Antigravity setup on macOS or Linux, follow [client onboarding](client-onboarding.md).
 
 The files below come from one definition in the server. You can get them three ways, and they are always identical:
 
@@ -69,21 +69,26 @@ Save `.vscode/mcp.json` and `AGENTS.md`. Open the file and choose **Start** abov
 
 ## Check that it works
 
-In any of them, ask: **"What did my teammates work on recently?"** The agent should call `knowledge.team_work` and tell you who did what, or say that nothing has been shared yet. Then try a named teammate, a directory (`backend/payments`) and a file.
+For hosted token setup, the operator sets `WK_MCP_RESOURCE` to the public HTTPS origin matching the OIDC audience and enables personal tokens with `WK_PERSONAL_TOKENS=1`. Give each developer their own token for the same product and grant access to the service they share. Two agents using one token appear as the same developer.
+
+1. In the first agent, after a real change, ask “Share the decision we just made, why we made it, and the files we changed.” Ask for the returned card ID and publication status. If asked to choose a service, select the one the teammate can access.
+2. If the result is `submitted_for_review`, have a reviewer publish the card in the portal. A `published` result is available for the next authorized lookup.
+3. In the second developer's agent, ask “Who worked on this file, and why?” using the same repository-relative path. Check that the answer identifies the first developer, the same card ID and the decision. A new team can have a working connection and an empty history.
+4. For “Who built this code?”, the agent can query `knowledge.change_context` with the registered repository ID, full Git revision and target paths. A confirmed contribution supports attribution at that revision. Where only a shared card exists, the agent can identify who reported the work and explain that code authorship is unverified.
 
 ## What the standing instructions say
 
-Three things, in about 2 KB: check `knowledge.overlaps` before editing and tell you plainly when a teammate already did similar work; answer questions about teammates, files and modules with `knowledge.team_work`; and share with `knowledge.share_session`, including the files changed. **Sharing is opt-in by default**: the agent shares only when you ask. In the portal you can tick "share finished work automatically" to switch the instruction to sharing at the end of each task. The server also announces the same instructions when an agent connects, so a client that shows server instructions behaves correctly even without a file.
+Before editing, the agent checks for overlapping work. It can look up shared decisions by person or path and check contributor evidence for a specific code revision. When it shares a summary, it includes the changed files and reports the card ID and publication status. **Sharing is opt-in by default**: the agent shares only when you ask. In the portal you can tick "share finished work automatically" to switch the instruction to sharing at the end of each task. The server also announces the same instructions when an agent connects, so a client that shows server instructions behaves correctly even without a file. For an agent it recognises that keeps a project rule file, it adds where that file is and asks the agent to offer to save the instructions there.
 
 ## What is and is not verified
 
-Instructions steer a model; they do not force it. Only a hook would, and none is set up here. These are the facts as of the release that added this page, with the documentation each file follows (2026-10-26):
+Instructions steer a model; they do not force it. Only a hook would, and these files set none up. The local `wk-mcp` bridge can: when you approve a project folder with "automatic team context" ticked it installs its own hooks for Claude Code and Cursor, and a rule block for Codex and VS Code. See [automatic team context](../adapters/setup.md#automatic-team-context-per-coding-tool). The checks below cover different parts of the setup.
 
 | Agent | Verified by the project's tests | Not verified (follows the documentation) |
 |---|---|---|
 | Claude Code | A real Claude Code connected with the generated `.mcp.json` and given four scripted tasks with the generated `CLAUDE.md`: it checked for teammates' work before editing and asked first when someone had already done it, answered a teammate question with `knowledge.team_work`, shared its change with the file list (sharing was switched on), and left a read-only question alone. | Behavior on other tasks and other models. |
 | Claude Desktop | `wk-mcp proxy` end to end against a real server with a scripted client (the process Claude Desktop launches). | The Claude Desktop app itself. |
-| Codex | The TOML parses and matches the documented fields. | Codex itself (not installed in the test environment). |
+| Codex | The generated TOML parses. The managed installer configured the installed Codex CLI in a fresh user directory. Its configured proxy and Antigravity’s configured proxy retrieved each other’s published cards over local HTTPS with separate personal tokens. A [previous local pilot](../reviews/2026-11-07-local-ide-acceptance.md) also exercised both agents through model-driven conversations. | A fresh conversation using the latest instructions on a team deployment. |
 | Cursor | The JSON matches the documented fields. | Cursor itself, and `${env:}` in remote headers on your version. |
 | VS Code | The JSON matches the documented fields. | VS Code and Copilot Chat themselves. |
 

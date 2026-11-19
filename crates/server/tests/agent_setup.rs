@@ -48,13 +48,17 @@ fn get(uri: &str, bearer: &str) -> Request<Body> {
     r.body(Body::empty()).unwrap()
 }
 fn initialize(bearer: &str) -> Request<Body> {
+    initialize_as(bearer, "t")
+}
+/// `initialize` from the coding client that calls itself `name`.
+fn initialize_as(bearer: &str, name: &str) -> Request<Body> {
     Request::builder()
         .method("POST")
         .uri(format!("{RESOURCE}/mcp/demo"))
         .header("authorization", format!("Bearer {bearer}"))
         .header("content-type", "application/json")
         .header("accept", "application/json, text/event-stream")
-        .body(Body::from(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}).to_string()))
+        .body(Body::from(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":name,"version":"0"}}}).to_string()))
         .unwrap()
 }
 
@@ -153,6 +157,12 @@ async fn members_get_the_setup_for_every_client_and_the_server_announces_the_sam
     let (status, init) = send(&app, initialize(&token)).await;
     assert_eq!(status, StatusCode::OK, "{init}");
     assert_eq!(init["result"]["instructions"], rules(false));
+    // A client known to keep a project rule file is also told where to save them.
+    let (status, init) = send(&app, initialize_as(&token, "cursor-vscode")).await;
+    assert_eq!(status, StatusCode::OK, "{init}");
+    let told = init["result"]["instructions"].as_str().unwrap();
+    assert!(told.starts_with(&rules(false)), "{told}");
+    assert!(told.contains(".cursor/rules/workspace-knowledge.mdc"), "{told}");
 
     // Without a configured public address the product still answers, with nothing to connect to yet.
     std::env::remove_var("WK_MCP_RESOURCE");
