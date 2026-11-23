@@ -6,7 +6,7 @@ Include the affected revision, platform, client version, impact and a minimal re
 
 ## Evaluation scope
 
-The current source on `main` targets evaluation with a Linux Docker server and macOS developer tools. The latest tagged prerelease is [v0.1.0-alpha.3](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.3). Both are evaluation software. Production identity-provider qualification, clean-machine distribution, Apple signing and notarization, a real-team pilot and independent security review remain open.
+The current source on `main` targets evaluation with a Linux Docker server and macOS developer tools. The latest tagged prerelease is [v0.1.0-alpha.3](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.3). The alpha is not a production-supported release. Production identity-provider qualification, clean-machine distribution, Apple signing and notarization, a real-team pilot and independent security review remain open.
 
 On `main`, eligible assistant-written cards can publish immediately after screening when a developer shares them. Operators can require review with `WK_AUTO_PUBLISH_PRODUCTS=none`. Capture support depends on the exact client version and surface. See the [readiness ledger](docs/operations/production-readiness.md).
 

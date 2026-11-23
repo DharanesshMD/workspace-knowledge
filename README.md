@@ -12,7 +12,7 @@ Git brings the code into your checkout. Workspace Knowledge brings the recorded 
 
 [Try the demo](#quickstart) · [Join a team](#join-a-team-server) · [Host a server](#host-a-team-server) · [Documentation](#documentation) · [Contribute](CONTRIBUTING.md)
 
-**Start with the source on `main` for the current alpha.** Try the local demo with synthetic data, or evaluate the team workflow with a Linux Docker server and macOS developer tools. The latest tagged prerelease, [v0.1.0-alpha.3](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.3), predates the cross-agent handoff in the demo video. See the [evaluation limits](#limitations-and-release-status) before using real team data.
+**Start with the source on `main` for the current alpha.** Try the local demo with synthetic data, or evaluate the team workflow with a Linux Docker server and macOS developer tools. The latest tag, [v0.1.0-alpha.3](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.3), was published as a private source-only prerelease and predates the cross-agent handoff in the demo video. The alpha is not production-certified. See the [evaluation limits](#limitations-and-release-status) before using real team data.
 
 <img src="docs/assets/team-context-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
 
