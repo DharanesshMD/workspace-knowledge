@@ -12,7 +12,11 @@ The initial integration PR's fresh dependency audit found four vulnerabilities i
 
 **2026-11-07 local follow-up:** real Antigravity IDE and bundled Codex CLI model-driven sharing/retrieval passed in both directions against the local HTTPS stack. Read-only tool metadata, publication-state ambiguity, Compose policy forwarding and the populated-server verifier were fixed; the final local suite passed 799 Rust tests, 77 browser tests and 46 Python checks (one explicit skip). See [exact environment, evidence and limitations](../reviews/2026-11-07-local-ide-acceptance.md). This does not close production, native-capture, desktop-UI or exact-head remote CI gates. On current `main`, eligible assistant-written cards can publish without a reviewer; operators who require review must set `WK_AUTO_PUBLISH_PRODUCTS=none`.
 
-## Current repository and release state
+## Public source alpha
+
+The [alpha.4 release notes](alpha4-release.md) describe the MCP workflow, installation, upgrade and client-version limits. Production qualification remains open.
+
+## November 9 repository and release snapshot
 
 **2026-11-07 onboarding follow-up:** the source installer and `wk-connect` passed 12 real local lifecycle checks under a fresh HOME/prefix; both normal local IDE configurations were then migrated from trial launchers to the installed native proxy and passed authenticated tool discovery. The current suite passed 801 Rust tests and 57 Python tests, with one explicit Python skip. See [scope and evidence](../reviews/2026-11-07-client-onboarding-acceptance.md). This closes the repeatable local setup step, with clean-machine and remote release qualification still open.
 

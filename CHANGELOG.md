@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.1.0-alpha.4 — source-only MCP alpha
+
+See the [release notes](docs/operations/alpha4-release.md) for setup, upgrade and client coverage. The release updates rustix, url and the Vite development server to address dependency advisories.
 
 - Automatic team context, per coding tool. The `wk-mcp` bridge now reads which coding tool connected (`clientInfo` in the MCP handshake) and, when the developer approves a project folder with the new **Automatic team context** box ticked, sets up the strongest thing that tool supports: its own hooks for Claude Code (team context injected on prompt submit and before each edit; the agent sent back once when it stops with unshared edits) and Cursor (context after an edit, a follow-up message at the end, plus a rule file), a marked block in `AGENTS.md` for Codex and VS Code Copilot, and per-tool instructions with a `next` step in tool results for everything else. The approval page lists every file before it is written; `wk-mcp engage status|remove` shows and removes exactly what was written; the hooks (`wk-mcp hook`) capture nothing, need no collector, and do nothing once the approval is paused or revoked. The hosted `/mcp/{product}` endpoint cannot write to a developer's machine, so it tailors its instructions instead and names the rule file to save them in. **Behaviour changes:** the bridge now writes more than a consent record (only on the developer's click), a hook can cost one extra model reply, and sharing is automatic in a folder approved with the box ticked. Folders approved earlier are unchanged until approved again. A real Claude Code 2.1.303 was checked as far as being recognised, loading the hooks and running the prompt hook; the agent acting on the stop reminder, and Cursor, Codex and VS Code, are not verified against the real tools. See [automatic team context](docs/adapters/setup.md#automatic-team-context-per-coding-tool).
 
@@ -27,9 +29,7 @@
 - Fixed: the hosted MCP endpoint (`/mcp/{product}`) answered `403 Host header is not allowed` for every request unless the server was reached as `localhost`, because the MCP SDK's DNS-rebinding guard accepts only loopback names by default. The host of the configured `WK_MCP_RESOURCE` is now allowed as well, so deployments on a real hostname work.
 - New `deploy/stack/`: `stack.py up|down|status` brings up PostgreSQL, Keycloak, the server and an HTTPS proxy on one Docker host with migrations, the restricted role, Keycloak users, memberships and native MCP sign-in, and is safe to repeat; `verify.py` checks two users end to end through the hosted MCP endpoint; `make-demo-folders.sh` creates one demo project per tool. Guides: [two-developer local test](docs/operations/local-docker-test.md) and [setup by an AI agent over SSH](docs/operations/agent-install.md).
 
-## v0.1.0-alpha.4 — source-only prerelease (draft; not tagged or published yet)
-
-Changes since `v0.1.0-alpha.3`.
+### Earlier changes since v0.1.0-alpha.3
 
 - Publish without review, on by default for new setups: a developer's own assistant-written cards (from `wk-agent draft`) are published at once after screening instead of waiting for a reviewer. The server enables every product unless `WK_AUTO_PUBLISH_PRODUCTS=none` (or a list of product IDs narrows it); new collectors (`device connect`, `init`) turn it on unless `--no-auto-publish`; collectors set up earlier stay off until `wk-agent auto-publish enable --yes`. No schema change, recorded in the audit log as `publish_on_submit`, withdrawable. **Behavior change for the alpha.3 default of review-before-publish.** Rule drafts, hook captures, imports, owner sync and `knowledge.record` are never published this way. The portal's source line for assistant cards no longer says they were reviewed.
 - Portal **Connect** page: after sign-in, each developer sees their MCP URL per product (`https://<server>/mcp/<product>`, from `WK_MCP_RESOURCE`; the `/v1/me` response gains an optional `mcp_url`) with Copy buttons and ready setup for Claude (custom connector), Claude Code, Cursor and VS Code. Claude's own connectors need an internet-reachable server and are untested.

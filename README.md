@@ -12,7 +12,7 @@ Git brings the code into your checkout. Workspace Knowledge brings the recorded 
 
 [Try the demo](#quickstart) · [Join a team](#join-a-team-server) · [Host a server](#host-a-team-server) · [Documentation](#documentation) · [Contribute](CONTRIBUTING.md)
 
-**Start with the source on `main` for the current alpha.** Try the local demo with synthetic data, or evaluate the team workflow with a Linux Docker server and macOS developer tools. The latest tag, [v0.1.0-alpha.3](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.3), was published as a private source-only prerelease and predates the cross-agent handoff in the demo video. The alpha is not production-certified. See the [evaluation limits](#limitations-and-release-status) before using real team data.
+**[v0.1.0-alpha.4](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.4) is the source-only MCP alpha.** Try the local demo with synthetic data, or evaluate the team workflow with a Linux Docker server and macOS developer tools. The previous tag, [v0.1.0-alpha.3](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.3), was published as a private source-only prerelease and predates the cross-agent handoff in the demo video. The alpha is not production-certified. See the [evaluation limits](#limitations-and-release-status) before using real team data.
 
 <img src="docs/assets/team-context-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
 
@@ -151,7 +151,7 @@ cargo build --locked -p wk-cli
 python scripts/demo.py
 ```
 
-These instructions target the default branch, `main`. To evaluate the currently published source-only prerelease exactly, use `git clone --branch v0.1.0-alpha.3 https://github.com/DharanesshMD/workspace-knowledge.git`; that tag predates the current `main` branch.
+These instructions target the default branch, `main`. To evaluate the currently published source-only prerelease exactly, use `git clone --branch v0.1.0-alpha.4 https://github.com/DharanesshMD/workspace-knowledge.git`.
 
 The demo creates a temporary synthetic workspace, approves one service, rejects out-of-scope paths, replays a visible conversation fixture and checks that pause stops eligibility. Successful output ends with:
 
@@ -417,7 +417,7 @@ Linux runners may need `npx playwright install --with-deps chromium`. See [CONTR
 ## Documentation
 
 - [Local Codex/Antigravity pilot](docs/operations/local-pilot.md) — the single-Mac evaluation protocol and its exit criteria.
-- [Alpha.4 draft notes](docs/operations/alpha4-release.md) — current setup, upgrade and release boundaries; not a published release.
+- [Alpha.4 release notes](docs/operations/alpha4-release.md) — setup, upgrade instructions and capture limits.
 
 | Area | Guides |
 |---|---|
@@ -436,7 +436,7 @@ The repository includes implementation and synthetic/local acceptance records. I
 
 | Area | Remaining work or boundary |
 |---|---|
-| Capture | Partial and version-pinned adapters; held Antigravity turns; unsupported surfaces and mixed context remain uncovered |
+| Capture | Automatic conversation capture is experimental. It has not been verified with Cursor 3.31.15 or Claude Code 2.1.330. See the [tested client versions](docs/adapters/support.md). MCP sharing and retrieval are separate workflows. |
 | Edit protection | Claude Code 2.1.296 local Edit/Write flow passed; MultiEdit/cloud behavior, shell, external/manual writes and other clients remain uncovered |
 | Knowledge completeness | Undocumented rationale and dependencies remain gaps; source-backed briefs cannot guarantee a safe change |
 | Identity/deployment | Production-provider OIDC/TLS acceptance and real-client remote OAuth certification remain |

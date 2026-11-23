@@ -15,6 +15,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
         readme = self.read("README.md").lower()
         self.assertIn("v0.1.0-alpha.3", readme)
         self.assertIn("private source-only prerelease", readme)
+        self.assertIn("git clone --branch v0.1.0-alpha.4", readme)
         self.assertIn("not production-certified", readme)
         self.assertNotIn("not yet published", readme)
 

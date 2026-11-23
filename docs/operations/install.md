@@ -2,7 +2,7 @@
 
 Choose one path: try the [synthetic demo](../../README.md#quickstart), join an existing team server, or operate a server. Developers joining a team do not need a local PostgreSQL database, Node.js or Docker. Installation does not approve capture.
 
-This is a pre-release source build. The latest published source-only prerelease is `v0.1.0-alpha.3`; its tag predates current `main`. The intended production-support target is a Linux Docker server with macOS developer machines, but production acceptance is still open. Linux x64/arm64, Windows x64 and macOS arm64/x64 are build targets, not blanket fresh-install/service-startup certifications. Record exact OS, architecture, toolchain and client versions before claiming support. See the [production readiness ledger](production-readiness.md).
+This is a pre-release source build. Use the `v0.1.0-alpha.4` tag for the source-only MCP alpha. For an upgrade from `v0.1.0-alpha.3`, follow the [release notes](alpha4-release.md). The intended production-support target is a Linux Docker server with macOS developer machines, but production acceptance is still open. Linux x64/arm64, Windows x64 and macOS arm64/x64 are build targets, not blanket fresh-install/service-startup certifications. Record exact OS, architecture, toolchain and client versions before claiming support. See the [production readiness ledger](production-readiness.md).
 
 ## Install the tools
 

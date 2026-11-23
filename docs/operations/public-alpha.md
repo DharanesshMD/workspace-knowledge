@@ -1,6 +1,6 @@
 # Historical source-alpha launch packet — superseded
 
-This packet covered the original `v0.1.0-alpha.1` proposal and is **superseded**. Do not follow its old visibility, tag, release, or GitHub-settings sequence. The current source-only prerelease is [`v0.1.0-alpha.3`](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.3), published on 2026-10-17 while the repository was private. Its tag points to `5b982a5`; it predates current `main` and is not production-certified.
+This packet covered the original `v0.1.0-alpha.1` proposal and is **superseded**. Do not follow its old visibility, tag, release, or GitHub-settings sequence. The next source-only prerelease covered by this historical packet was [`v0.1.0-alpha.3`](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.3), published on 2026-10-17 while the repository was private. Its tag points to `5b982a5`; it predates current `main` and is not production-certified.
 
 The repository was private at the time of this review.
 
