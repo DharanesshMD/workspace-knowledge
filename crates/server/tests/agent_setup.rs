@@ -162,7 +162,10 @@ async fn members_get_the_setup_for_every_client_and_the_server_announces_the_sam
     assert_eq!(status, StatusCode::OK, "{init}");
     let told = init["result"]["instructions"].as_str().unwrap();
     assert!(told.starts_with(&rules(false)), "{told}");
-    assert!(told.contains(".cursor/rules/workspace-knowledge.mdc"), "{told}");
+    assert!(
+        told.contains(".cursor/rules/workspace-knowledge.mdc"),
+        "{told}"
+    );
 
     // Without a configured public address the product still answers, with nothing to connect to yet.
     std::env::remove_var("WK_MCP_RESOURCE");

@@ -12,7 +12,7 @@ Git brings the code into your checkout. Workspace Knowledge brings the recorded 
 
 [Try the demo](#quickstart) · [Join a team](#join-a-team-server) · [Host a server](#host-a-team-server) · [Documentation](#documentation) · [Contribute](CONTRIBUTING.md)
 
-> **Latest release: `v0.1.0-alpha.3`, the private source-only prerelease.** The tag points to `5b982a5`; `main` has since advanced. This is an evaluation release, not production-certified or production-supported. Production OIDC/HTTPS, broader privacy/client qualification, a real-team target-server pilot, macOS signing/notarization and independent security review remain open. Alpha.3 requires publication review; current `main` enables publication without a reviewer for eligible assistant-written cards from new collectors. Operators can disable it with `WK_AUTO_PUBLISH_PRODUCTS=none`; developers can connect with `--no-auto-publish`. See [current release readiness](docs/operations/production-readiness.md), [limitations](#limitations-and-release-status) and the [changelog](CHANGELOG.md).
+**Start with the source on `main` for the current alpha.** Try the local demo with synthetic data, or evaluate the team workflow with a Linux Docker server and macOS developer tools. The latest tagged prerelease, [v0.1.0-alpha.3](https://github.com/DharanesshMD/workspace-knowledge/releases/tag/v0.1.0-alpha.3), predates the cross-agent handoff in the demo video. See the [evaluation limits](#limitations-and-release-status) before using real team data.
 
 <img src="docs/assets/team-context-desktop.png" alt="Team context in the hosted portal, showing published summaries, service and file filters, and revision details" width="900" />
 
@@ -119,8 +119,8 @@ flowchart LR
 
 1. **Approve scope locally.** A developer approves explicit product/service folders. Personal, sibling and unknown contexts stay outside that approval.
 2. **Capture only supported visible content.** Enabled adapters feed a private encrypted journal. Unsupported or ambiguous sessions are partial or held.
-3. **Summarize locally.** Recommended: ask your own coding assistant to write the card with `/wk-summarize`. With no setup, drafts are built on your machine from the conversation's structure, without a model, as a fallback; you can also configure a loopback model for written summaries. Drafts are screened, encrypted and private until you submit them. There is no cloud summarization fallback.
-4. **Choose what to share.** Optional owner synchronization creates private server summaries. Explicit submission creates a review copy; authorized publication makes that copy available to the team.
+3. **Summarize locally.** Recommended: ask your own coding assistant to write the card with `/wk-summarize`. With no setup, drafts are built on your machine from the conversation's structure, without a model, as a fallback; you can also configure a loopback model for written summaries. Local drafts are screened and encrypted. Sharing a summary sends a separate copy to the team server. There is no cloud summarization fallback.
+4. **Choose what to share.** Optional owner synchronization creates private server summaries. When a developer shares an eligible assistant-written card, the default server policy can publish it immediately after screening. Operators can require review with `WK_AUTO_PUBLISH_PRODUCTS=none`. New collectors can opt out with `--no-auto-publish`.
 5. **Retrieve within scope.** The portal, CLI and MCP enforce current identity and product/service membership. Code-change context adds reviewed provenance and local Git snapshot observations for enrolled repositories.
 
 ### Three distinct data boundaries
@@ -441,7 +441,7 @@ The repository includes implementation and synthetic/local acceptance records. I
 | Knowledge completeness | Undocumented rationale and dependencies remain gaps; source-backed briefs cannot guarantee a safe change |
 | Identity/deployment | Production-provider OIDC/TLS acceptance and real-client remote OAuth certification remain |
 | Native distribution | Owned macOS source installation/Keychain/user-session startup passed; Apple signing/notarization and distributed installer acceptance remain |
-| Security | RSA runtime dependency removed; current local audit has zero vulnerability findings and five informational dependency advisories (four unmaintained crates and a tokio unsoundness notice); six-sample local Qwen privacy corpus passes with deterministic contact holds, but broader privacy qualification and independent production security assessment remain |
+| Security | See [SECURITY.md](SECURITY.md) for the dated dependency audit. Broader privacy testing and independent security review remain open |
 | Capacity | Ten-minute local five-identity soak passed; target-server/team, long-duration capacity and protected-edit workload measurement remain |
 | Optional components | Hybrid retrieval requires explicit pgvector/local model configuration and indexing; representative quality/provider capacity remain unqualified. Advisory assessment needs an approved endpoint; Enterprise capture needs entitlement and live acceptance |
 

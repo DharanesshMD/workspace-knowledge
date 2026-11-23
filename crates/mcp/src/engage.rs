@@ -20,7 +20,8 @@ use wk_contracts::agent_setup;
 const CLAUDE_EDITS: &str = "Edit|Write|MultiEdit|NotebookEdit";
 /// Seconds a client waits for a hook. The lookup inside gives up sooner.
 const HOOK_TIMEOUT: u64 = 10;
-const BLOCK_START: &str = "<!-- workspace-knowledge:start (written by wk-mcp; `wk-mcp engage remove` takes it out) -->";
+const BLOCK_START: &str =
+    "<!-- workspace-knowledge:start (written by wk-mcp; `wk-mcp engage remove` takes it out) -->";
 const BLOCK_END: &str = "<!-- workspace-knowledge:end -->";
 /// Edited files remembered per folder; more than this and the oldest names stay.
 const MAX_EDITED: usize = 200;
@@ -61,7 +62,9 @@ impl HookCommand {
     }
     fn claude(&self) -> Result<Value, String> {
         let handler = |event: &str| -> Result<Value, String> {
-            Ok(json!({"type":"command","command":self.line("claude-code", event)?,"timeout":HOOK_TIMEOUT}))
+            Ok(
+                json!({"type":"command","command":self.line("claude-code", event)?,"timeout":HOOK_TIMEOUT}),
+            )
         };
         Ok(json!({"hooks":{
             "UserPromptSubmit":[{"hooks":[handler("UserPromptSubmit")?]}],
@@ -155,9 +158,10 @@ pub fn plan(
 fn read(path: &Path) -> Result<Option<String>, String> {
     match fs::metadata(path) {
         Err(_) => Ok(None),
-        Ok(meta) if !meta.is_file() || meta.len() > 4 * 1024 * 1024 => {
-            Err(format!("{} is not a file that can be edited", path.display()))
-        }
+        Ok(meta) if !meta.is_file() || meta.len() > 4 * 1024 * 1024 => Err(format!(
+            "{} is not a file that can be edited",
+            path.display()
+        )),
         Ok(_) => fs::read_to_string(path)
             .map(Some)
             .map_err(|_| format!("{} cannot be read", path.display())),
@@ -183,7 +187,10 @@ fn inside(folder: &Path, file: &Path) -> Result<(), String> {
         .canonicalize()
         .map_err(|_| "setup path unavailable")?;
     if !real.starts_with(folder) {
-        return Err(format!("{} leads outside the project folder", parent.display()));
+        return Err(format!(
+            "{} leads outside the project folder",
+            parent.display()
+        ));
     }
     Ok(())
 }
@@ -192,8 +199,12 @@ fn json_file(path: &Path) -> Result<Value, String> {
         None => Ok(json!({})),
         Some(text) if text.trim().is_empty() => Ok(json!({})),
         // Comments would be lost on rewrite, so a file that is not strict JSON is left alone.
-        Some(text) => serde_json::from_str(&text)
-            .map_err(|_| format!("{} is not strict JSON; it was left unchanged", path.display())),
+        Some(text) => serde_json::from_str(&text).map_err(|_| {
+            format!(
+                "{} is not strict JSON; it was left unchanged",
+                path.display()
+            )
+        }),
     }
 }
 fn pretty(value: &Value) -> String {
@@ -581,7 +592,13 @@ mod tests {
         let rest = "wk-mcp\" hook --client claude-code --event Stop --server \"https://wk.example\" --product \"demo\" --consent-dir \"/private/consent dir\"";
         assert!(line.starts_with('"') && line.ends_with(rest), "{line}");
         assert!(!line.contains("token") && !line.contains("Bearer"));
-        for bad in ["/a/$(x)/wk-mcp", "/a/b\"c", "/a/b`c`", "/a/b'c", "/a/%PATH%/x"] {
+        for bad in [
+            "/a/$(x)/wk-mcp",
+            "/a/b\"c",
+            "/a/b`c`",
+            "/a/b'c",
+            "/a/%PATH%/x",
+        ] {
             c.exe = PathBuf::from(bad);
             assert!(c.line("claude-code", "Stop").is_err(), "{bad}");
         }
@@ -612,7 +629,9 @@ mod tests {
         let mine = json!({"permissions":{"allow":["Bash(ls)"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"say done"}]}]}});
         fs::write(&settings, mine.to_string()).unwrap();
         let planned = plan(Some("claude-code"), &w.folder, &command(&w.folder)).unwrap();
-        assert!(turn_on(&w.consent, &w.folder, planned.clone()).unwrap().is_empty());
+        assert!(turn_on(&w.consent, &w.folder, planned.clone())
+            .unwrap()
+            .is_empty());
         let after: Value = serde_json::from_str(&text(&settings)).unwrap();
         assert_eq!(after["permissions"], mine["permissions"]);
         assert_eq!(after["hooks"]["Stop"].as_array().unwrap().len(), 2);
@@ -696,14 +715,20 @@ mod tests {
         std::os::unix::fs::symlink(&outside, w.folder.join(".claude")).unwrap();
         let planned = plan(Some("claude-code"), &w.folder, &command(&w.folder)).unwrap();
         let problems = turn_on(&w.consent, &w.folder, planned).unwrap();
-        assert!(problems[0].contains("outside the project folder"), "{problems:?}");
+        assert!(
+            problems[0].contains("outside the project folder"),
+            "{problems:?}"
+        );
         assert!(fs::read_dir(&outside).unwrap().next().is_none());
     }
     #[test]
     fn the_agent_is_sent_back_once_per_batch_of_edits_and_never_in_a_loop() {
         let mut ledger = Ledger::default();
         let stop = json!({"stop_hook_active": false});
-        assert!(ledger.stop("claude-code", &stop).is_none(), "nothing edited");
+        assert!(
+            ledger.stop("claude-code", &stop).is_none(),
+            "nothing edited"
+        );
         ledger.edit("backend/a.rs".into());
         let sent = ledger.stop("claude-code", &stop).unwrap();
         assert_eq!(sent["decision"], "block");
@@ -711,14 +736,22 @@ mod tests {
         assert!(ledger.stop("claude-code", &stop).is_none(), "only once");
         ledger.edit("backend/b.rs".into());
         assert!(
-            ledger.stop("claude-code", &json!({"stop_hook_active": true})).is_none(),
+            ledger
+                .stop("claude-code", &json!({"stop_hook_active": true}))
+                .is_none(),
             "a stop that follows a hook is never blocked"
         );
-        assert!(ledger.stop("claude-code", &json!({})).is_none(), "unknown counts as a loop");
+        assert!(
+            ledger.stop("claude-code", &json!({})).is_none(),
+            "unknown counts as a loop"
+        );
         assert!(ledger.stop("claude-code", &stop).is_some());
         ledger.edit("backend/c.rs".into());
         ledger.shared();
-        assert!(ledger.stop("claude-code", &stop).is_none(), "shared work needs no reminder");
+        assert!(
+            ledger.stop("claude-code", &stop).is_none(),
+            "shared work needs no reminder"
+        );
         assert!(ledger.reminder().is_none());
     }
     #[test]
@@ -735,7 +768,10 @@ mod tests {
         let sent = ledger
             .stop("cursor", &json!({"status":"completed","loop_count":0}))
             .unwrap();
-        assert!(sent["followup_message"].as_str().unwrap().contains("knowledge.share_session"));
+        assert!(sent["followup_message"]
+            .as_str()
+            .unwrap()
+            .contains("knowledge.share_session"));
         assert!(ledger.stop("other", &json!({})).is_none());
     }
     #[test]
@@ -778,7 +814,12 @@ mod tests {
         let payload = json!({"cwd":"/c","workspace_roots":["/r1","/r2"]});
         assert_eq!(
             hook_folders(&payload, Some("/p".into())),
-            [Path::new("/p"), Path::new("/r1"), Path::new("/r2"), Path::new("/c")]
+            [
+                Path::new("/p"),
+                Path::new("/r1"),
+                Path::new("/r2"),
+                Path::new("/c")
+            ]
         );
         assert!(hook_folders(&json!({}), None).is_empty());
     }

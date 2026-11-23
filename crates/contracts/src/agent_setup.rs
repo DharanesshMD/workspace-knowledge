@@ -348,7 +348,11 @@ mod tests {
             ("Cursor", "cursor", Enforcement::Hooks),
             ("codex-mcp-client", "codex", Enforcement::RuleFile),
             ("Visual Studio Code", "vscode", Enforcement::RuleFile),
-            ("Visual Studio Code - Insiders", "vscode", Enforcement::RuleFile),
+            (
+                "Visual Studio Code - Insiders",
+                "vscode",
+                Enforcement::RuleFile,
+            ),
             ("claude-ai", "claude-desktop", Enforcement::Instructions),
         ] {
             assert_eq!(detect(name), Some(id), "{name}");
@@ -370,7 +374,10 @@ mod tests {
         ] {
             let file = rule_file(id).unwrap();
             assert_eq!(file.path, path);
-            assert!(file.content.contains("Sharing is on for this project"), "{id}");
+            assert!(
+                file.content.contains("Sharing is on for this project"),
+                "{id}"
+            );
         }
         assert!(rule_file("claude-desktop").is_none());
         assert!(rule_file("nope").is_none());

@@ -550,8 +550,9 @@ impl ServerHandler for KnowledgeMcp {
             self.get_info(),
         );
         if let Some(client) = context.client_info() {
-            reply.instructions =
-                Some(wk_contracts::agent_setup::connect_instructions(&client.name));
+            reply.instructions = Some(wk_contracts::agent_setup::connect_instructions(
+                &client.name,
+            ));
         }
         Ok(reply)
     }

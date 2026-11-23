@@ -18,7 +18,7 @@ The initial integration PR's fresh dependency audit found four vulnerabilities i
 
 | Item | Observed state |
 |---|---|
-| GitHub visibility | Private. The owner will change visibility manually; no agent workflow changes it. |
+| GitHub visibility | Private at the time of the November 9 review. |
 | Latest GitHub release | `v0.1.0-alpha.3`, source-only prerelease published 2026-10-17; no release binaries attached. |
 | Alpha tag | `v0.1.0-alpha.3` resolves to commit `5b982a5f4523d1e017de4d190586c715538abbe9`. |
 | Current `main` at audit | `5605d788cd401997aa8ee06706cb6c6ff8e8e6ef`, ahead of alpha.3; includes post-tag model-free summary changes. |

@@ -125,7 +125,11 @@ fn imports_only_typed_prompts_and_real_replies() {
     assert_eq!(
         messages(&history, "claude-code:s"),
         owned(&[
-            ("u1", "user", "Real prompt one\n[developer attached 1 image]"),
+            (
+                "u1",
+                "user",
+                "Real prompt one\n[developer attached 1 image]"
+            ),
             ("a1", "assistant", "Reply one"),
             ("u2", "user", "Real prompt two <b>with</b> a tag inside"),
         ])
@@ -167,15 +171,18 @@ fn attached_images_leave_a_count_and_never_their_data() {
     assert_eq!(
         messages(&history, "claude-code:s"),
         owned(&[
-            ("u1", "user", "The hero lands a little low\n[developer attached 1 image]"),
+            (
+                "u1",
+                "user",
+                "The hero lands a little low\n[developer attached 1 image]"
+            ),
             ("a1", "assistant", "Fixed"),
             ("u2", "user", "[developer attached 2 images]"),
             ("a2", "assistant", "Both match"),
         ])
     );
     assert_eq!(
-        history.conversations[0].title,
-        "The hero lands a little low",
+        history.conversations[0].title, "The hero lands a little low",
         "the title is still the typed text"
     );
     assert_eq!(history.unreadable_records, 0);

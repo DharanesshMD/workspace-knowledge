@@ -11,3 +11,5 @@ target
 **/*.db-wal
 **/*.db-shm
 **/*.age
+launch-video
+.claude

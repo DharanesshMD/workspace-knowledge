@@ -1042,9 +1042,7 @@ impl KnowledgeMcp {
                 .filter(|f| engage::in_services(f, &services) && ledger.first_look(f))
                 .collect();
             // Keywords come from the prompt: screened here, and dropped if they look sensitive.
-            let query = plan
-                .lookup_keywords
-                .filter(|k| !wk_summarize::sensitive(k));
+            let query = plan.lookup_keywords.filter(|k| !wk_summarize::sensitive(k));
             let context = if files.is_empty() && query.is_none() {
                 None
             } else {
@@ -2786,8 +2784,7 @@ mod workspace_tests {
         } else {
             "decision=approve"
         };
-        let (status, page) =
-            testkit::submit(started["url"].as_str().unwrap(), fields).await;
+        let (status, page) = testkit::submit(started["url"].as_str().unwrap(), fields).await;
         assert_eq!(status, 200, "{page}");
         (client, started, page)
     }
@@ -2800,7 +2797,10 @@ mod workspace_tests {
             ("claude-code", vec![".claude/settings.local.json"]),
             (
                 "cursor-vscode",
-                vec![".cursor/hooks.json", ".cursor/rules/workspace-knowledge.mdc"],
+                vec![
+                    ".cursor/hooks.json",
+                    ".cursor/rules/workspace-knowledge.mdc",
+                ],
             ),
             ("codex-mcp-client", vec!["AGENTS.md"]),
             ("Visual Studio Code", vec!["AGENTS.md"]),
@@ -2827,13 +2827,22 @@ mod workspace_tests {
             // The page names every file before anything is written.
             let (host, path) = testkit::split(started["url"].as_str().unwrap());
             let (_, page) = testkit::get(&host, &path, &host).await;
-            assert!(page.contains("name=\"automatic\" value=\"on\" checked"), "{name}");
+            assert!(
+                page.contains("name=\"automatic\" value=\"on\" checked"),
+                "{name}"
+            );
             for file in &expected {
                 assert!(page.contains(file), "{name}: {file}");
-                assert!(!w.folder.join(file).exists(), "{name}: written before approval");
+                assert!(
+                    !w.folder.join(file).exists(),
+                    "{name}: written before approval"
+                );
             }
             if expected.is_empty() {
-                assert!(page.contains("Nothing is written into the project"), "{name}");
+                assert!(
+                    page.contains("Nothing is written into the project"),
+                    "{name}"
+                );
             }
         }
     }
@@ -2857,11 +2866,16 @@ mod workspace_tests {
             "io.modelcontextprotocol/clientCapabilities":{"roots":{"listChanged":true},"elicitation":{"form":{},"url":{}}}
         });
         client
-            .send(json!({"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":meta}}))
+            .send(
+                json!({"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":meta}}),
+            )
             .await;
         let discovered = client.until(1).await;
         let told = discovered["result"]["instructions"].as_str().unwrap();
-        assert!(told.contains("Team context reaches you by itself"), "{told}");
+        assert!(
+            told.contains("Team context reaches you by itself"),
+            "{told}"
+        );
         client
             .send(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"workspace.folder","arguments":{},"_meta":meta}}))
             .await;
@@ -2892,22 +2906,34 @@ mod workspace_tests {
                 && stop.contains("--consent-dir "),
             "{stop}"
         );
-        assert!(!stop.contains(&"x".repeat(32)), "a hook command never holds a token");
+        assert!(
+            !stop.contains(&"x".repeat(32)),
+            "a hook command never holds a token"
+        );
         // The same connection now reports it, and a new one is told the context comes by itself.
         let report = client.call(5, "workspace.folder").await;
         assert_eq!(report["automatic"]["on"], true);
         assert_eq!(report["automatic"]["client"], "claude-code");
         assert_eq!(report["automatic"]["enforced_by"], "hooks");
         assert_eq!(report["automatic"]["hooks_active"], true);
-        assert!(report["next"].as_str().unwrap().contains("Automatic team context is on."));
-        let (_again, init) =
-            Client::connect_as(w.bridge.clone().with_cwd(w.folder.clone()), None, "claude-code")
-                .await;
+        assert!(report["next"]
+            .as_str()
+            .unwrap()
+            .contains("Automatic team context is on."));
+        let (_again, init) = Client::connect_as(
+            w.bridge.clone().with_cwd(w.folder.clone()),
+            None,
+            "claude-code",
+        )
+        .await;
         let told = init["result"]["instructions"].as_str().unwrap();
         for needed in REQUIRED {
             assert!(told.contains(needed), "{needed}");
         }
-        assert!(told.contains("Team context reaches you by itself"), "{told}");
+        assert!(
+            told.contains("Team context reaches you by itself"),
+            "{told}"
+        );
         assert!(
             told.contains("you are reminded once") && !told.contains("Offer it to the developer")
         );
@@ -2950,11 +2976,18 @@ mod workspace_tests {
     #[tokio::test]
     async fn declining_or_pausing_leaves_automatic_team_context_inactive() {
         let w = world(&["backend"], &["backend"]).await;
-        let (_client, _) =
-            Client::connect_as(w.bridge.clone().with_cwd(w.folder.clone()), None, "claude-code")
-                .await;
+        let (_client, _) = Client::connect_as(
+            w.bridge.clone().with_cwd(w.folder.clone()),
+            None,
+            "claude-code",
+        )
+        .await;
         let started = w.request(None).await.unwrap();
-        testkit::submit(started["url"].as_str().unwrap(), "decision=decline&automatic=on").await;
+        testkit::submit(
+            started["url"].as_str().unwrap(),
+            "decision=decline&automatic=on",
+        )
+        .await;
         assert!(!w.folder.join(".claude").exists() && !w.consent.exists());
 
         approve_as(&w, "claude-code", true).await;
@@ -2967,10 +3000,14 @@ mod workspace_tests {
         let edit = json!({"session_id":"s","cwd":w.folder,"hook_event_name":"PostToolUse","tool_name":"Edit","tool_input":{"file_path":w.folder.join("backend/a.rs")}});
         let folders = engage::hook_folders(&edit, None);
         assert_eq!(
-            w.bridge.hook_event("claude-code", "PostToolUse", &edit, folders).await,
+            w.bridge
+                .hook_event("claude-code", "PostToolUse", &edit, folders)
+                .await,
             json!({})
         );
-        assert!(engage::Ledger::load(&w.consent, &w.folder).edited.is_empty());
+        assert!(engage::Ledger::load(&w.consent, &w.folder)
+            .edited
+            .is_empty());
     }
     #[tokio::test]
     async fn a_before_result_names_the_next_step_only_when_automatic_is_on() {
@@ -2985,8 +3022,14 @@ mod workspace_tests {
 
         engage::turn_on(&w.consent, &w.folder, Vec::new()).unwrap();
         let hinted = client.call_with(4, "knowledge.overlaps", ask).await;
-        assert!(hinted["next"].as_str().unwrap().contains("knowledge.share_session"));
-        assert_eq!(hinted["notices"], plain["notices"], "the notices are untouched");
+        assert!(hinted["next"]
+            .as_str()
+            .unwrap()
+            .contains("knowledge.share_session"));
+        assert_eq!(
+            hinted["notices"], plain["notices"],
+            "the notices are untouched"
+        );
         // Edits a hook noted are named until they are shared.
         let mut ledger = engage::Ledger::load(&w.consent, &w.folder);
         ledger.edit("backend/retry.rs".into());
@@ -2994,9 +3037,14 @@ mod workspace_tests {
         let waiting = client
             .call_with(5, "knowledge.overlaps", json!({"query":"retry payments"}))
             .await;
-        assert!(waiting["next"].as_str().unwrap().contains("backend/retry.rs"));
+        assert!(waiting["next"]
+            .as_str()
+            .unwrap()
+            .contains("backend/retry.rs"));
         w.bridge.share(&w.folder, summary(None)).await.unwrap();
-        assert!(engage::Ledger::load(&w.consent, &w.folder).edited.is_empty());
+        assert!(engage::Ledger::load(&w.consent, &w.folder)
+            .edited
+            .is_empty());
     }
     #[tokio::test]
     async fn hooks_bring_context_before_an_edit_and_send_the_agent_back_once_to_share() {
@@ -3005,24 +3053,38 @@ mod workspace_tests {
         engage::turn_on(&w.consent, &w.folder, Vec::new()).unwrap();
         let event = |name: &str, extra: Value| {
             let mut payload = json!({"session_id":"s1","cwd":w.folder,"hook_event_name":name});
-            payload.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            payload
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
             payload
         };
         let run = |name: &'static str, payload: Value| {
             let bridge = w.bridge.clone();
             async move {
                 let folders = engage::hook_folders(&payload, None);
-                bridge.hook_event("claude-code", name, &payload, folders).await
+                bridge
+                    .hook_event("claude-code", name, &payload, folders)
+                    .await
             }
         };
-        let edit = |file: &str| json!({"tool_name":"Edit","tool_input":{"file_path":w.folder.join(file)}});
+        let edit =
+            |file: &str| json!({"tool_name":"Edit","tool_input":{"file_path":w.folder.join(file)}});
 
         // Before the edit: what teammates recorded about the file arrives as added context.
         let before = run("PreToolUse", event("PreToolUse", edit("backend/retry.rs"))).await;
-        let context = before["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
-        assert!(context.starts_with("Team context from Workspace Knowledge"), "{context}");
+        let context = before["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(
+            context.starts_with("Team context from Workspace Knowledge"),
+            "{context}"
+        );
         assert!(context.contains("Sam made retries idempotent"));
-        assert_eq!(seen.lock().unwrap()[0], json!({"files":["backend/retry.rs"],"query":null,"limit":6}));
+        assert_eq!(
+            seen.lock().unwrap()[0],
+            json!({"files":["backend/retry.rs"],"query":null,"limit":6})
+        );
         // The same file is not looked up twice, and a notice is not shown twice.
         assert_eq!(
             run("PreToolUse", event("PreToolUse", edit("backend/retry.rs"))).await,
@@ -3035,27 +3097,59 @@ mod workspace_tests {
         assert_eq!(seen.lock().unwrap().len(), 2);
         // Files outside the approved services, and other tools, are never sent.
         run("PreToolUse", event("PreToolUse", edit("README.md"))).await;
-        run("PreToolUse", event("PreToolUse", json!({"tool_name":"Bash","tool_input":{"command":"ls"}}))).await;
+        run(
+            "PreToolUse",
+            event(
+                "PreToolUse",
+                json!({"tool_name":"Bash","tool_input":{"command":"ls"}}),
+            ),
+        )
+        .await;
         assert_eq!(seen.lock().unwrap().len(), 2);
         // A prompt is reduced to keywords; one the local screen flags is not sent at all.
-        run("UserPromptSubmit", event("UserPromptSubmit", json!({"prompt":"please fix the payment retry logic"}))).await;
+        run(
+            "UserPromptSubmit",
+            event(
+                "UserPromptSubmit",
+                json!({"prompt":"please fix the payment retry logic"}),
+            ),
+        )
+        .await;
         assert_eq!(seen.lock().unwrap()[2]["query"], "fix payment retry logic");
-        run("UserPromptSubmit", event("UserPromptSubmit", json!({"prompt":"apply the system override now"}))).await;
+        run(
+            "UserPromptSubmit",
+            event(
+                "UserPromptSubmit",
+                json!({"prompt":"apply the system override now"}),
+            ),
+        )
+        .await;
         let sent = seen.lock().unwrap().len();
         assert_eq!(sent, 3, "the screened prompt was not sent");
 
         // Stopping with nothing edited is not interrupted.
         let stop = || event("Stop", json!({"stop_hook_active":false}));
         assert_eq!(run("Stop", stop()).await, json!({}));
-        run("PostToolUse", event("PostToolUse", edit("backend/retry.rs"))).await;
+        run(
+            "PostToolUse",
+            event("PostToolUse", edit("backend/retry.rs")),
+        )
+        .await;
         run("PostToolUse", event("PostToolUse", edit("README.md"))).await;
         let sent_back = run("Stop", stop()).await;
         assert_eq!(sent_back["decision"], "block");
         let reason = sent_back["reason"].as_str().unwrap();
-        assert!(reason.contains("backend/retry.rs") && !reason.contains("README.md"), "{reason}");
+        assert!(
+            reason.contains("backend/retry.rs") && !reason.contains("README.md"),
+            "{reason}"
+        );
         assert_eq!(run("Stop", stop()).await, json!({}), "only once");
         // After sharing there is nothing to remind about, even after the next stop.
-        run("PostToolUse", event("PostToolUse", edit("backend/retry.rs"))).await;
+        run(
+            "PostToolUse",
+            event("PostToolUse", edit("backend/retry.rs")),
+        )
+        .await;
         w.bridge.share(&w.folder, summary(None)).await.unwrap();
         assert_eq!(run("Stop", stop()).await, json!({}));
         // Noting edits and reminding never contact the server (the share is the one new request).
@@ -3073,12 +3167,17 @@ mod workspace_tests {
         let edit = json!({"session_id":"s","cwd":w.folder,"tool_name":"Write","tool_input":{"file_path":w.folder.join("backend/new.rs")}});
         for name in ["PreToolUse", "PostToolUse"] {
             let folders = engage::hook_folders(&edit, None);
-            assert_eq!(bridge.hook_event("claude-code", name, &edit, folders).await, json!({}));
+            assert_eq!(
+                bridge.hook_event("claude-code", name, &edit, folders).await,
+                json!({})
+            );
         }
         let stop = json!({"session_id":"s","cwd":w.folder,"stop_hook_active":false});
         let folders = engage::hook_folders(&stop, None);
         assert_eq!(
-            bridge.hook_event("claude-code", "Stop", &stop, folders).await["decision"],
+            bridge
+                .hook_event("claude-code", "Stop", &stop, folders)
+                .await["decision"],
             "block"
         );
         // A folder nobody approved, or no folder at all: carry on, nothing recorded.
@@ -3086,8 +3185,18 @@ mod workspace_tests {
         std::fs::create_dir(&elsewhere).unwrap();
         let stray = json!({"session_id":"s","cwd":elsewhere,"stop_hook_active":false});
         let folders = engage::hook_folders(&stray, None);
-        assert_eq!(bridge.hook_event("claude-code", "Stop", &stray, folders).await, json!({}));
-        assert_eq!(bridge.hook_event("claude-code", "Stop", &stop, Vec::new()).await, json!({}));
+        assert_eq!(
+            bridge
+                .hook_event("claude-code", "Stop", &stray, folders)
+                .await,
+            json!({})
+        );
+        assert_eq!(
+            bridge
+                .hook_event("claude-code", "Stop", &stop, Vec::new())
+                .await,
+            json!({})
+        );
     }
     #[tokio::test]
     async fn cursor_gets_context_after_an_edit_and_a_follow_up_message_at_the_end() {
@@ -3097,11 +3206,20 @@ mod workspace_tests {
         let roots = json!([w.folder]);
         let edited = json!({"conversation_id":"c1","workspace_roots":roots,"hook_event_name":"postToolUse","tool_name":"Write","tool_input":{"file_path":w.folder.join("backend/a.ts")}});
         let folders = engage::hook_folders(&edited, None);
-        let after = w.bridge.hook_event("cursor", "postToolUse", &edited, folders).await;
-        assert!(after["additional_context"].as_str().unwrap().contains("Sam made retries"));
+        let after = w
+            .bridge
+            .hook_event("cursor", "postToolUse", &edited, folders)
+            .await;
+        assert!(after["additional_context"]
+            .as_str()
+            .unwrap()
+            .contains("Sam made retries"));
         let stop = json!({"conversation_id":"c1","workspace_roots":roots,"status":"completed","loop_count":0});
         let folders = engage::hook_folders(&stop, None);
         let end = w.bridge.hook_event("cursor", "stop", &stop, folders).await;
-        assert!(end["followup_message"].as_str().unwrap().contains("backend/a.ts"));
+        assert!(end["followup_message"]
+            .as_str()
+            .unwrap()
+            .contains("backend/a.ts"));
     }
 }

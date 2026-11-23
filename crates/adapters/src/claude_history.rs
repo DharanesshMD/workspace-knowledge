@@ -226,9 +226,9 @@ fn prompt_text(v: &Value, dropped: &mut usize) -> Option<String> {
             return None;
         }
     }
-    let images = content
-        .as_array()
-        .map_or(0, |parts| parts.iter().filter(|p| p["type"] == "image").count());
+    let images = content.as_array().map_or(0, |parts| {
+        parts.iter().filter(|p| p["type"] == "image").count()
+    });
     let marker = image_marker(images);
     joined(
         text_parts(content)

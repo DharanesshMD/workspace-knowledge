@@ -538,7 +538,13 @@ mod tests {
     #[test]
     fn attached_images_are_counted_in_one_line() {
         assert_eq!(image_marker(0), None);
-        assert_eq!(image_marker(1).as_deref(), Some("[developer attached 1 image]"));
-        assert_eq!(image_marker(3).as_deref(), Some("[developer attached 3 images]"));
+        assert_eq!(
+            image_marker(1).as_deref(),
+            Some("[developer attached 1 image]")
+        );
+        assert_eq!(
+            image_marker(3).as_deref(),
+            Some("[developer attached 3 images]")
+        );
     }
 }
