@@ -547,17 +547,12 @@ mod tests {
     fn each_client_gets_the_strongest_form_it_supports() {
         let w = world();
         let c = command(&w.folder);
-        let kinds = |client: Option<&str>| -> Vec<(String, &'static str)> {
+        let kinds = |client: Option<&str>| -> Vec<(PathBuf, &'static str)> {
             plan(client, &w.folder, &c)
                 .unwrap()
                 .into_iter()
                 .map(|i| {
-                    let file = i
-                        .file
-                        .strip_prefix(&w.folder)
-                        .unwrap()
-                        .to_string_lossy()
-                        .into_owned();
+                    let file = i.file.strip_prefix(&w.folder).unwrap().to_path_buf();
                     let kind = match i.change {
                         Change::Hooks { .. } => "hooks",
                         Change::Block { .. } => "block",
@@ -569,17 +564,26 @@ mod tests {
         };
         assert_eq!(
             kinds(Some("claude-code")),
-            [(".claude/settings.local.json".to_string(), "hooks")]
+            [(PathBuf::from(".claude/settings.local.json"), "hooks")]
         );
         assert_eq!(
             kinds(Some("cursor")),
             [
-                (".cursor/hooks.json".to_string(), "hooks"),
-                (".cursor/rules/workspace-knowledge.mdc".to_string(), "file")
+                (PathBuf::from(".cursor/hooks.json"), "hooks"),
+                (
+                    PathBuf::from(".cursor/rules/workspace-knowledge.mdc"),
+                    "file"
+                )
             ]
         );
-        assert_eq!(kinds(Some("codex")), [("AGENTS.md".to_string(), "block")]);
-        assert_eq!(kinds(Some("vscode")), [("AGENTS.md".to_string(), "block")]);
+        assert_eq!(
+            kinds(Some("codex")),
+            [(PathBuf::from("AGENTS.md"), "block")]
+        );
+        assert_eq!(
+            kinds(Some("vscode")),
+            [(PathBuf::from("AGENTS.md"), "block")]
+        );
         assert!(kinds(Some("claude-desktop")).is_empty());
         assert!(kinds(None).is_empty());
     }

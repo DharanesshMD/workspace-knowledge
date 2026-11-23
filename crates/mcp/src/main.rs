@@ -2811,7 +2811,7 @@ mod workspace_tests {
             let (_client, _) =
                 Client::connect_as(w.bridge.clone().with_cwd(w.folder.clone()), None, name).await;
             let started = w.request(None).await.unwrap();
-            let offered: Vec<String> = started["automatic_would_write"]
+            let offered: Vec<&Path> = started["automatic_would_write"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -2819,11 +2819,10 @@ mod workspace_tests {
                     Path::new(f.as_str().unwrap())
                         .strip_prefix(&w.folder)
                         .unwrap()
-                        .to_string_lossy()
-                        .into_owned()
                 })
                 .collect();
-            assert_eq!(offered, expected, "{name}");
+            let expected_paths: Vec<&Path> = expected.iter().map(Path::new).collect();
+            assert_eq!(offered, expected_paths, "{name}");
             // The page names every file before anything is written.
             let (host, path) = testkit::split(started["url"].as_str().unwrap());
             let (_, page) = testkit::get(&host, &path, &host).await;
@@ -2831,6 +2830,7 @@ mod workspace_tests {
                 page.contains("name=\"automatic\" value=\"on\" checked"),
                 "{name}"
             );
+            let page = page.replace(std::path::MAIN_SEPARATOR, "/");
             for file in &expected {
                 assert!(page.contains(file), "{name}: {file}");
                 assert!(
