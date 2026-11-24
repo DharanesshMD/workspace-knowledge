@@ -6,4 +6,4 @@ license.workspace = true
 
 [dependencies]
 sqlx-core = { version = "=0.8.6", default-features = false, features = ["_rt-tokio", "_tls-rustls-ring-webpki", "json"] }
-sqlx-postgres = { version = "=0.8.6", default-features = false, features = ["json", "uuid"] }
+sqlx-postgres = { version = "=0.9.1", default-features = false, features = ["json", "uuid"] }
