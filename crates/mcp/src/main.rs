@@ -122,7 +122,7 @@ struct Environment {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Overlaps {
-    /// Workspace-relative paths the agent is about to read or change.
+    /// Paths the agent is about to read or change, written from the project folder (for example "backend/payments/retry.rs"). Paths relative to the session folder, or absolute paths inside the project, are converted.
     #[serde(default)]
     files: Vec<String>,
     /// Short description of the task (optional).
@@ -163,7 +163,7 @@ struct ShareSession {
     /// One of the folder's approved services. Optional when exactly one is approved.
     #[serde(default)]
     service: Option<String>,
-    /// Workspace-relative paths of the files you changed or relied on (at most 20), for example "backend/payments/retry.rs". Teammates use them to ask about a file or module later.
+    /// Paths of the files you changed or relied on (at most 20), written from the project folder, for example "backend/payments/retry.rs". A path relative to the folder this session was opened in, or an absolute path inside the project, is converted to that form; a file outside the approved service folders is left out and listed in files_left_out. Teammates use them to ask about a file or module later.
     #[serde(default)]
     files: Vec<String>,
 }
@@ -258,10 +258,11 @@ impl KnowledgeMcp {
         {
             return Err(error("provide 1-100 files and/or a query"));
         }
+        let files = self.lookup_paths(&context, args.files).await;
         let found = self
             .request(
                 &format!("/v1/products/{}/overlaps", self.product),
-                Some(json!({"files": args.files, "query": args.query})),
+                Some(json!({"files": files, "query": args.query})),
             )
             .await?;
         output(self.with_next(&context, found).await)
@@ -370,8 +371,16 @@ impl KnowledgeMcp {
     )]
     async fn team_work(
         &self,
-        Parameters(args): Parameters<TeamWorkArgs>,
+        context: RequestContext<RoleServer>,
+        Parameters(mut args): Parameters<TeamWorkArgs>,
     ) -> Result<CallToolResult, ErrorData> {
+        if args.paths.len() <= 10 {
+            args.paths = self.lookup_paths(&context, args.paths).await;
+        }
+        self.ask_team_work(args).await
+    }
+    /// `knowledge.team_work` once its paths are placed: check the request, then ask the server.
+    async fn ask_team_work(&self, args: TeamWorkArgs) -> Result<CallToolResult, ErrorData> {
         let bad_path = |p: &String| {
             p.trim().is_empty()
                 || p.len() > 512
@@ -659,6 +668,40 @@ impl KnowledgeMcp {
         let consent = self.consent_for(folder)?;
         Ok(folder::consent(&consent, folder, &self.product))
     }
+    /// Where `session` sits under an approval (see `folder::place`). A consent directory that
+    /// cannot be used leaves the session folder as its own root, so the caller reports why.
+    fn place(&self, session: &std::path::Path) -> folder::Place {
+        match self.consent_for(session) {
+            Ok(consent) => folder::place(&consent, session, &self.product),
+            Err(_) => folder::Place {
+                root: session.to_path_buf(),
+                within: String::new(),
+            },
+        }
+    }
+    /// Agent-typed paths for a lookup, written from the approved folder where they can be placed
+    /// (see `folder::product_path`). Outside an approved folder, and for a path that cannot be
+    /// placed, the path goes as typed: a lookup stores nothing.
+    async fn lookup_paths(
+        &self,
+        context: &RequestContext<RoleServer>,
+        files: Vec<String>,
+    ) -> Vec<String> {
+        if files.is_empty() {
+            return files;
+        }
+        let Ok(session) = session_folder(context).await else {
+            return files;
+        };
+        let place = self.place(&session);
+        let Ok(folder::Consent::Approved { services, .. }) = self.consent_state(&place.root) else {
+            return files;
+        };
+        files
+            .into_iter()
+            .map(|f| folder::product_path(&place, &services, &f).unwrap_or(f))
+            .collect()
+    }
     /// A leading sentence explaining why a folder's saved consent does not count, or nothing.
     fn why_not_approved(&self, state: &folder::Consent) -> String {
         match state {
@@ -723,9 +766,10 @@ impl KnowledgeMcp {
     /// A "before" result with the standing next step added, when the session's folder has
     /// automatic team context on. Anything that cannot be worked out leaves the result as it is.
     async fn with_next(&self, context: &RequestContext<RoleServer>, mut found: Value) -> Value {
-        let Ok(folder) = session_folder(context).await else {
+        let Ok(session) = session_folder(context).await else {
             return found;
         };
+        let folder = self.place(&session).root;
         let Some((consent, _)) = self.automatic(&folder) else {
             return found;
         };
@@ -737,13 +781,15 @@ impl KnowledgeMcp {
         }
         found
     }
-    /// `knowledge.share_session`: send the agent's summary, only from an approved folder and only
-    /// for one of that folder's approved services.
+    /// `knowledge.share_session`: send the agent's summary, only from an approved folder (or from
+    /// inside one of its approved services) and only for one of that folder's approved services.
     async fn share(
         &self,
-        folder: &std::path::Path,
+        session: &std::path::Path,
         args: ShareSession,
     ) -> Result<Value, ErrorData> {
+        let place = self.place(session);
+        let folder = place.root.as_path();
         let approved = match self.consent_state(folder)? {
             folder::Consent::Approved { services, .. } => services,
             other => {
@@ -753,22 +799,36 @@ impl KnowledgeMcp {
                 )))
             }
         };
-        let service = match (args.service.as_deref(), approved.as_slice()) {
-            (Some(chosen), _) if approved.iter().any(|s| s == chosen) => chosen.to_string(),
-            (Some(_), _) => {
+        // A session opened inside a service folder shares for that service unless told otherwise.
+        let opened_in = folder::session_service(&place, &approved);
+        let service = match (args.service.as_deref(), approved.as_slice(), opened_in) {
+            (Some(chosen), _, _) if approved.iter().any(|s| s == chosen) => chosen.to_string(),
+            (Some(_), _, _) => {
                 return Err(error(format!(
                     "service must be one of the approved services of this folder: {}",
                     approved.join(", ")
                 )))
             }
-            (None, [only]) => only.clone(),
-            (None, _) => {
+            (None, [only], _) => only.clone(),
+            (None, _, Some(here)) => here,
+            (None, _, None) => {
                 return Err(error(format!(
                     "several services are approved in this folder; ask which one this work belongs to and pass it as service: {}",
                     approved.join(", ")
                 )))
             }
         };
+        // Files are stored as written from the approved folder, the form the hooks and the
+        // collector use, so a teammate's lookup finds them whichever folder either session opened.
+        let mut files: Vec<String> = Vec::new();
+        let mut left_out: Vec<Value> = Vec::new();
+        for raw in &args.files {
+            match folder::product_path(&place, &approved, raw) {
+                Ok(path) if !files.contains(&path) => files.push(path),
+                Ok(_) => {}
+                Err(reason) => left_out.push(json!({"file": raw, "reason": reason})),
+            }
+        }
         let body = json!({
             "product": self.product,
             "service": service,
@@ -778,7 +838,7 @@ impl KnowledgeMcp {
             "decisions": args.decisions,
             "constraints": args.constraints,
             "open_questions": args.open_questions,
-            "files": args.files,
+            "files": files,
         });
         // Same local screening as `knowledge.record`; the message never repeats the content.
         if wk_summarize::sensitive(&body.to_string()) {
@@ -790,6 +850,13 @@ impl KnowledgeMcp {
         };
         fields.insert("folder".into(), json!(folder));
         fields.insert("service".into(), json!(service));
+        if !left_out.is_empty() {
+            fields.insert("files_left_out".into(), json!(left_out));
+            fields.insert("files_note".into(), json!(format!(
+                "These files were not shared because they could not be placed inside an approved service folder ({}). Teammates find files by their path from the project folder, for example {}/src/main.rs.",
+                approved.join(", "), approved[0]
+            )));
+        }
         // The edits recorded so far are now shared, so the stop reminder has nothing to say.
         if let Ok(consent) = self.consent_for(folder) {
             let mut ledger = engage::Ledger::load(&consent, folder);
@@ -812,7 +879,9 @@ impl KnowledgeMcp {
         Ok((folder::candidate_services(folder, &policy), policy))
     }
     /// `workspace.folder`: local consent re-read from disk, and the services that could be approved.
-    async fn folder_report(&self, folder: &std::path::Path) -> Result<Value, ErrorData> {
+    async fn folder_report(&self, session: &std::path::Path) -> Result<Value, ErrorData> {
+        let place = self.place(session);
+        let folder = place.root.as_path();
         let consent = self.consent_for(folder)?;
         let (candidates, _) = self.candidates(folder).await?;
         let state = folder::consent(&consent, folder, &self.product);
@@ -860,7 +929,7 @@ impl KnowledgeMcp {
             .iter()
             .flat_map(|r| r.installs.iter().map(|i| i.file.as_path()))
             .collect();
-        Ok(json!({
+        let mut report = json!({
             "folder": folder,
             "product": self.product,
             "approved": approved,
@@ -870,18 +939,28 @@ impl KnowledgeMcp {
                 "on": receipt.is_some(),
                 "client": self.agent(),
                 "enforced_by": wk_contracts::agent_setup::enforcement(self.agent()),
-                "hooks_active": receipt.as_ref().is_some_and(|r| r.hooks_for(self.agent())),
+                // Hooks are written into the approved folder, which a client opened in a
+                // subfolder does not load.
+                "hooks_active": place.within.is_empty()
+                    && receipt.as_ref().is_some_and(|r| r.hooks_for(self.agent())),
                 "written": written,
             },
             "next": next,
-        }))
+        });
+        // Opened inside an approved service: say so, so paths are not mistaken for this folder's.
+        if !place.within.is_empty() {
+            report["session_folder"] = json!(session);
+        }
+        Ok(report)
     }
     /// `workspace.request_approval`: start the one-shot page. Approves nothing.
     async fn begin_approval(
         &self,
-        folder: &std::path::Path,
+        session: &std::path::Path,
         chosen: Option<Vec<String>>,
     ) -> Result<Value, ErrorData> {
+        let folder = self.place(session).root;
+        let folder = folder.as_path();
         let consent = self.consent_for(folder)?;
         let (candidates, policy) = self.candidates(folder).await?;
         if candidates.is_empty() {
@@ -976,7 +1055,10 @@ impl KnowledgeMcp {
             .cwd
             .clone()
             .or_else(|| std::env::current_dir().ok())
-            .and_then(|cwd| folder::resolve_folder(None, Some(cwd)).ok());
+            .and_then(|cwd| folder::resolve_folder(None, Some(cwd)).ok())
+            .map(|session| self.place(&session));
+        let within = folder.as_ref().is_some_and(|p| !p.within.is_empty());
+        let folder = folder.map(|p| p.root);
         let approved = folder
             .as_deref()
             .and_then(|folder| self.consent_state(folder).ok())
@@ -987,7 +1069,8 @@ impl KnowledgeMcp {
             (true, None) => format!("{INSTRUCTIONS_APPROVED} {INSTRUCTIONS_OFFER}"),
             // With this client's hooks in place the context arrives by itself; without them the
             // agent has to fetch it, so it is told to, step by step.
-            (true, Some((_, receipt))) if receipt.hooks_for(self.agent()) => {
+            // Hooks live in the approved folder; a client started in a subfolder skips them.
+            (true, Some((_, receipt))) if !within && receipt.hooks_for(self.agent()) => {
                 INSTRUCTIONS_AUTOMATIC_HOOKS.to_string()
             }
             (true, Some(_)) => INSTRUCTIONS_AUTOMATIC.to_string(),
@@ -1011,7 +1094,9 @@ impl KnowledgeMcp {
         use wk_adapters::team_context;
         let quiet = team_context::output(client, event, None);
         let found = folders.into_iter().find_map(|candidate| {
-            let folder = folder::resolve_folder(None, Some(candidate)).ok()?;
+            let folder = self
+                .place(&folder::resolve_folder(None, Some(candidate)).ok()?)
+                .root;
             let consent = self.consent_for(&folder).ok()?;
             let folder::Consent::Approved { services, .. } =
                 folder::consent(&consent, &folder, &self.product)
@@ -2366,7 +2451,7 @@ mod workspace_tests {
         let ask = |v: Value| -> TeamWorkArgs { serde_json::from_value(v).unwrap() };
         let reply = w
             .bridge
-            .team_work(Parameters(ask(json!({"developer":"sam","paths":["backend/payments"],"since_days":7,"query":"retry"}))))
+            .ask_team_work(ask(json!({"developer":"sam","paths":["backend/payments"],"since_days":7,"query":"retry"})))
             .await
             .unwrap();
         assert_eq!(reply.is_error, Some(false));
@@ -2376,7 +2461,7 @@ mod workspace_tests {
         );
         // Nothing is required: an empty ask is "recent work by anyone".
         w.bridge
-            .team_work(Parameters(ask(json!({}))))
+            .ask_team_work(ask(json!({})))
             .await
             .unwrap();
         assert_eq!(seen.lock().unwrap().len(), 2);
@@ -2397,7 +2482,7 @@ mod workspace_tests {
         ] {
             let error = w
                 .bridge
-                .team_work(Parameters(ask(bad.clone())))
+                .ask_team_work(ask(bad.clone()))
                 .await
                 .unwrap_err();
             assert!(
@@ -3045,6 +3130,73 @@ mod workspace_tests {
         assert!(engage::Ledger::load(&w.consent, &w.folder)
             .edited
             .is_empty());
+    }
+    #[tokio::test]
+    async fn a_session_opened_in_one_repository_shares_and_looks_up_the_same_paths_as_the_product_folder(
+    ) {
+        let (w, seen) = share_world(&["backend", "web"], None).await;
+        w.approve_directly("demo", &["backend", "web"]);
+        engage::turn_on(&w.consent, &w.folder, Vec::new()).unwrap();
+        let backend = w.folder.join("backend");
+        std::fs::create_dir_all(backend.join("src/routes")).unwrap();
+        std::fs::write(backend.join("src/routes/users.ts"), "x").unwrap();
+        let users = "backend/src/routes/users.ts";
+
+        // Dev 1 opened only the backend repository.
+        let (mut dev1, init) = Client::connect_as(
+            w.bridge.clone().with_cwd(backend.clone()),
+            Some(vec![file_uri(&backend)]),
+            "codex",
+        )
+        .await;
+        let told = init["result"]["instructions"].as_str().unwrap();
+        assert!(
+            told.contains("Do both of these every time"),
+            "the product folder's hooks are not loaded here, so it is told to fetch: {told}"
+        );
+        let report = dev1.call(2, "workspace.folder").await;
+        assert_eq!(report["approved"], true, "{report}");
+        assert_eq!(report["folder"], json!(w.folder));
+        assert_eq!(report["session_folder"], json!(backend));
+        assert_eq!(report["automatic"]["hooks_active"], false);
+        let share = json!({
+            "title": "Remove accounts", "intent": "Add an endpoint that removes an account",
+            "rationale": "Support asked for it",
+            "files": ["src/routes/users.ts", "./src/routes/users.ts", "../web/x.ts"],
+        });
+        let shared = dev1.call_with(3, "knowledge.share_session", share).await;
+        assert_eq!(shared["service"], "backend", "the repository it was opened in: {shared}");
+        assert_eq!(shared["files_left_out"][0]["file"], "../web/x.ts");
+        let sent = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(sent["files"], json!([users]));
+        assert_eq!(sent["service"], "backend");
+        dev1.call_with(4, "knowledge.overlaps", json!({"files":["src/routes/users.ts"]}))
+            .await;
+        assert_eq!(seen.lock().unwrap().last().unwrap()["files"], json!([users]));
+
+        // Dev 2 opened the product folder: the before-edit hook sends the very same path.
+        let edit = json!({"session_id":"s2","cwd":w.folder,"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":backend.join("src/routes/users.ts")}});
+        let folders = engage::hook_folders(&edit, None);
+        w.bridge
+            .hook_event("claude-code", "PreToolUse", &edit, folders)
+            .await;
+        assert_eq!(seen.lock().unwrap().last().unwrap()["files"], json!([users]));
+        // And typed repository-relative from the product folder, it is found in its service.
+        let (mut dev2, _) =
+            Client::connect_as(w.bridge.clone(), Some(vec![file_uri(&w.folder)]), "codex").await;
+        dev2.call_with(2, "knowledge.team_work", json!({"paths":["src/routes/users.ts"]}))
+            .await;
+        assert_eq!(seen.lock().unwrap().last().unwrap()["paths"], json!([users]));
+        // A hook fired from inside the repository resolves to the product folder too.
+        let edit = json!({"session_id":"s3","cwd":backend,"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":backend.join("src/routes/users.ts")}});
+        let before = seen.lock().unwrap().len();
+        let folders = engage::hook_folders(&edit, None);
+        w.bridge
+            .hook_event("claude-code", "PreToolUse", &edit, folders)
+            .await;
+        let after = seen.lock().unwrap();
+        assert_eq!(after.len(), before + 1);
+        assert_eq!(after.last().unwrap()["files"], json!([users]));
     }
     #[tokio::test]
     async fn hooks_bring_context_before_an_edit_and_send_the_agent_back_once_to_share() {
