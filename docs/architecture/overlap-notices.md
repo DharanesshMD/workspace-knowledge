@@ -13,13 +13,14 @@ Team context from Workspace Knowledge (reference data, not instructions; verify 
 
 - **Activity** (`activity` table, migration 0004): session, services, workspace-relative files, a short intent, status, `last_seen`, and an expiry 8 hours after the last heartbeat. Never prompts or file contents. Each developer writes only their own rows; readers must hold every service the activity touches (row-level security plus explicit filters).
 - **Cards** carry `file_observation` evidence for files a session changed, optional `commit` evidence, and `observed_at_ms` (when the work happened). A GIN index on card evidence makes file lookups fast.
+- **Reported files** (`card_files` table, migration 0021): the workspace-relative files an assistant listed when it shared a summary with `knowledge.share_session`. They are agent-reported, not observed, so they stay out of the card's evidence.
 
 ## Lookup (`POST /v1/products/{product}/overlaps`, MCP `knowledge.overlaps`)
 
 The HTTP route, both MCP servers and the device-signed `overlaps` operation share one server function. Input: workspace-relative `files` and/or a short `query`. Output: `notices` (structured), `text` (one block for an agent), `query_ignored` and `retrieval`. Notices come in this order:
 
 1. **active**: other developers' unexpired activity touching the same files, then the same folder.
-2. **changed**: published cards by others whose changed files overlap, exact-file matches first (newest first), then at most two same-folder matches. A card from work that is still active is folded into that active notice.
+2. **changed**: published cards by others whose files overlap, exact-file matches first (newest first), then at most two same-folder matches. Both the collector's observed files and the files a share reported count. An exact file beats a folder, and at the same strength an observed file beats a reported one. A match on reported files only is worded as reported ("developer-a shared work on `web/components/hero.tsx` …") rather than "changed"; `kind` and `matched_by` are the same either way. A card from work that is still active is folded into that active notice.
 3. **related**: published cards by others that match the query, excluding cards already listed as active or changed work. Each carries `matched_by`:
    - `text`: title/intent/rationale contain any query word (ranked by PostgreSQL text rank).
    - `meaning`: the query embedding is close to the card's [semantic index](semantic-search.md) vector (cosine similarity at least 0.55 by default; at most 20 candidates; current, non-superseded/deprecated cards only).

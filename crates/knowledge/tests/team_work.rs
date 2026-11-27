@@ -2,8 +2,10 @@ use serde_json::Value;
 use sqlx::Row;
 use wk_contracts::CardSubmission;
 use wk_knowledge::{
-    activity::ActivityUpdate, share::ShareRequest, team_work::TeamWorkQuery, Actor, AutoPublish,
-    Error, Knowledge,
+    activity::{ActivityUpdate, Notice, OverlapQuery},
+    share::ShareRequest,
+    team_work::TeamWorkQuery,
+    Actor, AutoPublish, Error, Knowledge,
 };
 
 struct World {
@@ -512,6 +514,75 @@ async fn time_service_and_keywords_narrow_and_rank() {
     assert_eq!(
         titles(&ask(&w, &w.anika, |_| {}).await)[0],
         "Refund endpoint"
+    );
+}
+
+/// Edit-time overlap notices for `files`, as the before-edit hook asks for them.
+async fn notices(w: &World, who: &Actor, files: &[&str]) -> Vec<Notice> {
+    let q = OverlapQuery {
+        files: strings(files),
+        query: None,
+        limit: 8,
+    };
+    w.k.overlaps(who, "demo", q).await.unwrap()
+}
+fn order(notices: &[Notice]) -> Vec<(&'static str, &str)> {
+    notices
+        .iter()
+        .map(|n| (n.matched_by, n.summary.as_str()))
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn files_a_share_reports_warn_teammates_before_they_edit() {
+    let w = world().await;
+    seed(&w).await;
+    // The same file: a changed notice worded as reported, not observed. It comes first, ahead of
+    // the observed refund card in the same folder.
+    let exact = notices(&w, &w.anika, &["backend/payments/retry.rs"]).await;
+    assert_eq!(
+        order(&exact),
+        [("file", "Retry with backoff"), ("folder", "Refund endpoint")]
+    );
+    assert_eq!((exact[0].kind, exact[0].developer.as_str()), ("changed", "sam"));
+    assert_eq!(exact[0].matched_files, strings(&["backend/payments/retry.rs"]));
+    assert!(exact[0]
+        .text
+        .starts_with("sam shared work on `backend/payments/retry.rs` just now"));
+    // Another file in the same folder: weaker folder notices, reported and observed alike.
+    let near = notices(&w, &w.anika, &["backend/payments/ledger.rs"]).await;
+    assert_eq!(
+        order(&near),
+        [("folder", "Refund endpoint"), ("folder", "Retry with backoff")]
+    );
+    assert!(near[1].text.starts_with(
+        "sam shared work on files in the same folder \
+         (`backend/payments/gateway.rs`, `backend/payments/retry.rs`)"
+    ));
+    // Collector-observed files keep the stronger wording.
+    assert!(near[0]
+        .text
+        .starts_with("sam changed files in the same folder (`backend/payments/refund.rs`)"));
+    let observed = notices(&w, &w.anika, &["backend/payments/refund.rs"]).await;
+    assert_eq!(order(&observed)[0], ("file", "Refund endpoint"));
+    assert!(observed[0]
+        .text
+        .starts_with("sam changed `backend/payments/refund.rs`"));
+    // Never your own work, never outside your services, never withdrawn work.
+    assert!(notices(&w, &w.sam, &["backend/api/limiter.rs"]).await.is_empty());
+    assert!(notices(&w, &w.viewer, &["frontend/checkout/form.tsx"])
+        .await
+        .is_empty());
+    assert_eq!(
+        order(&notices(&w, &w.viewer, &["backend/api/limiter.rs"]).await),
+        [("file", "Rate limit middleware")]
+    );
+    let gone = share(&w, &w.samira, None, "Old audit", &["backend/audit/export.rs"]).await;
+    w.k.withdraw(&w.samira, "demo", gone, 1).await.unwrap();
+    assert_eq!(
+        order(&notices(&w, &w.anika, &["backend/audit/export.rs"]).await),
+        [("folder", "Audit logging")]
     );
 }
 

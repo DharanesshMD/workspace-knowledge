@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Edit-time overlap notices now see summaries shared over MCP. The files an assistant lists in `knowledge.share_session` were stored but only `knowledge.team_work` read them, so a teammate about to edit the same file got no "changed" notice unless a collector had observed the files. The overlap lookup (before-edit hooks, `knowledge.overlaps`, `POST /v1/products/{product}/overlaps`) now also matches those reported files, by exact file and same folder, and words such a notice as "shared work on" instead of "changed". No schema change. See [overlap notices](docs/architecture/overlap-notices.md).
+
 ## v0.1.0-alpha.4 — source-only MCP alpha
 
 See the [release notes](docs/operations/alpha4-release.md) for setup, upgrade and client coverage. The release updates rustix, url and the Vite development server to address dependency advisories.
