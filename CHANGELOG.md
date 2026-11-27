@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- One path per file across developers in a multi-repo product folder. The `wk-mcp` bridge now finds the product folder's approval when an agent is started inside one of its approved service folders, such as `backend/`. Before, that session was treated as unapproved: sharing was refused and the hooks stayed silent. Paths an agent types in `knowledge.share_session`, `knowledge.overlaps` and `knowledge.team_work` are rewritten to the form the hooks and the collector store, written from the product folder (`backend/src/routes/users.ts`):
+  - absolute paths are made relative to the product folder;
+  - paths relative to the session folder get that folder in front;
+  - a repository-relative path typed from the product folder gets its service when exactly one approved service holds the file.
+
+  Shared files that can't be placed inside an approved service are left out and listed in `files_left_out`. A share from inside a service folder defaults to that service. **Behaviour changes:**
+  - a shared file outside the approved services is no longer stored;
+  - a session in a service folder is told to call `knowledge.overlaps` itself, because the product folder's hooks aren't loaded there.
+
+  Paths stored earlier keep their spelling. The hosted `/mcp/{product}` endpoint is unchanged. No schema change.
+
 ## v0.1.0-alpha.4 — source-only MCP alpha
 
 See the [release notes](docs/operations/alpha4-release.md) for setup, upgrade and client coverage. The release updates rustix, url and the Vite development server to address dependency advisories.
