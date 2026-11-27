@@ -352,6 +352,7 @@ impl Knowledge {
                 Ok(crate::activity::card_notice(
                     "related",
                     "meaning",
+                    false,
                     r.try_get("author").map_err(db)?,
                     r.try_get("id").map_err(db)?,
                     r.try_get("revision").map_err(db)?,

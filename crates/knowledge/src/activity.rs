@@ -330,7 +330,8 @@ impl Knowledge {
             }
         }
 
-        // 2. Published work by others whose observed changed files overlap.
+        // 2. Published work by others whose changed files overlap: files the collector observed,
+        //    or files the sharing assistant listed (`card_files`), which are said to be reported.
         let mut seen_cards = std::collections::BTreeSet::new();
         let mut changed = Vec::new();
         if !distinctive.is_empty() {
@@ -339,25 +340,34 @@ impl Knowledge {
                 .map(|d| format!("{}/%", d.replace('%', "\\%").replace('_', "\\_")))
                 .collect();
             let rows = sqlx::query(
-                "SELECT c.id,c.revision,c.author,c.body,(extract(epoch from c.created_at)*1000)::bigint AS at FROM cards c
+                "SELECT c.id,c.revision,c.author,c.body,(extract(epoch from c.created_at)*1000)::bigint AS at,
+                   ARRAY(SELECT f.path FROM card_files f WHERE f.org=c.org AND f.product=c.product AND f.card_id=c.id ORDER BY f.path) AS reported
+                 FROM cards c
                  JOIN memberships m ON m.org=c.org AND m.product=c.product AND m.user_id=$3
                  WHERE c.org=$1 AND c.product=$2 AND c.author<>$3 AND c.published AND NOT c.withdrawn AND m.services @> c.services AND $6::text[] @> c.services
-                 AND EXISTS(SELECT 1 FROM jsonb_array_elements(c.body->'evidence') e WHERE e->>'kind'='file_observation'
+                 AND (EXISTS(SELECT 1 FROM jsonb_array_elements(c.body->'evidence') e WHERE e->>'kind'='file_observation'
                    AND (e->>'reference' = ANY($4) OR e->>'reference' LIKE ANY($5)))
+                  OR EXISTS(SELECT 1 FROM card_files f WHERE f.org=c.org AND f.product=c.product AND f.card_id=c.id
+                   AND (f.path = ANY($4) OR f.path LIKE ANY($5))))
                  ORDER BY c.created_at DESC LIMIT 50",
             )
             .bind(&a.org).bind(product).bind(&a.user).bind(&distinctive).bind(&likes).bind(&services)
             .fetch_all(&mut *tx).await.map_err(db)?;
             for r in rows {
                 let body: Value = r.try_get("body").map_err(db)?;
-                let files: Vec<String> = body["evidence"]
+                let observed: Vec<String> = body["evidence"]
                     .as_array()
                     .into_iter()
                     .flatten()
                     .filter(|e| e["kind"] == "file_observation")
                     .filter_map(|e| e["reference"].as_str().map(str::to_owned))
                     .collect();
-                let (by, matched) = classify(&files);
+                let listed: Vec<String> = r.try_get("reported").map_err(db)?;
+                // An exact file beats a folder; at the same strength, observed beats reported.
+                let seen = classify(&observed);
+                let told = classify(&listed);
+                let reported = seen.0.is_empty() || (seen.0 == "folder" && told.0 == "file");
+                let (by, matched) = if reported { told } else { seen };
                 if by.is_empty() {
                     continue;
                 }
@@ -366,6 +376,7 @@ impl Knowledge {
                 changed.push(card_notice(
                     "changed",
                     by,
+                    reported,
                     r.try_get("author").map_err(db)?,
                     id,
                     r.try_get("revision").map_err(db)?,
@@ -428,6 +439,7 @@ impl Knowledge {
                 notices.push(card_notice(
                     "related",
                     "text",
+                    false,
                     r.try_get("author").map_err(db)?,
                     id,
                     r.try_get("revision").map_err(db)?,
@@ -447,6 +459,8 @@ impl Knowledge {
 pub(crate) fn card_notice(
     kind: &'static str,
     by: &'static str,
+    // The matched files were listed by the sharing assistant rather than observed by a collector.
+    reported: bool,
     developer: String,
     id: uuid::Uuid,
     revision: i64,
@@ -483,6 +497,16 @@ pub(crate) fn card_notice(
         .collect();
     let earlier = matches!(lifecycle.as_str(), "superseded" | "deprecated");
     let mut text = match (kind, by) {
+        ("changed", "file") if reported => format!(
+            "{developer} shared work on {} {}: {title}.",
+            list(&matched),
+            ago(at, now_ms)
+        ),
+        ("changed", _) if reported => format!(
+            "{developer} shared work on files in the same folder ({}) {}: {title}.",
+            list(&matched),
+            ago(at, now_ms)
+        ),
         ("changed", "file") => format!(
             "{developer} changed {} {}: {title}.",
             list(&matched),
@@ -606,6 +630,7 @@ mod tests {
         let n = card_notice(
             "changed",
             "file",
+            false,
             "developer-a".into(),
             uuid::Uuid::nil(),
             1,
